@@ -3,11 +3,16 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": ">=20.19.0",
-    "pnpm": ">=8.8.0"
+    "node": ">=24.0.0",
+    "pnpm": ">=11.0.0"
   },
   "scripts": {
-    "dev": "vite --open",
+    "dev": "node scripts/studio-dev.mjs",
+    "dev:ui": "vite --host 127.0.0.1 --port 3006 --strictPort",
+    "dev:api": "node --watch server/index.mjs",
+    "start": "node server/index.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "vue-tsc --noEmit",
     "build": "vue-tsc --noEmit && vite build",
     "serve": "vite preview",
     "lint": "eslint",

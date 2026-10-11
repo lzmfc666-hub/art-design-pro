@@ -1,3 +1,5 @@
+> 当前项目正在建设“金盾电竞工作室后台”，本地启动与业务说明见 [本地开发说明](docs/本地开发说明.md)。以下保留 Art Design Pro 上游项目介绍与许可归属。
+
 <img  src="https://www.qiniu.lingchen.kim/github-cover-light6.webp" />
 
 <br />
