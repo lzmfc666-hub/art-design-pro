@@ -1,5 +1,6 @@
 import { AppRouteRecord } from '@/types/router'
 
+// 示例使用独立名称，避免动态路由注销时移除系统的静态错误页。
 export const exceptionRoutes: AppRouteRecord = {
   path: '/exception',
   name: 'Exception',
@@ -11,7 +12,7 @@ export const exceptionRoutes: AppRouteRecord = {
   children: [
     {
       path: '403',
-      name: 'Exception403',
+      name: 'ExceptionDemo403',
       component: '/exception/403',
       meta: {
         title: 'menus.exception.forbidden',
@@ -22,7 +23,7 @@ export const exceptionRoutes: AppRouteRecord = {
     },
     {
       path: '404',
-      name: 'Exception404',
+      name: 'ExceptionDemo404',
       component: '/exception/404',
       meta: {
         title: 'menus.exception.notFound',
@@ -33,7 +34,7 @@ export const exceptionRoutes: AppRouteRecord = {
     },
     {
       path: '500',
-      name: 'Exception500',
+      name: 'ExceptionDemo500',
       component: '/exception/500',
       meta: {
         title: 'menus.exception.serverError',
