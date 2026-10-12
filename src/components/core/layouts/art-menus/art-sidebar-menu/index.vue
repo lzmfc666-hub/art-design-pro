@@ -3,7 +3,7 @@
   <div
     class="layout-sidebar"
     v-if="showLeftMenu || isDualMenu"
-    :class="{ 'no-border': menuList.length === 0 }"
+    :class="{ 'no-border': menuList.length === 0, 'business-sidebar': route.meta.business }"
   >
     <!-- 双列菜单（左侧） -->
     <div
@@ -86,7 +86,8 @@
             opacity: !menuOpen ? 0 : 1
           }"
         >
-          {{ AppConfig.systemInfo.name }}
+          <span class="system-name">{{ AppConfig.systemInfo.name }}</span>
+          <span v-if="route.meta.business && menuOpen" class="studio-subtitle">工作室运营后台</span>
         </p>
       </div>
       <ElScrollbar :style="scrollbarStyle">

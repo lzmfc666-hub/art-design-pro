@@ -256,3 +256,63 @@ $popup-menu-radius: 6px;
     }
   }
 }
+
+// 业务菜单仍使用原主题色，浅色选中条与目录分组更清楚。
+.layout-sidebar.business-sidebar {
+  --studio-menu-active: color-mix(in srgb, var(--theme-color) 12%, var(--default-box-color));
+  --studio-menu-hover: color-mix(in srgb, var(--theme-color) 5%, var(--default-box-color));
+
+  .menu-left-dark {
+    --studio-menu-active: color-mix(in srgb, var(--theme-color) 22%, #161923);
+    --studio-menu-hover: color-mix(in srgb, var(--theme-color) 10%, #161923);
+  }
+
+  .el-menu:not(.el-menu--collapse) {
+    > .el-sub-menu > .el-sub-menu__title {
+      margin-top: 10px;
+
+      .menu-name {
+        font-size: 12px !important;
+        font-weight: 600;
+        opacity: 0.76;
+      }
+    }
+  }
+
+  .el-sub-menu__title,
+  .el-menu-item {
+    width: calc(100% - 20px);
+    margin-left: 10px;
+    border-radius: 10px;
+  }
+
+  .el-sub-menu__title:hover,
+  .el-menu-item:not(.is-active):hover {
+    background: var(--studio-menu-hover) !important;
+  }
+
+  .el-menu-item.is-active,
+  .el-menu--collapse > .el-sub-menu.is-active > .el-sub-menu__title {
+    position: relative;
+    font-weight: 600;
+    color: var(--theme-color) !important;
+    background: var(--studio-menu-active) !important;
+
+    .menu-name,
+    .menu-icon .art-svg-icon {
+      color: var(--theme-color) !important;
+    }
+
+    &::before {
+      position: absolute;
+      top: 11px;
+      bottom: 11px;
+      left: 0;
+      width: 3px;
+      height: auto;
+      content: '';
+      background: var(--theme-color);
+      border-radius: 0 3px 3px 0;
+    }
+  }
+}

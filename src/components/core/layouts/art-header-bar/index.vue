@@ -1,20 +1,24 @@
 <!-- 顶部栏 -->
 <template>
   <div
-    class="w-full bg-[var(--default-bg-color)]"
+    class="art-header-bar w-full bg-[var(--default-bg-color)]"
     :class="[
-      tabStyle === 'tab-card' || tabStyle === 'tab-google' ? 'mb-5 max-sm:mb-3 !bg-box' : ''
+      tabStyle === 'tab-card' || tabStyle === 'tab-google' ? 'mb-5 max-sm:mb-3 !bg-box' : '',
+      { 'business-header': route.meta.business }
     ]"
   >
     <div
-      class="relative box-border flex-b h-15 leading-15 select-none"
+      class="business-topbar relative box-border flex-b h-15 leading-15 select-none"
       :class="[
         tabStyle === 'tab-card' || tabStyle === 'tab-google'
           ? 'border-b border-[var(--art-card-border)]'
           : ''
       ]"
     >
-      <div class="flex-c flex-1 min-w-0 leading-15" style="display: flex">
+      <div
+        class="business-header-navigation flex-c flex-1 min-w-0 leading-15"
+        style="display: flex"
+      >
         <!-- 系统信息  -->
         <div class="flex-c c-p" @click="toHome" v-if="isTopMenu">
           <ArtLogo class="pl-4.5" />
@@ -60,7 +64,7 @@
         <ArtMixedMenu v-if="isTopLeftMenu" :list="menuList" />
       </div>
 
-      <div class="flex-c gap-2.5">
+      <div class="business-header-actions flex-c gap-2.5">
         <!-- 搜索 -->
         <div
           v-if="shouldShowGlobalSearch"
@@ -177,7 +181,7 @@
 
 <script setup lang="ts">
   import { useI18n } from 'vue-i18n'
-  import { useRouter } from 'vue-router'
+  import { useRoute, useRouter } from 'vue-router'
   import { useFullscreen, useWindowSize } from '@vueuse/core'
   import { LanguageEnum, MenuTypeEnum } from '@/enums/appEnum'
   import { useSettingStore } from '@/store/modules/setting'
@@ -199,6 +203,7 @@
   const isWindows = navigator.userAgent.includes('Windows')
 
   const router = useRouter()
+  const route = useRoute()
   const { locale } = useI18n()
   const { width } = useWindowSize()
 
@@ -356,6 +361,53 @@
 </script>
 
 <style lang="scss" scoped>
+  .business-header {
+    min-width: 0;
+    background: var(--default-box-color) !important;
+    border-bottom: 1px solid color-mix(in srgb, var(--theme-color) 9%, var(--default-border));
+
+    .business-topbar {
+      min-width: 0;
+    }
+
+    .business-header-actions {
+      flex-shrink: 0;
+      gap: 6px;
+    }
+
+    :deep(.art-card-xs:not(.google-tab)) {
+      background: transparent !important;
+      border-color: transparent !important;
+      box-shadow: none !important;
+    }
+
+    :deep(.art-card-xs.activ-tab:not(.google-tab)) {
+      background: color-mix(in srgb, var(--theme-color) 10%, var(--default-box-color)) !important;
+      border-color: color-mix(in srgb, var(--theme-color) 14%, var(--default-box-color)) !important;
+    }
+  }
+
+  @media screen and (width <= 640px) {
+    .business-header {
+      .business-header-navigation {
+        overflow: hidden;
+      }
+
+      .business-header-actions {
+        gap: 2px;
+
+        :deep([class~='size-8.5']) {
+          width: 32px;
+          height: 32px;
+        }
+
+        :deep(img) {
+          margin-right: 10px !important;
+        }
+      }
+    }
+  }
+
   /* Custom animations */
   @keyframes rotate180 {
     0% {

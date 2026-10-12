@@ -249,3 +249,51 @@
     }
   }
 }
+
+// 工作室页面沿用原侧栏尺寸与折叠逻辑，仅细化品牌区域。
+.layout-sidebar.business-sidebar {
+  border-right-color: color-mix(in srgb, var(--theme-color) 10%, var(--default-border));
+
+  .header {
+    p {
+      right: 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-width: 0;
+      line-height: 1.3;
+
+      &.is-dual-menu-name {
+        left: 20px;
+      }
+    }
+
+    .system-name {
+      overflow: hidden;
+      font-size: 17px;
+      font-weight: 650;
+      text-overflow: ellipsis;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .studio-subtitle {
+      margin-top: 5px;
+      overflow: hidden;
+      font-size: 10px;
+      font-weight: 400;
+      text-overflow: ellipsis;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+      opacity: 0.58;
+    }
+  }
+
+  .menu-left-close .studio-subtitle {
+    display: none;
+  }
+
+  .dual-menu-left ul li > div {
+    border-radius: 10px;
+  }
+}

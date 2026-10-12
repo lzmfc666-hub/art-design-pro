@@ -365,13 +365,25 @@
   const selectedIds = ref<string[]>([])
   const selectedFields = reactive<Record<string, string[]>>({})
   const expanded = ref<string[]>([])
-  const dateRange = ref<[string, string] | null>(null)
+  const initialDates =
+    typeof route.query.start === 'string' &&
+    typeof route.query.end === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(route.query.start) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(route.query.end)
+      ? ([route.query.start, route.query.end] as [string, string])
+      : null
+  const dateRange = ref<[string, string] | null>(initialDates)
   const filters = reactive<ReportFilters>({
     keyword: '',
     personId: '',
     platformId: '',
     status: '',
-    orderDateKey: 'createdAt'
+    orderDateKey:
+      route.query.orderDateKey === 'paidAt'
+        ? 'paidAt'
+        : route.query.orderDateKey === 'completedAt'
+          ? 'completedAt'
+          : 'createdAt'
   })
   const filename = ref('工作室数据报表')
   const autoIndex = ref(true)

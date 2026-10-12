@@ -290,3 +290,45 @@
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+// 仅工作室业务路由使用淡蓝灰底色，原组件与模板页面继续使用原样式。
+.app-layout:has(.layout-content.business-context) {
+  --studio-page-background: color-mix(in srgb, var(--theme-color) 5%, #f5f8fc);
+  --studio-card-border: color-mix(in srgb, var(--theme-color) 10%, #e9eef6);
+
+  background: var(--studio-page-background);
+
+  #app-main {
+    background: var(--studio-page-background);
+  }
+}
+
+.layout-content.business-context {
+  min-width: 0;
+
+  .art-page-view,
+  .el-card,
+  .el-card__body,
+  .art-card,
+  .art-table-card {
+    min-width: 0;
+  }
+
+  .el-card,
+  .art-card,
+  .art-table-card {
+    border-color: var(--studio-card-border) !important;
+    border-radius: calc(var(--custom-radius) + 4px) !important;
+  }
+}
+
+.dark .app-layout:has(.layout-content.business-context) {
+  --studio-page-background: color-mix(in srgb, var(--theme-color) 5%, var(--default-bg-color));
+  --studio-card-border: color-mix(in srgb, var(--theme-color) 12%, var(--default-border));
+}
+
+@media screen and (width <= 640px) {
+  .app-layout #app-main #app-content .layout-content.business-context {
+    width: calc(100% - 24px);
+  }
+}

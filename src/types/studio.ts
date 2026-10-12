@@ -12,6 +12,7 @@ export type Role =
 export type OrderStatus = 'pending' | 'active' | 'review' | 'completed' | 'canceled'
 export interface Staff {
   id: string
+  createdAt?: string
   username: string
   name: string
   role: Role
@@ -23,6 +24,7 @@ export interface Staff {
 }
 export interface Customer {
   id: string
+  createdAt?: string
   name: string
   contact: string
   gameId: string

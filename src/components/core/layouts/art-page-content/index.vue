@@ -1,12 +1,21 @@
 <!-- 布局内容 -->
 <template>
-  <div class="layout-content" :class="{ 'overflow-auto': isFullPage }" :style="containerStyle">
+  <div
+    class="layout-content"
+    :class="{ 'overflow-auto': isFullPage, 'business-context': route.meta.business }"
+    :style="containerStyle"
+  >
     <div id="app-content-header">
       <!-- 节日滚动 -->
       <ArtFestivalTextScroll v-if="!isFullPage" />
-      <BusinessExportEntry v-if="!isFullPage" />
+      <BusinessExportEntry v-if="!isFullPage && route.path !== '/dashboard/console'" />
       <ElAlert
-        v-if="!isFullPage && route.meta.business && businessData?.demo"
+        v-if="
+          !isFullPage &&
+          route.path !== '/dashboard/console' &&
+          route.meta.business &&
+          businessData?.demo
+        "
         title="当前使用开发数据"
         description="此数据库用于验证业务流程，正式启用时请建立正式账号和业务配置。"
         type="info"

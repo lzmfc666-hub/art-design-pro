@@ -155,6 +155,15 @@ export function createStudioServer(options = {}) {
       if (req.method === 'GET') {
         if (path === '/bootstrap')
           return json(res, 200, service.bootstrap(user.id, url.searchParams.get('month')))
+        if (path === '/overview')
+          return json(
+            res,
+            200,
+            service.overview(user.id, {
+              start: url.searchParams.get('start'),
+              end: url.searchParams.get('end')
+            })
+          )
         if (path === '/exports/catalog')
           return json(
             res,

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, writeFileSync, chmodSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto'
+import { buildOverviewReport, normalizeOverviewRange, overviewMonths } from './overview-report.mjs'
 
 export const ALL_PERMISSIONS = [
   'orders.view',
@@ -218,6 +219,7 @@ function seedState(now, password, demo) {
     username: 'admin',
     name: '工作室超级管理员',
     role: 'super_admin',
+    createdAt: now,
     status: 'active',
     maxActiveOrders: 1,
     permissionOverrides: {}
@@ -247,6 +249,7 @@ function seedState(now, password, demo) {
       username: uid,
       name,
       role,
+      createdAt: now,
       status: 'active',
       ...(role === 'player' ? { levelId: 'priority' } : {}),
       maxActiveOrders: 1,
@@ -270,6 +273,7 @@ function seedState(now, password, demo) {
       name: '示例客户',
       contact: '演示数据 · 请替换为真实客户',
       gameId: 'DELTA-DEMO',
+      createdAt: now,
       remark: '仅用于熟悉页面，非真实业务'
     }
   ]
@@ -1086,7 +1090,12 @@ export function createStudioService({
       .map((row) =>
         can(user, 'users.manage') || row.id === user.id
           ? row
-          : { ...row, username: '', permissionOverrides: {} }
+          : {
+              ...row,
+              username: '',
+              permissionOverrides: {},
+              ...(can(user, 'attendance.manage') || allSalary ? {} : { createdAt: undefined })
+            }
       )
     const rows = {
       user: publicStaff(state, user),
@@ -1604,6 +1613,11 @@ export function createStudioService({
           role,
           status,
           ...(levelId ? { levelId } : {}),
+          ...(existing
+            ? existing.createdAt
+              ? { createdAt: existing.createdAt }
+              : {}
+            : { createdAt: now() }),
           maxActiveOrders: body.maxActiveOrders,
           permissionOverrides: role === 'super_admin' ? {} : overrides
         }
@@ -1638,7 +1652,12 @@ export function createStudioService({
           name: text(body.name, '客户名称', { required: true, max: 100 }),
           contact: text(body.contact, '联系方式', { max: 200 }),
           gameId: text(body.gameId, '游戏ID', { max: 128 }),
-          remark: text(body.remark, '备注')
+          remark: text(body.remark, '备注'),
+          ...(existing
+            ? existing.createdAt
+              ? { createdAt: existing.createdAt }
+              : {}
+            : { createdAt: now() })
         }
         audit(state, user, existing ? '修改客户' : '新增客户', 'customer', row.id, existing, row)
         if (existing) state.customers[state.customers.indexOf(existing)] = row
@@ -1950,6 +1969,27 @@ export function createStudioService({
     db,
     close: () => db.close(),
     bootstrap,
+    overview(userId, input = {}) {
+      const dates = normalizeOverviewRange(input, shanghaiDate(now()))
+      const snapshots = overviewMonths(dates).map((month) => bootstrap(userId, month))
+      // 普通运营的订单快照不暴露提成归属；这里只投影本人完成业绩，不输出其他人的计提信息。
+      const snapshot = snapshots[0]
+      if (snapshot.permissions.includes('orders.view')) {
+        const state = read()
+        const personalPerformance = state.orders
+          .filter(
+            (order) =>
+              order.status === 'completed' &&
+              paidOrder(order) &&
+              (snapshot.user.role === 'operations'
+                ? order.commissionSnapshot?.operationsId === snapshot.user.id
+                : order.creatorId === snapshot.user.id)
+          )
+          .map((order) => ({ date: shanghaiDate(order.completedAt), net: netOrder(state, order) }))
+        for (const value of snapshots) value.personalPerformance = personalPerformance
+      }
+      return buildOverviewReport(snapshots, dates, now())
+    },
     mutate,
     login(username, passwordValue) {
       const state = read(),

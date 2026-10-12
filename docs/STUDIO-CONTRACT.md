@@ -6,6 +6,8 @@
 
 - GET `/session` -> `{user: Staff|null}`；POST `/login` `{username,password}` -> `{user}`；POST `/logout`。
 - GET `/bootstrap?month=2026-10` -> StudioData，包含服务器 `roleDefaults`。后端必须按权限过滤工资、利润、日志、用户数据。
+- GET `/overview?start=2026-10-07&end=2026-10-13` -> `OverviewReport`，类型见 `src/types/overview.ts`。服务端基于原月报计算区间和紧邻上一同长区间，最多 366 天，支持 1900-01-01 至 9998-12-31。金额仍为整数分；无权限或无法核实的指标为 null。普通区间利润不扣月度底薪，只有完整月份区间另提供扣底薪利润；当前钱包余额不回溯、不计算区间同比。读取不写入业务状态。
+- Staff / Customer 的可选 `createdAt` 只在新建时保存真实时间，编辑保留原日期，旧档案缺失时保持未知。未经人员相关授权的账号不返回其他人员建档日期；概览不补造旧记录新增数量。
 - GET `/exports/catalog?month=2026-10` -> `{month,modules}`，返回当前权限可用的导出模块、字段与未筛选记录数。POST `/exports/preview`、`/exports/download` 请求 `{month,modules:[{id,fields:string[]}],filters:{dateRange?,keyword?,personId?,platformId?,status?,orderDateKey?}}`；响应 `{month,generatedAt,sheets:[{id,name,fields,rows,rowCount}]}`。预览每表前 20 行，下载全量所选记录，总量上限 100,000；服务端逐次读取权限、校验模块与字段、过滤后再投影。导出日志不受页面列表上限限制。
 - POST `/profile` `{name}` 修改本人称呼；POST `/profile/password` `{currentPassword,newPassword}` 验证旧密码后修改并撤销全部会话。工作室账号由管理员创建，忘记密码由管理员重置。
 - POST `/uploads` `{name,mime,data: base64}` -> Attachment，GET `/uploads/:id` 需认证与关联记录可见性校验。

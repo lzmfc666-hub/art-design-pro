@@ -1,9 +1,15 @@
 import type { Attachment } from '@/types/studio'
 
 /** 工作室接口沿用当前站点的服务器会话，业务金额以分传输。 */
-export async function studioRequest<T>(path: string, body?: unknown, method = 'GET'): Promise<T> {
+export async function studioRequest<T>(
+  path: string,
+  body?: unknown,
+  method = 'GET',
+  signal?: AbortSignal
+): Promise<T> {
   const response = await fetch(`/api/studio/${path.replace(/^\//, '')}`, {
     method,
+    signal,
     credentials: 'same-origin',
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body)
