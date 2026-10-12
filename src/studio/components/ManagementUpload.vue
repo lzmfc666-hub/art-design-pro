@@ -63,7 +63,7 @@
   .management-upload a {
     max-width: 230px;
     overflow: hidden;
-    color: #6b5df7;
+    color: var(--el-color-primary);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

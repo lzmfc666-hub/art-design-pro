@@ -5,7 +5,7 @@
     <div class="mb-6">
       <h2 class="m-0 mb-2 text-xl font-medium">权限切换演示</h2>
       <p class="m-0 leading-[1.6] text-g-700">
-        点击下方按钮切换不同用户身份，模拟不同用户登录系统的效果。切换后会影响整个系统的菜单显示和按钮权限。
+        预览原模板中不同角色的权限。实际工作室权限请在“人员与权限”中维护。
       </p>
     </div>
 
@@ -48,7 +48,7 @@
       <ElCard class="art-card-xs">
         <template #header>
           <div class="font-semibold">
-            <span>账号切换</span>
+            <span>角色预览</span>
           </div>
         </template>
         <div class="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4">
@@ -57,7 +57,7 @@
             :key="account.key"
             class="p-5 border border-g-400 rounded-lg tad-300"
             :class="{
-              'bg-theme/12 !border-theme': currentUser.userName === account.userName
+              'bg-theme/12 !border-theme': previewRole === account.key
             }"
           >
             <div class="mb-4">
@@ -72,14 +72,13 @@
             </div>
             <div class="text-right">
               <ElButton
-                v-if="currentUser.userName !== account.userName"
+                v-if="previewRole !== account.key"
                 type="primary"
                 @click="switchRole(account)"
-                :loading="switching"
               >
-                切换到此角色
+                预览此角色
               </ElButton>
-              <ElTag v-else type="success">当前用户</ElTag>
+              <ElTag v-else type="success">正在预览</ElTag>
             </div>
           </div>
         </div>
@@ -92,7 +91,6 @@
   import { computed, ref } from 'vue'
   import { useUserStore } from '@/store/modules/user'
   import { useI18n } from 'vue-i18n'
-  import { fetchLogin, fetchGetUserInfo } from '@/api/auth'
 
   defineOptions({ name: 'PermissionSwitchRole' })
 
@@ -100,10 +98,19 @@
   const userStore = useUserStore()
 
   // 响应式数据
-  const switching = ref(false)
+  const previewRole = ref('super')
 
   // 当前用户信息
-  const currentUser = computed(() => userStore.info)
+  const currentUser = computed(() => ({
+    ...userStore.info,
+    roles: accounts.value.find((account) => account.key === previewRole.value)?.roles,
+    buttons:
+      previewRole.value === 'super'
+        ? ['add', 'edit', 'delete']
+        : previewRole.value === 'admin'
+          ? ['add', 'edit']
+          : []
+  }))
 
   // 账号列表 - 与登录页面保持一致
   const accounts = computed(() => [
@@ -111,7 +118,6 @@
       key: 'super',
       label: t('login.roles.super'),
       userName: 'Super',
-      password: '123456',
       roles: ['R_SUPER'],
       color: '#E6A23C',
       description: '拥有系统最高权限，可以访问所有功能模块'
@@ -120,7 +126,6 @@
       key: 'admin',
       label: t('login.roles.admin'),
       userName: 'Admin',
-      password: '123456',
       roles: ['R_ADMIN'],
       color: '#409EFF',
       description: '拥有管理权限，可以管理用户和部分系统设置'
@@ -129,7 +134,6 @@
       key: 'user',
       label: t('login.roles.user'),
       userName: 'User',
-      password: '123456',
       roles: ['R_USER'],
       color: '#67C23A',
       description: '普通用户权限，只能访问基础功能模块'
@@ -163,7 +167,7 @@
    */
   interface AccountInfo {
     userName: string
-    password: string
+    key: string
     role?: string
     roles?: string[]
     [key: string]: any
@@ -173,37 +177,7 @@
    * 切换角色
    * @param account 账号信息
    */
-  const switchRole = async (account: AccountInfo) => {
-    try {
-      switching.value = true
-
-      // 模拟登录请求
-      const { token, refreshToken } = await fetchLogin({
-        userName: account.userName,
-        password: account.password
-      })
-
-      // 验证token
-      if (!token) {
-        throw new Error('Login failed - no token received')
-      }
-
-      // 存储token和用户信息
-      userStore.setToken(token, refreshToken)
-      const userInfo = await fetchGetUserInfo()
-      userStore.setUserInfo(userInfo)
-
-      // 延迟刷新页面以应用新权限
-      setTimeout(() => {
-        window.location.reload()
-      }, 100)
-    } catch (error) {
-      if (error !== 'cancel') {
-        ElMessage.error('切换用户身份失败，请稍后重试')
-        console.error('[SwitchRole] Error:', error)
-      }
-    } finally {
-      switching.value = false
-    }
+  const switchRole = (account: AccountInfo) => {
+    previewRole.value = account.key
   }
 </script>

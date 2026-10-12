@@ -285,7 +285,13 @@
       /></div>
     </section>
 
-    <el-drawer v-model="drawer" title="订单详情" size="min(920px, 96vw)" destroy-on-close>
+    <el-drawer
+      class="studio-dialog"
+      v-model="drawer"
+      title="订单详情"
+      size="min(920px, 96vw)"
+      destroy-on-close
+    >
       <OrderDetail v-if="selectedId" :order-id="selectedId" />
     </el-drawer>
   </div>
@@ -306,8 +312,8 @@
     padding: 21px 24px;
     text-align: left;
     cursor: pointer;
-    background: white;
-    border: 1px solid #e9ebf2;
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-border-color-lighter);
     border-radius: 14px;
     transition:
       border-color 0.2s,
@@ -315,7 +321,7 @@
   }
 
   .summary-tile:hover {
-    border-color: #b7affb;
+    border-color: var(--el-border-color-lighter);
     transform: translateY(-2px);
   }
 
@@ -326,13 +332,13 @@
 
   .summary-tile div > span {
     font-size: 13px;
-    color: #858a9b;
+    color: var(--el-text-color-regular);
   }
 
   .summary-tile strong {
     font-size: 26px;
     font-weight: 650;
-    color: #24283d;
+    color: var(--el-text-color-primary);
   }
 
   .tile-icon {
@@ -346,12 +352,12 @@
 
   .pending {
     color: #7563ed;
-    background: #f0edff;
+    background: var(--el-color-primary-light-9);
   }
 
   .active {
     color: #4087e9;
-    background: #eaf3ff;
+    background: var(--el-fill-color-light);
   }
 
   .review {
@@ -361,7 +367,7 @@
 
   .unpaid {
     color: #30a889;
-    background: #e7f7f2;
+    background: var(--el-fill-color-light);
   }
 
   .orders-panel {
@@ -374,7 +380,7 @@
     gap: 24px;
     padding: 0 24px;
     overflow-x: auto;
-    border-bottom: 1px solid #eff0f5;
+    border-bottom: 1px solid var(--el-border-color-lighter);
   }
 
   .order-tabs button {
@@ -383,7 +389,7 @@
     align-items: center;
     padding: 20px 0 17px;
     font-size: 14px;
-    color: #7c8194;
+    color: var(--el-text-color-regular);
     white-space: nowrap;
     cursor: pointer;
     background: none;
@@ -393,19 +399,19 @@
 
   .order-tabs button.selected {
     font-weight: 600;
-    color: #6b5df7;
-    border-bottom-color: #6b5df7;
+    color: var(--el-color-primary);
+    border-bottom-color: var(--el-color-primary);
   }
 
   .order-tabs button span {
     padding: 1px 6px;
     font-size: 11px;
-    background: #f3f4f8;
+    background: var(--el-fill-color-light);
     border-radius: 5px;
   }
 
   .order-tabs button.selected span {
-    background: #efedff;
+    background: var(--el-color-primary-light-9);
   }
 
   .order-filters {
@@ -427,7 +433,7 @@
   .order-title {
     margin-bottom: 4px;
     font-weight: 600;
-    color: #30344b;
+    color: var(--el-text-color-primary);
   }
 
   .small-text {
@@ -437,7 +443,7 @@
 
   .amount-text {
     font-weight: 600;
-    color: #30344b;
+    color: var(--el-text-color-primary);
   }
 
   .paid-text {

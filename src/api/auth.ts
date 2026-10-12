@@ -1,29 +1,15 @@
-import request from '@/utils/http'
+import { useStudio } from '@/studio/useStudio'
+import { toFrameworkUser } from '@/studio/framework-auth'
 
-/**
- * 登录
- * @param params 登录参数
- * @returns 登录响应
- */
-export function fetchLogin(params: Api.Auth.LoginParams) {
-  return request.post<Api.Auth.LoginResponse>({
-    url: '/api/auth/login',
-    params
-    // showSuccessMessage: true // 显示成功消息
-    // showErrorMessage: false // 不显示错误消息
-  })
+/** 使用工作室服务器会话，保留原框架的登录及路由流程。 */
+export async function fetchLogin(params: Api.Auth.LoginParams) {
+  await useStudio().login(params.userName, params.password)
+  return fetchGetUserInfo()
 }
 
-/**
- * 获取用户信息
- * @returns 用户信息
- */
-export function fetchGetUserInfo() {
-  return request.get<Api.Auth.UserInfo>({
-    url: '/api/user/info'
-    // 自定义请求头
-    // headers: {
-    //   'X-Custom-Header': 'your-custom-value'
-    // }
-  })
+export async function fetchGetUserInfo(): Promise<Api.Auth.UserInfo> {
+  const studio = useStudio()
+  if (!studio.user.value || !studio.data.value) await studio.refresh()
+  if (!studio.user.value) throw new Error('登录已失效，请重新登录')
+  return toFrameworkUser(studio.user.value)
 }

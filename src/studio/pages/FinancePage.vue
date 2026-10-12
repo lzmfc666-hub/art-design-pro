@@ -630,7 +630,11 @@
       </template>
     </div>
     <div v-else class="panel"><ElEmpty description="当前账号没有财务或工资查看权限" /></div>
-    <ElDialog v-model="actionDialog.open" :title="actionDialog.title" width="min(560px, 94vw)"
+    <ElDialog
+      class="studio-dialog"
+      v-model="actionDialog.open"
+      :title="actionDialog.title"
+      width="min(560px, 94vw)"
       ><ElAlert
         v-if="actionDialog.action === 'resolve'"
         title="请记录财务确认的差额、处理方式和结果。本操作只登记人工处理说明，不自动追回或扣减打手余额。"
@@ -651,7 +655,11 @@
         ></template
       ></ElDialog
     >
-    <ElDialog v-model="payDialog.open" title="登记提现已发放" width="min(540px, 94vw)"
+    <ElDialog
+      class="studio-dialog"
+      v-model="payDialog.open"
+      title="登记提现已发放"
+      width="min(540px, 94vw)"
       ><p>{{ payDialog.name }} · 实际转账 {{ money(payDialog.amount) }}</p
       ><p class="muted">请完成实际人工转账后上传凭证，系统记录本次发放时间及经办人。</p
       ><ManagementUpload v-model="payDialog.receipt" /><template #footer
@@ -659,7 +667,11 @@
         ><ElButton type="primary" :loading="saving" @click="savePay">确认已发放</ElButton></template
       ></ElDialog
     >
-    <ElDialog v-model="expenseDialog.open" title="录入费用（提交即入账）" width="min(560px, 94vw)"
+    <ElDialog
+      class="studio-dialog"
+      v-model="expenseDialog.open"
+      title="录入费用（提交即入账）"
+      width="min(560px, 94vw)"
       ><ElForm label-position="top" @submit.prevent="saveExpense"
         ><ElFormItem label="费用类别" required
           ><ElInput
@@ -691,7 +703,11 @@
         ></template
       ></ElDialog
     >
-    <ElDialog v-model="refundDialog.open" title="登记已实际发生的退款" width="min(620px, 94vw)"
+    <ElDialog
+      class="studio-dialog"
+      v-model="refundDialog.open"
+      title="登记已实际发生的退款"
+      width="min(620px, 94vw)"
       ><ElForm label-position="top" @submit.prevent="saveRefund"
         ><ElFormItem label="关联订单（不含大厅来源）" required
           ><ElSelect v-model="refundDialog.orderId" filterable style="width: 100%"
@@ -744,6 +760,6 @@
   }
 
   a {
-    color: #6b5df7;
+    color: var(--el-color-primary);
   }
 </style>

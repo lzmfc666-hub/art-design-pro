@@ -532,6 +532,7 @@
     </div>
 
     <el-dialog
+      class="studio-dialog"
       v-model="customerDialog"
       title="新增客户"
       width="min(480px, 94vw)"
@@ -608,8 +609,8 @@
     height: 26px;
     font-size: 11px;
     font-weight: 700;
-    color: #6b5df7;
-    background: #efedff;
+    color: var(--el-color-primary);
+    background: var(--el-color-primary-light-9);
     border-radius: 8px;
   }
 
@@ -625,16 +626,16 @@
     padding: 18px;
     text-align: left;
     cursor: pointer;
-    background: white;
-    border: 1px solid #e8eaf2;
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-border-color-lighter);
     border-radius: 10px;
     transition: 0.2s;
   }
 
   .template-card.selected {
-    background: #f8f7ff;
-    border-color: #8a7ef8;
-    box-shadow: 0 0 0 1px #8a7ef8;
+    background: var(--el-fill-color-light);
+    border-color: var(--el-color-primary);
+    box-shadow: 0 0 0 1px var(--el-color-primary);
   }
 
   .template-top {
@@ -646,24 +647,24 @@
 
   .game-label {
     font-size: 11px;
-    color: #9398aa;
+    color: var(--el-text-color-regular);
   }
 
   .selected-check {
-    color: #6b5df7;
+    color: var(--el-color-primary);
   }
 
   .template-card h4 {
     margin: 12px 0 6px;
     font-size: 17px;
-    color: #30344b;
+    color: var(--el-text-color-primary);
   }
 
   .template-card p {
     margin: 0 0 18px;
     font-size: 12px;
     line-height: 1.6;
-    color: #9398aa;
+    color: var(--el-text-color-regular);
   }
 
   .template-prices {
@@ -675,12 +676,12 @@
 
   .template-prices strong {
     font-size: 19px;
-    color: #6b5df7;
+    color: var(--el-color-primary);
   }
 
   .template-prices > span {
     font-size: 12px;
-    color: #9398aa;
+    color: var(--el-text-color-regular);
   }
 
   .creation-panel .el-form {
@@ -718,7 +719,7 @@
     margin-top: 6px;
     font-size: 11px;
     line-height: 1.7;
-    color: #989eae;
+    color: var(--el-text-color-secondary);
   }
 
   .warning-note {
@@ -731,7 +732,7 @@
     align-items: center;
     padding-top: 22px;
     margin: 6px 0 20px;
-    border-top: 1px solid #f0f1f6;
+    border-top: 1px solid var(--el-border-color-lighter);
   }
 
   .form-section-title h3 {
@@ -757,14 +758,14 @@
 
   .receipt-name {
     font-size: 12px;
-    color: #6b5df7;
+    color: var(--el-color-primary);
     overflow-wrap: anywhere;
   }
 
   .xianyu-note {
     padding: 10px 12px;
     margin: 0 0 22px;
-    background: #f5f6fa;
+    background: var(--el-fill-color-light);
     border-radius: 7px;
   }
 
@@ -781,25 +782,25 @@
     padding: 16px;
     text-align: left;
     cursor: pointer;
-    background: white;
-    border: 1px solid #e8eaf2;
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-border-color-lighter);
     border-radius: 9px;
   }
 
   .dispatch-options button.selected {
-    background: #f8f7ff;
-    border-color: #9a90fa;
+    background: var(--el-fill-color-light);
+    border-color: var(--el-color-primary);
   }
 
   .dispatch-options strong {
     font-size: 13px;
-    color: #42465b;
+    color: var(--el-text-color-primary);
   }
 
   .dispatch-options span {
     font-size: 11px;
     line-height: 1.6;
-    color: #969bad;
+    color: var(--el-text-color-secondary);
   }
 
   .assigned-field .el-select {
@@ -813,7 +814,7 @@
     justify-content: space-between;
     padding-top: 22px;
     margin-top: 24px;
-    border-top: 1px solid #f0f1f6;
+    border-top: 1px solid var(--el-border-color-lighter);
   }
 
   .creation-footer > div {
@@ -826,7 +827,7 @@
 
   .creation-footer strong {
     font-size: 21px;
-    color: #6b5df7;
+    color: var(--el-color-primary);
   }
 
   .creation-footer .el-button {
@@ -844,8 +845,8 @@
   .queue-count {
     padding: 3px 7px;
     font-size: 12px;
-    color: #6b5df7;
-    background: #efedff;
+    color: var(--el-color-primary);
+    background: var(--el-color-primary-light-9);
     border-radius: 6px;
   }
 
@@ -855,8 +856,8 @@
     padding-bottom: 15px;
     margin: 20px 0 7px;
     font-size: 12px;
-    color: #979cad;
-    border-bottom: 1px solid #f0f1f6;
+    color: var(--el-text-color-secondary);
+    border-bottom: 1px solid var(--el-border-color-lighter);
   }
 
   .queue-item {
@@ -867,7 +868,7 @@
     cursor: pointer;
     background: none;
     border: 0;
-    border-bottom: 1px solid #f0f1f6;
+    border-bottom: 1px solid var(--el-border-color-lighter);
   }
 
   .queue-item-top {
@@ -879,13 +880,13 @@
 
   .queue-item-top strong {
     font-size: 13px;
-    color: #41465c;
+    color: var(--el-text-color-primary);
   }
 
   .queue-item-top > span {
     font-size: 14px;
     font-weight: 600;
-    color: #6b5df7;
+    color: var(--el-color-primary);
   }
 
   .queue-order-no {
@@ -921,14 +922,14 @@
   .tips-label {
     font-size: 13px;
     font-weight: 600;
-    color: #72798f;
+    color: var(--el-text-color-regular);
   }
 
   .dispatch-tips p {
     margin: 13px 0 0;
     font-size: 12px;
     line-height: 1.9;
-    color: #9ba1b2;
+    color: var(--el-text-color-secondary);
   }
 
   @media (width <= 1200px) {

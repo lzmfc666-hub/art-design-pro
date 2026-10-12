@@ -250,6 +250,7 @@
       >
     </div>
     <ElDialog
+      class="studio-dialog"
       v-model="open"
       :title="form.id ? '编辑考勤记录' : '新增排班与考勤'"
       width="min(560px, 94vw)"

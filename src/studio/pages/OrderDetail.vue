@@ -788,6 +788,7 @@
     </el-tabs>
 
     <el-dialog
+      class="studio-dialog"
       :model-value="!!dialog"
       :title="dialogTitle"
       width="min(540px, 94vw)"
@@ -1043,7 +1044,7 @@
 
 <style scoped>
   .order-detail {
-    color: #42465b;
+    color: var(--el-text-color-primary);
   }
 
   .detail-title {
@@ -1056,13 +1057,13 @@
 
   .detail-order-no {
     font-size: 12px;
-    color: #9a9fb0;
+    color: var(--el-text-color-secondary);
   }
 
   .detail-title h2 {
     margin: 9px 0;
     font-size: 23px;
-    color: #30344b;
+    color: var(--el-text-color-primary);
   }
 
   .detail-title p {
@@ -1075,7 +1076,7 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 22px 0;
     margin-bottom: 24px;
-    background: #f7f8fc;
+    background: var(--el-fill-color-light);
     border-radius: 12px;
   }
 
@@ -1083,7 +1084,7 @@
     display: grid;
     gap: 11px;
     padding: 0 20px;
-    border-right: 1px solid #e9ebf2;
+    border-right: 1px solid var(--el-border-color-lighter);
   }
 
   .detail-metrics > div:last-child {
@@ -1092,17 +1093,17 @@
 
   .detail-metrics span {
     font-size: 12px;
-    color: #979daf;
+    color: var(--el-text-color-secondary);
   }
 
   .detail-metrics strong {
     font-size: 22px;
     font-weight: 600;
-    color: #3c4258;
+    color: var(--el-text-color-primary);
   }
 
   .detail-metrics .net-amount {
-    color: #6b5df7;
+    color: var(--el-color-primary);
   }
 
   .detail-metrics .refund-amount {
@@ -1139,14 +1140,14 @@
   .detail-descriptions :deep(.el-descriptions__label) {
     width: 110px;
     font-weight: 400;
-    color: #9399aa;
+    color: var(--el-text-color-regular);
     white-space: nowrap;
-    background: #fafbfe;
+    background: var(--el-fill-color-light);
   }
 
   .detail-descriptions :deep(.el-descriptions__content) {
     font-size: 12px;
-    color: #51576b;
+    color: var(--el-text-color-primary);
   }
 
   .long-value {
@@ -1159,14 +1160,14 @@
 
   .attachment-link,
   .dialog-upload a {
-    color: #6b5df7;
+    color: var(--el-color-primary);
     overflow-wrap: anywhere;
   }
 
   .detail-section {
     padding: 18px;
     margin: 20px 0;
-    border: 1px solid #eceef5;
+    border: 1px solid var(--el-border-color-lighter);
     border-radius: 10px;
   }
 
@@ -1199,7 +1200,7 @@
     margin: 12px 0 0;
     font-size: 11px;
     line-height: 1.8;
-    color: #9ba1b2;
+    color: var(--el-text-color-secondary);
   }
 
   .remark-actions {
@@ -1211,7 +1212,7 @@
   .detail-empty {
     padding: 20px;
     font-size: 12px;
-    color: #9ba1b2;
+    color: var(--el-text-color-secondary);
     text-align: center;
   }
 
@@ -1220,7 +1221,7 @@
     gap: 12px;
     justify-content: space-between;
     padding: 15px 0;
-    border-bottom: 1px solid #f1f2f7;
+    border-bottom: 1px solid var(--el-border-color-lighter);
   }
 
   .refund-row:last-child {
@@ -1245,7 +1246,7 @@
     justify-items: end;
     font-size: 11px;
     line-height: 1.8;
-    color: #9ba1b2;
+    color: var(--el-text-color-secondary);
     white-space: nowrap;
   }
 
@@ -1259,13 +1260,13 @@
 
   .snapshot-collapse :deep(.el-collapse-item__header) {
     font-size: 12px;
-    color: #949aab;
+    color: var(--el-text-color-regular);
   }
 
   .submission-card {
     padding: 20px;
     margin-bottom: 20px;
-    border: 1px solid #eceef5;
+    border: 1px solid var(--el-border-color-lighter);
     border-radius: 10px;
   }
 
@@ -1293,7 +1294,7 @@
   .submission-people {
     margin: 15px 0;
     font-size: 12px;
-    color: #8a91a5;
+    color: var(--el-text-color-regular);
   }
 
   .submission-people span {
@@ -1309,14 +1310,14 @@
   .screenshot-grid .el-image {
     width: 100%;
     height: 145px;
-    background: #f4f5f9;
+    background: var(--el-fill-color-light);
     border-radius: 8px;
   }
 
   .screenshot-grid :deep(.el-image__error a) {
     padding: 10px;
     font-size: 12px;
-    color: #6b5df7;
+    color: var(--el-color-primary);
   }
 
   .return-reason {
@@ -1324,7 +1325,7 @@
     margin-top: 15px;
     font-size: 12px;
     color: #a37e43;
-    background: #fff7e9;
+    background: var(--el-fill-color-light);
     border-radius: 8px;
   }
 
@@ -1349,7 +1350,7 @@
 
   .assignment-card {
     padding: 16px;
-    border: 1px solid #eceef5;
+    border: 1px solid var(--el-border-color-lighter);
     border-radius: 8px;
   }
 
@@ -1373,14 +1374,14 @@
 
   .log-heading > span {
     font-size: 12px;
-    color: #969dad;
+    color: var(--el-text-color-secondary);
   }
 
   .log-change {
     margin: 7px 0 0;
     font-size: 12px;
     line-height: 1.8;
-    color: #8e95a8;
+    color: var(--el-text-color-regular);
     overflow-wrap: anywhere;
     white-space: pre-wrap;
   }

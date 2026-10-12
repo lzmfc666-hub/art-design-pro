@@ -399,8 +399,12 @@
     })
   }
 
-  const toLogin = () => {
-    userStore.logOut()
+  const toLogin = async () => {
+    try {
+      await userStore.logOut()
+    } catch (cause) {
+      ElMessage.error(cause instanceof Error ? cause.message : '退出失败，请重试')
+    }
   }
 
   const openLockScreen = () => {

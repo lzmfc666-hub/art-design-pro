@@ -52,6 +52,7 @@ import { fetchGetUserInfo } from '@/api/auth'
 import { ApiStatus } from '@/utils/http/status'
 import { isHttpError } from '@/utils/http/error'
 import { RouteRegistry, MenuProcessor, IframeRouteManager, RoutePermissionValidator } from '../core'
+import { canAccessStudioPage } from '@/studio/route-access'
 
 // 路由注册器实例
 let routeRegistry: RouteRegistry | null = null
@@ -155,6 +156,10 @@ async function handleRouteGuard(
   if (!handleLoginStatus(to, userStore, next)) {
     return
   }
+  if (userStore.isLogin && to.name === 'Login') {
+    next({ path: '/overview', replace: true })
+    return
+  }
 
   // 2. 检查路由初始化是否已失败（防止死循环）
   if (routeInitFailed) {
@@ -187,6 +192,10 @@ async function handleRouteGuard(
 
   // 5. 处理已匹配的路由
   if (to.matched.length > 0) {
+    if (!canAccessStudioPage(to.meta.studioPermissions)) {
+      next({ name: 'Exception403', replace: true })
+      return
+    }
     setWorktab(to)
     setPageTitle(to)
     next()
@@ -212,7 +221,6 @@ function handleLoginStatus(
   }
 
   // 未登录且访问需要权限的页面，跳转到登录页并携带 redirect 参数
-  userStore.logOut()
   next({
     name: 'Login',
     query: { redirect: to.fullPath }
@@ -346,7 +354,8 @@ async function handleDynamicRoutes(
     if (isUnauthorizedError(error)) {
       // 重置状态，允许重新登录后再次初始化
       routeInitInProgress = false
-      next(false)
+      useUserStore().clearSession()
+      next({ name: 'Login', query: { redirect: to.fullPath }, replace: true })
       return
     }
 
@@ -379,7 +388,7 @@ async function fetchUserInfo(): Promise<void> {
  * 重置路由相关状态
  */
 export function resetRouterState(delay: number): void {
-  setTimeout(() => {
+  const reset = () => {
     routeRegistry?.unregister()
     IframeRouteManager.getInstance().clear()
 
@@ -389,7 +398,9 @@ export function resetRouterState(delay: number): void {
 
     // 重置路由初始化状态，允许重新登录后再次初始化
     resetRouteInitState()
-  }, delay)
+  }
+  if (delay > 0) setTimeout(reset, delay)
+  else reset()
 }
 
 /**
@@ -414,5 +425,8 @@ function handleRootPathRedirect(to: RouteLocationNormalized, next: NavigationGua
  * 判断是否为未授权错误（401）
  */
 function isUnauthorizedError(error: unknown): boolean {
-  return isHttpError(error) && error.code === ApiStatus.unauthorized
+  return (
+    (isHttpError(error) && error.code === ApiStatus.unauthorized) ||
+    (error instanceof Error && 'status' in error && error.status === 401)
+  )
 }

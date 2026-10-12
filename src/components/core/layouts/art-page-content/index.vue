@@ -4,6 +4,15 @@
     <div id="app-content-header">
       <!-- 节日滚动 -->
       <ArtFestivalTextScroll v-if="!isFullPage" />
+      <ElAlert
+        v-if="!isFullPage && !String(route.name || '').startsWith('Studio')"
+        title="Art Design Pro 原模板示例"
+        description="此处保留原模板的演示页面。实际工作室业务、人员与权限请在“工作室管理”菜单中操作。"
+        type="info"
+        :closable="false"
+        show-icon
+        class="mb-4"
+      />
 
       <!-- 路由信息调试 -->
       <div

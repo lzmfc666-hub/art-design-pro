@@ -100,6 +100,7 @@
     </div>
     <div v-else class="panel"><ElEmpty description="当前账号没有操作日志查看权限" /></div>
     <ElDialog
+      class="studio-dialog"
       :model-value="!!selected"
       title="审计记录详情"
       width="min(960px, 94vw)"
@@ -137,7 +138,7 @@
     line-height: 1.7;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
-    background: #f6f7fb;
+    background: var(--el-fill-color-light);
     border-radius: 10px;
   }
 

@@ -29,7 +29,7 @@
  * @module utils/storage/storage-key-manager
  * @author Art Design Pro Team
  */
-import { StorageConfig } from '@/utils/storage'
+import { StorageConfig } from './storage-config'
 
 /**
  * 存储键名管理器

@@ -255,6 +255,7 @@
       </template>
     </div>
     <ElDialog
+      class="studio-dialog"
       :model-value="!!open"
       :title="
         open === 'template'

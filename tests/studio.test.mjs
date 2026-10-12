@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createStudioService, ApiError, shanghaiDate } from '../server/studio.mjs'
+import { createStudioService, ApiError, shanghaiDate, ALL_PERMISSIONS } from '../server/studio.mjs'
 import { createStudioServer } from '../server/index.mjs'
 
 const PASSWORD = 'test-only-password-248!'
@@ -147,6 +147,56 @@ test('真实登录使用哈希密码和会话，错误或停用账号不能登�
   const player = f.users.player1
   f.mutate('/users', { ...player, status: 'disabled' })
   rejects(() => f.service.login(player.username, PASSWORD), 401)
+})
+
+test('超管拥有全部权限；普通管理员不能创建、修改或重置超管，管理员默认不开放财务', (t) => {
+  const f = fixture(t)
+  const root = f.data().user
+  assert.equal(root.role, 'super_admin')
+  assert.deepEqual(f.data().permissions, ALL_PERMISSIONS)
+  const admin = f.mutate('/users', {
+    username: 'normal-admin',
+    name: '普通管理员',
+    role: 'admin',
+    status: 'active',
+    maxActiveOrders: 1,
+    permissionOverrides: {},
+    password: PASSWORD
+  })
+  const adminData = f.data('2026-10', admin.id)
+  assert.ok(adminData.permissions.includes('users.manage'))
+  assert.ok(!adminData.permissions.includes('profit.view'))
+  assert.ok(!adminData.permissions.includes('finance.review'))
+  rejects(() => f.mutate('/users', { ...root, name: '越权修改' }, admin.id), 403)
+  rejects(() => f.mutate('/users', { ...root, password: 'reset-not-allowed' }, admin.id), 403)
+  rejects(() => f.mutate('/users', { ...admin, role: 'super_admin' }, admin.id), 403)
+  rejects(() => f.mutate('/users', { ...root, role: 'admin' }), 400)
+  f.mutate('/users', {
+    ...root,
+    permissionOverrides: { 'users.manage': false, 'profit.view': false }
+  })
+  assert.deepEqual(f.data().permissions, ALL_PERMISSIONS)
+})
+
+test('旧版管理员迁移为超管，重启仍保留原订单、密码和会话', (t) => {
+  const folder = mkdtempSync(join(tmpdir(), 'studio-migration-'))
+  const dbPath = join(folder, 'studio.sqlite')
+  t.after(() => rmSync(folder, { recursive: true, force: true }))
+  const first = createStudioService({ dbPath, password: PASSWORD, seed: true })
+  const loggedIn = first.login('admin', PASSWORD)
+  const oldState = JSON.parse(first.db.prepare('SELECT json FROM studio_state').get().json)
+  oldState.users.find((u) => u.id === 'admin').role = 'admin'
+  delete oldState.schemaVersion
+  first.db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(oldState))
+  first.close()
+  const second = createStudioService({ dbPath, seed: false })
+  try {
+    assert.equal(second.session(loggedIn.token).role, 'super_admin')
+    assert.equal(second.login('admin', PASSWORD).user.id, 'admin')
+    assert.deepEqual(second.bootstrap('admin').orders, oldState.orders)
+  } finally {
+    second.close()
+  }
 })
 
 test('客服接口响应隐藏工资、利润、其他个人权限及计提快照，不能修改模板或审核', (t) => {

@@ -108,7 +108,7 @@
                 :y1="18 + i * 42"
                 x2="670"
                 :y2="18 + i * 42"
-                stroke="#eef0f7"
+                stroke="var(--el-border-color-lighter)"
                 stroke-dasharray="4 5"
               />
               <text x="0" :y="22 + i * 42" class="chart-axis-label">{{ tick }}</text>

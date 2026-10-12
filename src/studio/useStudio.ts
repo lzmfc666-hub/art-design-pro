@@ -30,7 +30,9 @@ async function request<T>(path: string, body?: unknown, method = 'GET'): Promise
       user.value = null
       data.value = null
     }
-    throw new Error(result.message || '操作失败，请重试')
+    throw Object.assign(new Error(result.message || '操作失败，请重试'), {
+      status: response.status
+    })
   }
   return result as T
 }
@@ -123,6 +125,7 @@ export const roleLabels: Record<Role, string> = {
   support_lead: '客服主管',
   support: '客服',
   admin: '管理员',
+  super_admin: '超级管理员',
   player: '打手'
 }
 export const statusLabels: Record<OrderStatus, string> = {

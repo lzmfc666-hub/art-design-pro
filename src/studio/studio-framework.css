@@ -1,0 +1,645 @@
+/* 工作室页面样式仅在业务容器内生效，主题沿用 Art Design Pro。 */
+.studio-content {
+  min-width: 0;
+  color: var(--el-text-color-primary);
+}
+
+.studio-content h1,
+.studio-content h2,
+.studio-content h3,
+.studio-content p {
+  margin: 0;
+}
+
+.studio-content .studio-notice {
+  margin-bottom: 20px;
+}
+
+:where(.studio-content, .studio-dialog) .muted {
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
+
+:where(.studio-content, .studio-dialog) .eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--el-color-primary);
+  letter-spacing: 1.8px;
+}
+
+:where(.studio-content, .studio-dialog) .live-dot {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: #38bd92;
+  border-radius: 50%;
+}
+
+:where(.studio-content, .studio-dialog) .user-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 35px;
+  height: 35px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border-radius: 11px;
+}
+
+:where(.studio-content, .studio-dialog) .page-heading {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+:where(.studio-content, .studio-dialog) .page-heading h2 {
+  font-size: 23px;
+  font-weight: 600;
+  line-height: 1.6;
+  letter-spacing: -0.5px;
+}
+
+:where(.studio-content, .studio-dialog) .page-heading p {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .page-heading > .el-button {
+  flex: none;
+}
+
+:where(.studio-content, .studio-dialog) .panel {
+  min-width: 0;
+  padding: 22px;
+  margin-bottom: 20px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 12px;
+  box-shadow: 0 3px 14px #1b2e5702;
+}
+
+:where(.studio-content, .studio-dialog) .panel-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+:where(.studio-content, .studio-dialog) .panel-heading h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+:where(.studio-content, .studio-dialog) .panel-heading p {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .panel-heading > .el-button {
+  font-size: 11px;
+}
+
+:where(.studio-content, .studio-dialog) .toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+:where(.studio-content, .studio-dialog) .toolbar > .el-input {
+  max-width: 260px;
+}
+
+:where(.studio-content, .studio-dialog) .toolbar > .el-select {
+  width: 160px;
+}
+
+:where(.studio-content, .studio-dialog) .toolbar > .el-date-editor {
+  max-width: 240px;
+}
+
+:where(.studio-content, .studio-dialog) .metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+:where(.studio-content, .studio-dialog) .metric-card {
+  position: relative;
+  min-width: 0;
+  padding: 20px 22px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 12px;
+}
+
+:where(.studio-content, .studio-dialog) .metric-label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .metric-value {
+  margin-top: 17px;
+  font-size: 27px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  letter-spacing: -0.5px;
+}
+
+:where(.studio-content, .studio-dialog) .metric-foot {
+  margin-top: 14px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .metric-icon {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 35px;
+  height: 35px;
+  font-size: 18px;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border-radius: 10px;
+}
+
+:where(.studio-content, .studio-dialog) .metric-icon.green {
+  color: #43b58b;
+  background: var(--el-color-success-light-9);
+}
+
+:where(.studio-content, .studio-dialog) .metric-icon.blue {
+  color: #5d93e9;
+  background: var(--el-color-primary-light-9);
+}
+
+:where(.studio-content, .studio-dialog) .metric-icon.amber {
+  color: #dda154;
+  background: var(--el-color-warning-light-9);
+}
+
+:where(.studio-content, .studio-dialog) .split-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(280px, 1fr);
+  gap: 20px;
+}
+
+:where(.studio-content, .studio-dialog) .split-grid > .panel {
+  height: calc(100% - 20px);
+}
+
+:where(.studio-content, .studio-dialog) .empty-state {
+  padding: 56px 20px;
+  line-height: 2;
+  color: var(--el-text-color-secondary);
+  text-align: center;
+}
+
+:where(.studio-content, .studio-dialog) .empty-state h2 {
+  margin-bottom: 15px;
+  font-size: 17px;
+}
+
+:where(.studio-content, .studio-dialog) .el-table {
+  --el-table-header-bg-color: var(--el-fill-color-light);
+  --el-table-border-color: var(--el-border-color-lighter);
+  --el-table-header-text-color: var(--el-text-color-secondary);
+
+  font-size: 12px;
+}
+
+:where(.studio-content, .studio-dialog) .el-table th.el-table__cell {
+  height: 44px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+:where(.studio-content, .studio-dialog) .el-table td.el-table__cell {
+  height: 60px;
+}
+
+:where(.studio-content, .studio-dialog) .el-table .cell {
+  line-height: 1.8;
+}
+
+:where(.studio-content, .studio-dialog) .el-table__inner-wrapper::before {
+  display: none;
+}
+
+:where(.studio-content, .studio-dialog) .el-tabs__nav-wrap::after {
+  height: 1px;
+  background: var(--el-border-color-lighter);
+}
+
+:where(.studio-content, .studio-dialog) .el-tabs__item {
+  font-size: 12px;
+}
+
+:where(.studio-content, .studio-dialog) .el-dialog {
+  border-radius: 14px !important;
+}
+
+:where(.studio-content, .studio-dialog) .el-dialog__header {
+  padding-bottom: 18px;
+}
+
+:where(.studio-content, .studio-dialog) .el-dialog__title {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+:where(.studio-content, .studio-dialog) .el-form-item__label {
+  font-size: 12px;
+}
+
+:where(.studio-content, .studio-dialog) .el-input-number {
+  width: 100%;
+}
+
+:where(.studio-content, .studio-dialog) .el-select {
+  min-width: 120px;
+}
+
+:where(.studio-content, .studio-dialog) .el-drawer__body {
+  padding: 24px;
+}
+
+:where(.studio-content, .studio-dialog) .el-descriptions__label {
+  font-size: 12px;
+}
+
+:where(.studio-content, .studio-dialog) .el-tag {
+  font-size: 10px;
+}
+
+:where(.studio-content, .studio-dialog) .el-button + .el-button {
+  margin-left: 8px;
+}
+
+:where(.studio-content, .studio-dialog) .el-alert__description {
+  line-height: 1.8;
+}
+
+:where(.studio-content, .studio-dialog) .table-primary {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+:where(.studio-content, .studio-dialog) .table-secondary {
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .permission-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+:where(.studio-content, .studio-dialog) .overview-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+:where(.studio-content, .studio-dialog) .overview-actions .el-date-editor {
+  width: 126px;
+}
+
+:where(.studio-content, .studio-dialog) .chart-wrap {
+  position: relative;
+  height: 230px;
+  padding: 12px 0 0;
+}
+
+:where(.studio-content, .studio-dialog) .chart-wrap svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+:where(.studio-content, .studio-dialog) .chart-axis-label {
+  font-size: 10px;
+  fill: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .chart-labels {
+  display: flex;
+  justify-content: space-between;
+  padding-left: 44px;
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .chart-legend {
+  display: flex;
+  gap: 18px;
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .chart-legend span {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+:where(.studio-content, .studio-dialog) .chart-legend i {
+  display: block;
+  width: 7px;
+  height: 7px;
+  background: var(--el-color-primary);
+  border-radius: 50%;
+}
+
+:where(.studio-content, .studio-dialog) .chart-legend span:last-child i {
+  background: #61bfab;
+}
+
+:where(.studio-content, .studio-dialog) .channel-row {
+  margin: 19px 0;
+}
+
+:where(.studio-content, .studio-dialog) .channel-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+:where(.studio-content, .studio-dialog) .channel-name {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+}
+
+:where(.studio-content, .studio-dialog) .channel-symbol {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 8px;
+}
+
+:where(.studio-content, .studio-dialog) .channel-total {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 17px;
+  margin-top: 22px;
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+:where(.studio-content, .studio-dialog) .channel-total b {
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+}
+
+:where(.studio-content, .studio-dialog) .todo-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 15px;
+}
+
+:where(.studio-content, .studio-dialog) .todo-item {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  padding: 15px;
+  text-align: left;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 9px;
+  transition: background 0.15s;
+}
+
+:where(.studio-content, .studio-dialog) .todo-item:hover {
+  background: var(--el-color-primary-light-9);
+}
+
+:where(.studio-content, .studio-dialog) .todo-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  border-radius: 10px;
+}
+
+:where(.studio-content, .studio-dialog) .todo-item b {
+  display: block;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+:where(.studio-content, .studio-dialog) .todo-item small {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .todo-item > .el-icon {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .welcome-label {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .report-note {
+  margin-top: 16px;
+  font-size: 10px;
+  line-height: 1.8;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .performance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+:where(.studio-content, .studio-dialog) .performance-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 12px;
+}
+
+:where(.studio-content, .studio-dialog) .performance-row > .rank {
+  width: 14px;
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .performance-row > .rank.first {
+  color: #a58bdb;
+}
+
+:where(.studio-content, .studio-dialog) .performance-row .user-avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 11px;
+}
+
+:where(.studio-content, .studio-dialog) .performance-row .performance-name {
+  flex: 1;
+}
+
+:where(.studio-content, .studio-dialog) .performance-row .performance-name small {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .performance-row b {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+:where(.studio-content, .studio-dialog) .source-tag {
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+:where(.studio-content, .studio-dialog) .status-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 5px;
+  background: currentcolor;
+  border-radius: 50%;
+}
+
+@media (width >= 1600px) {
+  :where(.studio-content, .studio-dialog) .metric-card {
+    padding: 25px 28px;
+  }
+
+  :where(.studio-content, .studio-dialog) .metric-value {
+    font-size: 31px;
+  }
+
+  :where(.studio-content, .studio-dialog) .chart-wrap {
+    height: 265px;
+  }
+}
+
+@media (width <= 1200px) {
+  :where(.studio-content, .studio-dialog) .metric-grid {
+    gap: 12px;
+  }
+
+  :where(.studio-content, .studio-dialog) .metric-card {
+    padding: 18px 15px;
+  }
+
+  :where(.studio-content, .studio-dialog) .metric-value {
+    font-size: 23px;
+  }
+
+  :where(.studio-content, .studio-dialog) .metric-icon {
+    top: 15px;
+    right: 14px;
+    width: 30px;
+    height: 30px;
+    font-size: 15px;
+  }
+
+  :where(.studio-content, .studio-dialog) .split-grid {
+    grid-template-columns: minmax(0, 1.6fr) minmax(240px, 1fr);
+  }
+
+  :where(.studio-content, .studio-dialog) .todo-grid {
+    gap: 10px;
+  }
+
+  :where(.studio-content, .studio-dialog) .todo-item {
+    gap: 8px;
+    padding: 12px 10px;
+  }
+
+  :where(.studio-content, .studio-dialog) .todo-icon {
+    width: 30px;
+    height: 30px;
+  }
+}
+
+@media (width <= 899px) {
+  :where(.studio-content, .studio-dialog) .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  :where(.studio-content, .studio-dialog) .metric-value {
+    font-size: 26px;
+  }
+
+  :where(.studio-content, .studio-dialog) .split-grid {
+    grid-template-columns: 1fr;
+  }
+
+  :where(.studio-content, .studio-dialog) .todo-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  :where(.studio-content, .studio-dialog) .page-heading {
+    align-items: flex-start;
+  }
+
+  :where(.studio-content, .studio-dialog) .page-heading h2 {
+    font-size: 21px;
+  }
+
+  :where(.studio-content, .studio-dialog) .page-heading p {
+    font-size: 11px;
+  }
+
+  :where(.studio-content, .studio-dialog) .overview-actions {
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  :where(.studio-content, .studio-dialog) .overview-actions .el-date-editor {
+    width: 120px;
+  }
+
+  :where(.studio-content, .studio-dialog) .panel {
+    padding: 18px;
+  }
+}

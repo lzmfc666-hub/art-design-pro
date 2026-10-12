@@ -279,7 +279,7 @@
         ></ElTable
       >
     </template>
-    <ElDialog v-model="open" title="工资方案配置" width="min(600px, 94vw)"
+    <ElDialog class="studio-dialog" v-model="open" title="工资方案配置" width="min(600px, 94vw)"
       ><ElForm label-position="top" @submit.prevent="save"
         ><ElFormItem label="员工" required
           ><ElSelect v-model="plan.userId" :disabled="!!plan.id" filterable style="width: 100%"
@@ -321,6 +321,7 @@
       ></ElDialog
     >
     <ElDialog
+      class="studio-dialog"
       :model-value="!!snapshot"
       :title="`${snapshot?.month || ''} 工资发放快照`"
       width="min(900px, 94vw)"

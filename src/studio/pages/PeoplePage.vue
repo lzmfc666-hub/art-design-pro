@@ -24,7 +24,14 @@
   const { data, user, can, mutate } = useStudio()
   const tab = ref('staff')
   const query = ref('')
-  const isAdmin = computed(() => user.value?.role === 'admin')
+  const isAdmin = computed(() => ['super_admin', 'admin'].includes(user.value?.role || ''))
+  const selectableRoles = computed(() =>
+    Object.fromEntries(
+      Object.entries(roleLabels).filter(
+        ([role]) => role !== 'super_admin' || user.value?.role === 'super_admin'
+      )
+    )
+  )
   const staffRows = computed(() =>
     (data.value?.users || []).filter(
       (item) =>
@@ -207,7 +214,13 @@
         >
         <ElTableColumn v-if="can('users.manage')" label="操作" width="110" fixed="right"
           ><template #default="{ row }"
-            ><ElButton link type="primary" @click="editPerson(row)">编辑档案</ElButton></template
+            ><ElButton
+              v-if="row.role !== 'super_admin' || user?.role === 'super_admin'"
+              link
+              type="primary"
+              @click="editPerson(row)"
+              >编辑档案</ElButton
+            ></template
           ></ElTableColumn
         >
         <template #empty><ElEmpty description="暂无匹配人员" /></template>
@@ -225,6 +238,7 @@
       </ElTable>
     </div>
     <ElDialog
+      class="studio-dialog"
       v-model="personOpen"
       :title="person.id ? '编辑人员档案' : '新建人员账号'"
       width="min(760px, 94vw)"
@@ -241,7 +255,7 @@
           <ElFormItem label="角色"
             ><ElSelect v-model="person.role" style="width: 100%"
               ><ElOption
-                v-for="(label, key) in roleLabels"
+                v-for="(label, key) in selectableRoles"
                 :key="key"
                 :value="key"
                 :label="label" /></ElSelect
@@ -277,13 +291,17 @@
               placeholder="至少 8 位"
           /></ElFormItem>
         </div>
-        <p class="muted"
+        <p v-if="person.role === 'super_admin'" class="muted"
+          >超级管理员始终拥有全部权限；账号只能由超级管理员维护。</p
+        >
+        <p v-else class="muted"
           >个人权限默认继承角色。逐项选择“允许”或“禁止”覆盖角色默认权限；工资及数据范围由接口同步校验。</p
         >
         <div class="people-permissions"
           ><div v-for="[key, label] in permissions" :key="key" class="people-permission"
             ><span>{{ label }}</span
             ><ElSelect
+              :disabled="person.role === 'super_admin'"
               :model-value="overrideValue(key!)"
               @update:model-value="setOverride(key!, $event)"
               ><ElOption label="角色默认" value="default" /><ElOption
@@ -299,6 +317,7 @@
       >
     </ElDialog>
     <ElDialog
+      class="studio-dialog"
       v-model="customerOpen"
       :title="customer.id ? '编辑客户' : '新增客户'"
       width="min(520px, 94vw)"
@@ -341,7 +360,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 9px 0;
-    border-bottom: 1px solid #f0f1f5;
+    border-bottom: 1px solid var(--el-border-color-lighter);
   }
 
   .people-permission .el-select {

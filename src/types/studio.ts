@@ -7,6 +7,7 @@ export type Role =
   | 'support_lead'
   | 'support'
   | 'admin'
+  | 'super_admin'
   | 'player'
 export type OrderStatus = 'pending' | 'active' | 'review' | 'completed' | 'canceled'
 export interface Staff {

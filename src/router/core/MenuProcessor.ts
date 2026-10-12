@@ -14,6 +14,9 @@ import { fetchGetMenuList } from '@/api/system-manage'
 import { asyncRoutes } from '../routes/asyncRoutes'
 import { RoutesAlias } from '../routesAlias'
 import { formatMenuTitle } from '@/utils'
+import { useStudio } from '@/studio/useStudio'
+import { isStudioSuperAdmin } from '@/studio/framework-auth'
+import { canAccessStudioPage } from '@/studio/route-access'
 
 export class MenuProcessor {
   /**
@@ -40,10 +43,17 @@ export class MenuProcessor {
    * 处理前端控制模式的菜单
    */
   private async processFrontendMenu(): Promise<AppRouteRecord[]> {
+    return this.filterForCurrentUser([...asyncRoutes])
+  }
+
+  private filterForCurrentUser(menuList: AppRouteRecord[]): AppRouteRecord[] {
     const userStore = useUserStore()
     const roles = userStore.info?.roles
 
-    let menuList = [...asyncRoutes]
+    // 原模板页面保留给超管；日常员工只展示其被授权的工作室业务。
+    if (!isStudioSuperAdmin(useStudio().user.value)) {
+      menuList = menuList.filter((route) => route.name === 'Studio')
+    }
 
     // 根据角色过滤菜单
     if (roles && roles.length > 0) {
@@ -58,7 +68,7 @@ export class MenuProcessor {
    */
   private async processBackendMenu(): Promise<AppRouteRecord[]> {
     const list = await fetchGetMenuList()
-    return this.filterEmptyMenus(list)
+    return this.filterForCurrentUser(list)
   }
 
   /**
@@ -67,7 +77,9 @@ export class MenuProcessor {
   private filterMenuByRoles(menu: AppRouteRecord[], roles: string[]): AppRouteRecord[] {
     return menu.reduce((acc: AppRouteRecord[], item) => {
       const itemRoles = item.meta?.roles
-      const hasPermission = !itemRoles || itemRoles.some((role) => roles?.includes(role))
+      const hasPermission =
+        (!itemRoles || itemRoles.some((role) => roles?.includes(role))) &&
+        canAccessStudioPage(item.meta.studioPermissions)
 
       if (hasPermission) {
         const filteredItem = { ...item }

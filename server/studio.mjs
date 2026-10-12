@@ -30,9 +30,11 @@ const ROLES = [
   'support_lead',
   'support',
   'admin',
+  'super_admin',
   'player'
 ]
 const DEFAULT_PERMISSIONS = {
+  super_admin: ALL_PERMISSIONS,
   owner: ALL_PERMISSIONS,
   manager: [
     'orders.view',
@@ -137,6 +139,7 @@ const normalizedTime = (value, label) => {
   return d.toISOString()
 }
 export function permissionsFor(user) {
+  if (user.role === 'super_admin') return [...ALL_PERMISSIONS]
   const permissions = new Set(DEFAULT_PERMISSIONS[user.role] || [])
   for (const [key, enabled] of Object.entries(user.permissionOverrides || {})) {
     if (!ALL_PERMISSIONS.includes(key)) continue
@@ -202,7 +205,8 @@ function emptyState() {
     commissionPaid: {},
     commissionAdjustments: [],
     rewardReviews: [],
-    demo: false
+    demo: false,
+    schemaVersion: 2
   }
 }
 
@@ -212,11 +216,11 @@ function seedState(now, password, demo) {
   state.users.push({
     id: 'admin',
     username: 'admin',
-    name: '工作室管理员',
-    role: 'admin',
+    name: '工作室超级管理员',
+    role: 'super_admin',
     status: 'active',
     maxActiveOrders: 1,
-    permissionOverrides: Object.fromEntries(ALL_PERMISSIONS.map((p) => [p, true]))
+    permissionOverrides: {}
   })
   state.passwords.admin = hashPassword(password)
   state.platforms = [
@@ -379,6 +383,14 @@ export function createStudioService({
   const read = () => JSON.parse(db.prepare('SELECT json FROM studio_state WHERE id=1').get().json)
   const save = (state) =>
     db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(state))
+  // 旧版首次创建的 admin 本来就拥有全部权限，迁移成独立的超管角色。
+  const existingState = read()
+  if ((existingState.schemaVersion || 1) < 2) {
+    const initialAdmin = existingState.users.find((u) => u.id === 'admin' && u.role === 'admin')
+    if (initialAdmin) initialAdmin.role = 'super_admin'
+    existingState.schemaVersion = 2
+    save(existingState)
+  }
   const audit = (state, user, action, entity, entityId, before, after) => {
     state.logs.push({
       id: id(),
@@ -630,7 +642,8 @@ export function createStudioService({
     const employees = state.users.filter(
       (u) =>
         u.role !== 'player' &&
-        (!['admin', 'owner'].includes(u.role) || state.salaryPlans.some((p) => p.userId === u.id))
+        (!['super_admin', 'admin', 'owner'].includes(u.role) ||
+          state.salaryPlans.some((p) => p.userId === u.id))
     )
     return employees
       .map((user) => {
@@ -1287,7 +1300,13 @@ export function createStudioService({
         requirePermission(user, 'users.manage')
         const existing = body.id ? find(state, 'users', body.id, '账号') : null,
           before = existing ? clone(existing) : null
-        if (body.password && user.role !== 'admin') fail('仅管理员可以创建或重置密码', 403)
+        if (body.password && !['super_admin', 'admin'].includes(user.role))
+          fail('仅管理员可以创建或重置密码', 403)
+        if (
+          (existing?.role === 'super_admin' || body.role === 'super_admin') &&
+          user.role !== 'super_admin'
+        )
+          fail('仅超级管理员可以维护超级管理员账号', 403)
         const username = text(body.username, '登录名', { required: true, max: 64 })
         if (!/^[a-zA-Z0-9_.@-]+$/.test(username)) fail('登录名仅支持字母、数字和_.@-')
         if (
@@ -1326,7 +1345,7 @@ export function createStudioService({
           status,
           ...(levelId ? { levelId } : {}),
           maxActiveOrders: body.maxActiveOrders,
-          permissionOverrides: overrides
+          permissionOverrides: role === 'super_admin' ? {} : overrides
         }
         if (row.id === user.id && (status !== 'active' || role !== user.role))
           fail('不能停用自己或更改自身角色')
@@ -1334,12 +1353,8 @@ export function createStudioService({
         if (body.password) state.passwords[row.id] = hashPassword(body.password)
         if (existing) state.users[state.users.indexOf(existing)] = row
         else state.users.push(row)
-        if (
-          !state.users.some(
-            (u) => u.role === 'admin' && u.status === 'active' && can(u, 'users.manage')
-          )
-        )
-          fail('至少保留一个启用中的管理员')
+        if (!state.users.some((u) => u.role === 'super_admin' && u.status === 'active'))
+          fail('至少保留一个启用中的超级管理员')
         for (const order of state.orders) snapshotCommission(state, order)
         if (body.password || status === 'disabled' || existing?.role !== row.role)
           db.prepare('DELETE FROM sessions WHERE user_id=?').run(row.id)
