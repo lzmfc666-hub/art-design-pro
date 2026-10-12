@@ -337,6 +337,7 @@
   watch(
     () => route.query.id,
     (id) => {
+      if (route.path !== '/orders/list') return
       if (detailBusy.value && id !== selectedId.value) {
         void router.replace({ query: { ...route.query, id: selectedId.value } })
         return
