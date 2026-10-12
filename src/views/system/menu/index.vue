@@ -1,5 +1,11 @@
 <template>
   <div class="art-full-height">
+    <BusinessPageHeader
+      title="菜单权限"
+      description="查看原框架菜单结构、业务准入规则和当前账号访问范围。"
+      icon="ri:menu-search-line"
+      badge="与实际路由同步"
+    />
     <ArtSearchBar
       v-model="search"
       :items="searchItems"
@@ -62,6 +68,7 @@
 </template>
 
 <script setup lang="ts">
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import { computed, ref, nextTick, onMounted } from 'vue'
   import { useI18n } from 'vue-i18n'
   import { ElMessage } from 'element-plus'
@@ -144,7 +151,7 @@
       const matches =
         `${title(row.title)} ${row.path}`
           .toLowerCase()
-          .includes(applied.value.keyword.toLowerCase()) &&
+          .includes((applied.value.keyword || '').toLowerCase()) &&
         (!applied.value.kind || row.business === (applied.value.kind === 'business'))
       return matches || children.length
         ? [{ ...row, children: children.length ? children : undefined }]

@@ -27,7 +27,15 @@
     '/system/user-center': 'profile'
   }
   const show = computed(
-    () => route.meta.business && route.path !== '/reports/export' && user.value?.role !== 'player'
+    () =>
+      route.meta.business &&
+      ![
+        '/reports/export',
+        '/finance/settlement',
+        '/finance/salary',
+        '/dashboard/analysis'
+      ].includes(route.path) &&
+      user.value?.role !== 'player'
   )
   function openExport() {
     let module = modules[route.path] || 'profile'

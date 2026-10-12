@@ -1,5 +1,11 @@
 <template>
   <div class="user-page art-full-height">
+    <BusinessPageHeader
+      title="人员管理"
+      description="集中维护员工与打手账号，管理角色、个人授权、等级和同时接单上限。"
+      icon="ri:team-line"
+      :badge="`${data?.users.length || 0} 个账号`"
+    />
     <UserSearch v-model="search" @search="applySearch" @reset="resetSearch" />
     <ElCard class="art-table-card">
       <ElTabs v-model="tab" @tab-change="resetPage"
@@ -30,6 +36,14 @@
       >
         <template #role="{ row }"
           ><ElTag>{{ roleLabels[row.role as Role] }}</ElTag></template
+        >
+        <template #name="{ row }"
+          ><div class="flex items-center gap-3"
+            ><ElAvatar :size="32" class="!bg-theme/10 !text-theme">{{
+              row.name.slice(0, 1)
+            }}</ElAvatar
+            ><span class="font-medium">{{ row.name }}</span></div
+          ></template
         >
         <template #levelId="{ row }">{{
           row.role === 'player'
@@ -80,6 +94,7 @@
   import type { Role, Staff } from '@/types/studio'
   import UserSearch, { type UserSearch as SearchParams } from './modules/user-search.vue'
   import UserDialog from './modules/user-dialog.vue'
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
 
   defineOptions({ name: 'User' })
   const { data, user, loading, can, refresh } = useStudio()
@@ -88,6 +103,14 @@
   const search = ref<SearchParams>({ keyword: '', role: '', status: '' })
   const applied = reactive<SearchParams>({ keyword: '', role: '', status: '' })
   const route = useRoute()
+  watch(
+    () => route.query.keyword,
+    (value) => {
+      search.value.keyword = typeof value === 'string' ? value : ''
+      applied.keyword = search.value.keyword
+    },
+    { immediate: true }
+  )
   watch(
     () => route.query.role,
     (value) => {
@@ -102,7 +125,9 @@
     (data.value?.users || []).filter(
       (row) =>
         (tab.value === 'players' ? row.role === 'player' : row.role !== 'player') &&
-        `${row.name} ${row.username}`.toLowerCase().includes(applied.keyword.toLowerCase()) &&
+        `${row.name} ${row.username}`
+          .toLowerCase()
+          .includes((applied.keyword || '').toLowerCase()) &&
         (!applied.role || row.role === applied.role) &&
         (!applied.status || row.status === applied.status)
     )
@@ -110,7 +135,7 @@
   const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =
     useBusinessTable(filteredRows)
   const { columns, columnChecks } = useTableColumns<Staff>(() => [
-    { prop: 'name', label: '姓名 / 称呼', minWidth: 130 },
+    { prop: 'name', label: '姓名 / 称呼', minWidth: 160, useSlot: true },
     { prop: 'username', label: '登录账号', minWidth: 150 },
     { prop: 'role', label: '角色', width: 130, useSlot: true },
     { prop: 'levelId', label: '打手等级', minWidth: 120, useSlot: true },
@@ -126,7 +151,7 @@
     dialogVisible.value = true
   }
   function applySearch() {
-    Object.assign(applied, search.value)
+    Object.assign(applied, { keyword: '', role: '', status: '' }, search.value)
     resetPage()
   }
   function resetSearch() {

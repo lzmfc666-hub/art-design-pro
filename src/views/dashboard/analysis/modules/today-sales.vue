@@ -1,39 +1,51 @@
 <template>
-  <div class="art-card p-5 mb-5">
-    <div class="art-card-header">
-      <div class="title"
-        ><h4>{{ data?.reports.month || selectedMonth }} 经营概览</h4
-        ><p>来自实际订单、退款及费用记录</p></div
-      >
-      <ElTag :type="data?.reports.monthlyProfit == null ? 'warning' : 'success'" effect="plain">{{
-        data?.reports.monthlyProfit == null ? '核算配置待补齐' : '核算配置完整'
-      }}</ElTag>
+  <section class="month-overview">
+    <div class="overview-cards">
+      <BusinessStatCard
+        v-for="item in metrics"
+        :key="item.label"
+        :label="item.label"
+        :value="ready ? item.value : '—'"
+        :icon="item.icon"
+        :tone="item.tone"
+        :description="item.note"
+      />
     </div>
-    <ElRow :gutter="20">
-      <ElCol v-for="item in metrics" :key="item.label" :lg="6" :sm="12" :xs="24">
-        <div class="border border-g-300/85 rounded-xl px-5 py-5 mb-4">
-          <div class="size-11 rounded-lg flex-cc bg-theme/10"
-            ><ArtSvgIcon :icon="item.icon" class="text-xl text-theme"
-          /></div>
-          <p class="text-g-500 mt-4">{{ item.label }}</p
-          ><p class="text-2xl font-medium mt-2 break-all">{{ item.value }}</p
-          ><p class="text-xs text-g-500 mt-2">{{ item.note }}</p>
-        </div>
-      </ElCol>
-    </ElRow>
-    <div class="flex flex-wrap gap-x-7 gap-y-2 text-sm text-g-500"
-      ><span>打手成本 {{ money(totals.reward) }}</span
-      ><span>其中预计成本 {{ money(totals.estimatedReward) }}</span
-      ><span>其他费用 {{ money(totals.expenses) }}</span
-      ><span>月度底薪 {{ money(data?.reports.monthlyBase) }}</span></div
-    >
-  </div>
+    <div class="overview-costs">
+      <span
+        ><ArtSvgIcon icon="ri:calendar-2-line" />{{
+          data?.reports.month || selectedMonth
+        }}
+        经营成本</span
+      >
+      <span
+        >打手成本 <strong>{{ ready ? money(totals.reward) : '—' }}</strong></span
+      >
+      <span
+        >其中预计 <strong>{{ ready ? money(totals.estimatedReward) : '—' }}</strong></span
+      >
+      <span
+        >其他费用 <strong>{{ ready ? money(totals.expenses) : '—' }}</strong></span
+      >
+      <span
+        >月度底薪 <strong>{{ ready ? money(data?.reports.monthlyBase) : '—' }}</strong></span
+      >
+    </div>
+  </section>
 </template>
 
 <script setup lang="ts">
   import { computed } from 'vue'
   import { money, useStudio } from '@/hooks/business/useStudio'
-  const { data, selectedMonth } = useStudio()
+  import BusinessStatCard from '@/components/business/BusinessStatCard.vue'
+  const { data, selectedMonth, loading, error } = useStudio()
+  const ready = computed(
+    () =>
+      !!data.value &&
+      !loading.value &&
+      !error.value &&
+      data.value.reports.month === selectedMonth.value
+  )
   const totals = computed(() =>
     (data.value?.reports.days || []).reduce(
       (sum, row) => ({
@@ -52,19 +64,22 @@
       label: '客户收款',
       value: money(totals.value.received),
       note: '按原付款日归属',
-      icon: 'ri:wallet-3-line'
+      icon: 'ri:wallet-3-line',
+      tone: 'primary' as const
     },
     {
       label: '累计退款',
       value: money(totals.value.refunds),
       note: '含后续回改的实际退款',
-      icon: 'ri:refund-2-line'
+      icon: 'ri:refund-2-line',
+      tone: 'danger' as const
     },
     {
       label: '净收入',
       value: money(totals.value.net),
       note: '客户收款减累计退款',
-      icon: 'ri:bar-chart-grouped-line'
+      icon: 'ri:bar-chart-grouped-line',
+      tone: 'success' as const
     },
     {
       label: '月度利润',
@@ -73,7 +88,62 @@
           ? '配置未齐'
           : money(data.value.reports.monthlyProfit),
       note: '已扣成本、提成、费用及底薪',
-      icon: 'ri:funds-line'
+      icon: 'ri:funds-line',
+      tone: data.value?.reports.monthlyProfit == null ? ('warning' as const) : ('primary' as const)
     }
   ])
 </script>
+
+<style scoped lang="scss">
+  .month-overview {
+    margin-bottom: 20px;
+  }
+
+  .overview-cards {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 20px;
+  }
+
+  .overview-costs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    padding: 16px 20px;
+    margin-top: 14px;
+    font-size: 13px;
+    color: var(--el-text-color-secondary);
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 12px;
+
+    span {
+      display: inline-flex;
+      gap: 7px;
+      align-items: center;
+    }
+
+    strong {
+      font-weight: 500;
+      color: var(--el-text-color-primary);
+    }
+  }
+
+  @media (width <= 1100px) {
+    .overview-cards {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (width <= 640px) {
+    .overview-cards {
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .overview-costs {
+      gap: 10px 16px;
+      padding: 14px;
+    }
+  }
+</style>

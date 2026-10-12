@@ -1,5 +1,11 @@
 <template>
   <div class="logs-page art-full-height">
+    <BusinessPageHeader
+      title="操作日志"
+      description="追溯订单与财务处理、人员配置和业务变更，按权限查看历史前后值。"
+      icon="ri:history-line"
+      badge="审计留痕"
+    />
     <template v-if="can('logs.view')">
       <ArtSearchBar
         v-model="search"
@@ -64,6 +70,7 @@
 </template>
 
 <script setup lang="ts">
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import { computed, onMounted, ref } from 'vue'
   import { formatTime, useStudio } from '@/hooks/business/useStudio'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
@@ -134,7 +141,7 @@
           (!search.value.query ||
             `${row.action} ${row.entityId} ${row.actorName} ${JSON.stringify(row.before)} ${JSON.stringify(row.after)}`
               .toLowerCase()
-              .includes(search.value.query.trim().toLowerCase())) &&
+              .includes((search.value.query || '').trim().toLowerCase())) &&
           (!search.value.dates || (date >= search.value.dates[0] && date <= search.value.dates[1]))
         )
       })

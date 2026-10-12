@@ -3,7 +3,7 @@
   <div class="layout-search">
     <ElDialog
       v-model="showSearchDialog"
-      width="600"
+      width="min(680px, 94vw)"
       :show-close="false"
       :lock-scroll="false"
       modal-class="search-modal"
@@ -11,7 +11,7 @@
     >
       <ElInput
         v-model.trim="searchVal"
-        :placeholder="$t('search.placeholder')"
+        placeholder="搜索菜单、订单号、客户或人员（Ctrl + K）"
         @input="search"
         @blur="searchBlur"
         ref="searchInput"
@@ -39,11 +39,21 @@
               @click="searchGoPage(item)"
               @mouseenter="highlightOnHover(index)"
             >
-              {{ formatMenuTitle(item.meta.title) }}
+              <div class="min-w-0"
+                ><span class="block truncate">{{ formatMenuTitle(item.meta.title) }}</span
+                ><span v-if="item.description" class="text-xs opacity-75 block truncate mt-1">{{
+                  item.description
+                }}</span></div
+              >
               <ArtSvgIcon v-show="isHighlighted(index)" icon="fluent:arrow-enter-left-20-filled" />
             </div>
           </div>
         </div>
+        <ElEmpty
+          v-if="searchVal && !searchResult.length"
+          description="未找到可访问的记录，试试订单号、客户名称或页面名称"
+          :image-size="75"
+        />
 
         <div v-show="!searchVal && searchResult.length === 0 && historyResult.length > 0">
           <p class="text-xs text-g-500">{{ $t('search.historyTitle') }}</p>
@@ -102,6 +112,7 @@
   import { formatMenuTitle } from '@/utils/router'
   import { handleMenuJump } from '@/utils/navigation'
   import { type ScrollbarInstance } from 'element-plus'
+  import { useStudio, statusLabels, roleLabels } from '@/hooks/business/useStudio'
 
   defineOptions({ name: 'ArtGlobalSearch' })
 
@@ -110,7 +121,12 @@
 
   const showSearchDialog = ref(false)
   const searchVal = ref('')
-  const searchResult = ref<AppRouteRecord[]>([])
+  interface SearchRoute extends AppRouteRecord {
+    businessRecord?: boolean
+    description?: string
+  }
+  const searchResult = ref<SearchRoute[]>([])
+  const { data, can } = useStudio()
   const historyMaxLength = 10
 
   const { searchHistory: historyResult } = storeToRefs(userStore)
@@ -129,6 +145,7 @@
 
   onUnmounted(() => {
     document.removeEventListener('keydown', handleKeydown)
+    mittBus.off('openSearchDialog', openSearchDialog)
   })
 
   // 键盘快捷键处理
@@ -168,12 +185,68 @@
 
   // 搜索逻辑
   const search = (val: string) => {
+    highlightedIndex.value = 0
     if (val) {
-      searchResult.value = flattenAndFilterMenuItems(menuList.value, val)
+      searchResult.value = [
+        ...flattenAndFilterMenuItems(menuList.value, val),
+        ...businessMatches(val)
+      ].slice(0, 30)
     } else {
       searchResult.value = []
     }
   }
+  function businessMatches(value: string): SearchRoute[] {
+    const q = value.toLowerCase()
+    const result: SearchRoute[] = []
+    if (can('orders.view'))
+      for (const order of data.value?.orders || []) {
+        const customer = data.value?.customers.find((item) => item.id === order.customerId)
+        if (
+          [
+            order.orderNo,
+            order.externalOrderNo,
+            order.title,
+            order.roomCode,
+            order.gameId,
+            customer?.name,
+            customer?.contact
+          ].some((text) => text?.toLowerCase().includes(q))
+        )
+          result.push({
+            path: `/orders/list?id=${encodeURIComponent(order.id)}`,
+            meta: { title: `${order.orderNo} · ${order.title}` },
+            businessRecord: true,
+            description: `订单 · ${customer?.name || '客户'} · ${statusLabels[order.status]}`
+          })
+        if (result.length >= 10) break
+      }
+    if (can('users.manage'))
+      for (const person of data.value?.users || []) {
+        if (`${person.name} ${person.username}`.toLowerCase().includes(q))
+          result.push({
+            path: `/system/user?role=${person.role}&keyword=${encodeURIComponent(person.username || person.name)}`,
+            meta: { title: person.name },
+            businessRecord: true,
+            description: `人员 · ${roleLabels[person.role]} · ${person.status === 'active' ? '启用' : '停用'}`
+          })
+        if (result.length >= 15) break
+      }
+    if (can('users.manage') || can('orders.create'))
+      for (const customer of data.value?.customers || []) {
+        if (`${customer.name} ${customer.contact} ${customer.gameId}`.toLowerCase().includes(q))
+          result.push({
+            path: `/orders/customers?keyword=${encodeURIComponent(customer.name)}`,
+            meta: { title: customer.name },
+            businessRecord: true,
+            description: `客户 · ${customer.gameId || '未填写游戏 ID'}`
+          })
+        if (result.length >= 20) break
+      }
+    return result
+  }
+  watch([() => data.value?.permissions.join('|'), menuList], () => {
+    if (searchVal.value) search(searchVal.value)
+  })
 
   const flattenAndFilterMenuItems = (items: AppRouteRecord[], val: string): AppRouteRecord[] => {
     const lowerVal = val.toLowerCase()
@@ -203,6 +276,7 @@
 
   // 高亮控制并实现滚动条跟随
   const highlightPrevious = () => {
+    if (searchVal.value ? !searchResult.value.length : !historyResult.value.length) return
     isKeyboardNavigating.value = true
     if (searchVal.value) {
       highlightedIndex.value =
@@ -220,6 +294,7 @@
   }
 
   const highlightNext = () => {
+    if (searchVal.value ? !searchResult.value.length : !historyResult.value.length) return
     isKeyboardNavigating.value = true
     if (searchVal.value) {
       highlightedIndex.value = (highlightedIndex.value + 1) % searchResult.value.length
@@ -301,7 +376,7 @@
 
   const searchGoPage = (item: AppRouteRecord) => {
     showSearchDialog.value = false
-    addHistory(item)
+    if (!(item as SearchRoute).businessRecord) addHistory(item)
     handleMenuJump(item)
     searchVal.value = ''
     searchResult.value = []
@@ -327,7 +402,7 @@
       historyResult.value.pop()
     }
 
-    const cleanedItem = { ...item }
+    const cleanedItem = { ...item, meta: { ...item.meta } }
     delete cleanedItem.children
     delete cleanedItem.meta.authList
     historyResult.value.unshift(cleanedItem)

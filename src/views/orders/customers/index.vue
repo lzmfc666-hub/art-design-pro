@@ -1,5 +1,11 @@
 <template>
   <div class="customer-page art-full-height">
+    <BusinessPageHeader
+      title="客户档案"
+      description="维护客户称呼、联系方式和游戏 ID，下单时直接选择已有档案。"
+      icon="ri:contacts-book-line"
+      :badge="`${data?.customers.length || 0} 位客户`"
+    />
     <ArtSearchBar v-model="search" :items="searchItems" @search="resetPage" @reset="resetSearch" />
     <ElCard class="art-table-card">
       <ArtTableHeader v-model:columns="columnChecks" :loading="loading" @refresh="reload">
@@ -69,7 +75,9 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, onMounted, reactive, ref } from 'vue'
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import { computed, onMounted, reactive, ref, watch } from 'vue'
+  import { useRoute } from 'vue-router'
   import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
   import { useStudio } from '@/hooks/business/useStudio'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
@@ -80,6 +88,14 @@
   const { data, loading, can, mutate, refresh } = useStudio()
   const editable = computed(() => can('users.manage') || can('orders.create'))
   const search = ref({ query: '' })
+  const route = useRoute()
+  watch(
+    () => route.query.keyword,
+    (value) => {
+      search.value.query = typeof value === 'string' ? value : ''
+    },
+    { immediate: true }
+  )
   const searchItems = [
     {
       key: 'query',
@@ -92,7 +108,7 @@
     (data.value?.customers || []).filter((row) =>
       `${row.name} ${row.contact} ${row.gameId} ${row.remark}`
         .toLowerCase()
-        .includes(search.value.query.trim().toLowerCase())
+        .includes((search.value.query || '').trim().toLowerCase())
     )
   )
   const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =

@@ -19,7 +19,7 @@
       </div>
     </template>
 
-    <div class="grid grid-cols-[2fr_0.8fr]">
+    <div class="grid grid-cols-[2fr_0.8fr] max-h-[70vh] overflow-y-auto">
       <div>
         <div class="grid grid-cols-2 gap-1.5">
           <!-- 应用列表 -->
@@ -62,52 +62,132 @@
 </template>
 
 <script setup lang="ts">
-  import { useFastEnter } from '@/hooks/core/useFastEnter'
-  import type { FastEnterApplication, FastEnterQuickLink } from '@/types/config'
+  import { computed, ref } from 'vue'
+  import { useRouter } from 'vue-router'
+  import { useStudio } from '@/hooks/business/useStudio'
 
   defineOptions({ name: 'ArtFastEnter' })
 
   const router = useRouter()
   const popoverRef = ref()
+  const { user, can } = useStudio()
 
-  // 使用快速入口配置
-  const { enabledApplications, enabledQuickLinks } = useFastEnter()
+  interface StudioQuickLink {
+    name: string
+    routeName: string
+    permissions?: string[]
+    templateExample?: boolean
+  }
+  interface StudioApplication extends StudioQuickLink {
+    description: string
+    icon: string
+    iconColor: string
+  }
 
-  /**
-   * 处理导航跳转
-   * @param routeName 路由名称
-   * @param link 外部链接
-   */
-  const handleNavigate = (routeName?: string, link?: string): void => {
-    const targetPath = routeName || link
-
-    if (!targetPath) {
-      console.warn('导航配置无效：缺少路由名称或链接')
-      return
+  const applications: StudioApplication[] = [
+    {
+      name: '业务总览',
+      routeName: 'Console',
+      description: '经营数据与权限内待办',
+      icon: 'ri:home-smile-2-line',
+      iconColor: 'var(--theme-color)'
+    },
+    {
+      name: '订单管理',
+      routeName: 'OrderList',
+      description: '查看订单、收款与进度',
+      icon: 'ri:file-list-3-line',
+      iconColor: 'var(--el-color-primary)',
+      permissions: ['orders.view']
+    },
+    {
+      name: '创建与派单',
+      routeName: 'OrderCreate',
+      description: '按模板创建工作室订单',
+      icon: 'ri:add-box-line',
+      iconColor: 'var(--el-color-success)',
+      permissions: ['orders.create']
+    },
+    {
+      name: '验收与结算',
+      routeName: 'Settlement',
+      description: '订单验收、退款与提现',
+      icon: 'ri:wallet-3-line',
+      iconColor: 'var(--el-color-warning)',
+      permissions: ['finance.review', 'finance.refunds', 'finance.withdrawals', 'finance.expenses']
+    },
+    {
+      name: '工资与提成',
+      routeName: 'Salary',
+      description: '查看权限内工资与结算',
+      icon: 'ri:money-cny-circle-line',
+      iconColor: 'var(--el-color-success)',
+      permissions: ['salary.view', 'salary.all', 'salary.manage']
+    },
+    {
+      name: '排班与到岗',
+      routeName: 'Attendance',
+      description: '人员排班与实际出勤',
+      icon: 'ri:calendar-check-line',
+      iconColor: 'var(--el-color-primary)',
+      permissions: ['attendance.manage']
+    },
+    {
+      name: '客户档案',
+      routeName: 'Customers',
+      description: '维护客户与游戏信息',
+      icon: 'ri:contacts-book-line',
+      iconColor: 'var(--el-color-info)',
+      permissions: ['users.manage', 'orders.create']
+    },
+    {
+      name: '人员管理',
+      routeName: 'User',
+      description: '账号、角色与个人权限',
+      icon: 'ri:team-line',
+      iconColor: 'var(--el-color-primary)',
+      permissions: ['users.manage']
+    },
+    {
+      name: '业务配置',
+      routeName: 'BusinessConfig',
+      description: '模板、平台、店铺与等级',
+      icon: 'ri:gamepad-line',
+      iconColor: 'var(--el-color-warning)',
+      permissions: ['templates.manage', 'settings.manage']
+    },
+    {
+      name: '数据报表',
+      routeName: 'ReportExport',
+      description: '按权限自选字段导出',
+      icon: 'ri:file-excel-2-line',
+      iconColor: 'var(--el-color-success)'
     }
+  ]
+  const quickLinks: StudioQuickLink[] = [
+    { name: '个人中心', routeName: 'UserCenter' },
+    { name: '经营报表', routeName: 'Analysis', permissions: ['profit.view'] },
+    { name: '角色与权限', routeName: 'Role', permissions: ['users.manage'] },
+    { name: '操作日志', routeName: 'AuditLogs', permissions: ['logs.view'] },
+    { name: '原组件示例', routeName: 'Icon', templateExample: true },
+    { name: 'Excel 示例', routeName: 'Excel', templateExample: true }
+  ]
 
-    if (targetPath.startsWith('http')) {
-      window.open(targetPath, '_blank')
-    } else {
-      router.push({ name: targetPath })
-    }
+  const isAccessible = (item: StudioQuickLink) =>
+    Boolean(
+      user.value &&
+        user.value.role !== 'player' &&
+        (!item.templateExample || user.value.role === 'super_admin') &&
+        (!item.permissions || item.permissions.some((permission) => can(permission)))
+    )
+  const enabledApplications = computed(() => applications.filter(isAccessible))
+  const enabledQuickLinks = computed(() => quickLinks.filter(isAccessible))
 
+  const handleNavigate = (item: StudioQuickLink): void => {
+    if (!isAccessible(item) || !router.hasRoute(item.routeName)) return
+    router.push({ name: item.routeName })
     popoverRef.value?.hide()
   }
-
-  /**
-   * 处理应用项点击
-   * @param application 应用配置对象
-   */
-  const handleApplicationClick = (application: FastEnterApplication): void => {
-    handleNavigate(application.routeName, application.link)
-  }
-
-  /**
-   * 处理快速链接点击
-   * @param quickLink 快速链接配置对象
-   */
-  const handleQuickLinkClick = (quickLink: FastEnterQuickLink): void => {
-    handleNavigate(quickLink.routeName, quickLink.link)
-  }
+  const handleApplicationClick = handleNavigate
+  const handleQuickLinkClick = handleNavigate
 </script>

@@ -16,7 +16,7 @@
 - POST `/expenses` `{category,amount,date,purpose,receipt}`；POST `/expenses/:id/action` `{action:'delete'|'restore'}`。
 - POST `/users` `{id?,username,name,role,status,levelId,maxActiveOrders,permissionOverrides,password?}`，角色/个人权限配置，密码创建/重置只管理员及超级管理员。`super_admin` 为独立超管角色，拥有全部权限，普通账号不能创建或维护超管；`admin` 为普通管理员。
 - POST `/customers` Customer（id省略创建）。POST `/templates` OrderTemplate（id省略创建）。POST `/platforms` Platform；POST `/shops` Shop；POST `/levels` Level。同一条路由按可选 id 新增或修改。
-- POST `/attendance` Attendance（id可省略，状态 scheduled 待登记排班 / present 到岗 / leave 请假 / absent 缺勤，仅到岗计入实际工时）；POST `/salary-plans` SalaryPlan；POST `/payrolls` `{month}` 只财务发放（配置未齐禁止发放，快照与退款扣回避免重复）。
+- POST `/attendance` Attendance（id可省略，状态 scheduled 待登记排班 / present 到岗 / leave 请假 / absent 缺勤，仅到岗计入实际工时）；POST `/salary-plans` SalaryPlan；POST `/payrolls` `{month}` 需同时具备 `salary.manage` 与 `salary.all`（配置未齐禁止发放，快照与退款扣回避免重复）。
 - GET `/player/orders`；POST `/player/orders/:id/claim`；POST `/player/orders/:id/submit` `{screenshots,teammateId}`；GET `/player/wallet`；POST `/player/withdrawals` `{amount}`。这些是未来独立打手端接口，本期不做独立端UI。
 
 权限名称统一：`orders.view`, `orders.create`, `orders.edit`, `finance.review`, `finance.refunds`, `finance.withdrawals`, `finance.expenses`, `salary.view`, `salary.all`, `salary.manage`, `profit.view`, `users.manage`, `templates.manage`, `settings.manage`, `attendance.manage`, `logs.view`。老板和店长默认有经营数据查看，财务有财务操作，admin维护账号配置，客服不开放工资。角色默认+个人覆盖。

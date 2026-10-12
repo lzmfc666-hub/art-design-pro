@@ -323,7 +323,7 @@
     return calculateResponsiveSpan(itemSpan, span.value, breakpoint)
   }
 
-  // 搜索表单清空输入时不保留空字符串，避免后续请求携带空字段。
+  // 保留字符串表单字段，提交时再由 sanitizeOutputValue 清洗空筛选项。
   const normalizeFieldValue = (value: unknown) => {
     return value === '' ? undefined : value
   }
@@ -331,6 +331,10 @@
   const getFieldValue = (key: string) => modelValue.value[key]
 
   const setFieldValue = (key: string, value: unknown) => {
+    if ((value === '' || value == null) && typeof modelValue.value[key] === 'string') {
+      modelValue.value[key] = ''
+      return
+    }
     const normalizedValue = normalizeFieldValue(value)
 
     if (normalizedValue === undefined) {

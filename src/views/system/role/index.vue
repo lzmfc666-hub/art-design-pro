@@ -1,5 +1,11 @@
 <template>
   <div class="art-full-height">
+    <BusinessPageHeader
+      title="角色与权限"
+      description="查看各岗位的默认职责，进入人员档案配置个人授权与限制。"
+      icon="ri:user-settings-line"
+      badge="角色默认 + 个人覆盖"
+    />
     <ArtSearchBar
       v-model="search"
       :items="searchItems"
@@ -62,6 +68,7 @@
 </template>
 
 <script setup lang="ts">
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import { computed, reactive, ref } from 'vue'
   import { useRouter } from 'vue-router'
   import { ElMessage } from 'element-plus'
@@ -95,7 +102,9 @@
   const rows = computed<RoleRow[]>(() =>
     Object.entries(data.value?.roleDefaults || {})
       .filter(([role]) =>
-        `${role} ${roleLabels[role as Role]}`.toLowerCase().includes(applied.keyword.toLowerCase())
+        `${role} ${roleLabels[role as Role]}`
+          .toLowerCase()
+          .includes((applied.keyword || '').toLowerCase())
       )
       .map(([role, permissions]) => {
         const members = data.value?.users.filter((staff) => staff.role === role) || []

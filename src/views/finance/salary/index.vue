@@ -1,5 +1,50 @@
 <template>
-  <div>
+  <div class="salary-page">
+    <BusinessPageHeader
+      title="工资与提成"
+      description="按核算月份查看工资、核对发放快照，让新增提成和退款差额单独结算。"
+      icon="ri:money-cny-circle-line"
+      :badge="can('salary.all') ? '全员工资核算' : '本人工资'"
+    >
+      <template #actions>
+        <ElButton type="primary" plain :disabled="saving" @click="exportCurrent">
+          <ArtSvgIcon icon="ri:file-excel-2-line" class="mr-1" />导出工资报表
+        </ElButton>
+      </template>
+    </BusinessPageHeader>
+    <div class="salary-stats">
+      <BusinessStatCard
+        :label="snapshots.length ? '待补结算差额' : '所选月份待结算工资'"
+        :value="monthReady ? money(pendingTotal) : '—'"
+        icon="ri:wallet-3-line"
+        :tone="incompleteCount ? 'warning' : 'primary'"
+        :description="
+          incompleteCount
+            ? `${incompleteCount} 人配置未齐，金额待核实`
+            : `${allLines.length} 人待结算 · ${selectedMonth}`
+        "
+      />
+      <BusinessStatCard
+        label="所选月份累计已发放"
+        :value="monthReady ? money(paidTotal) : '—'"
+        icon="ri:checkbox-circle-line"
+        tone="success"
+        :description="`${snapshots.length} 次发放记录 · 保存原始金额快照`"
+      />
+      <BusinessStatCard
+        label="工资配置状态"
+        :value="monthReady ? (incompleteCount ? `${incompleteCount} 人待补齐` : '配置完整') : '—'"
+        icon="ri:settings-3-line"
+        :tone="incompleteCount ? 'warning' : 'success'"
+        :description="
+          incompleteCount
+            ? '底薪或提成未配置，暂不能登记月结'
+            : snapshots.length
+              ? '已发金额保留，后续变化按差额结算'
+              : '核实工资后登记实际发放'
+        "
+      />
+    </div>
     <ArtSearchBar v-model="search" :items="searchItems" @search="applySearch" @reset="resetSearch"
       ><template #month
         ><ElDatePicker
@@ -16,16 +61,25 @@
       :closable="false"
       show-icon
     />
+    <ElAlert
+      v-if="can('salary.manage') && !can('salary.all')"
+      class="mb-5"
+      title="当前仅可查看本人工资。全员月结登记需要全员工资查看权限，请由有权限的财务核实后处理。"
+      type="warning"
+      :closable="false"
+      show-icon
+    />
     <ElCard shadow="never">
-      <ElTabs v-model="tab">
+      <ElTabs v-model="tab" :before-leave="() => !saving">
         <ElTabPane
           :label="
             snapshots.length ? '待结算工资差额' : can('salary.all') ? '全员工资核算' : '本人工资'
           "
           name="payroll"
+          :disabled="saving"
         />
-        <ElTabPane label="发放快照" name="history" />
-        <ElTabPane v-if="can('salary.manage')" label="工资方案" name="plans" />
+        <ElTabPane label="发放快照" name="history" :disabled="saving" />
+        <ElTabPane v-if="can('salary.manage')" label="工资方案" name="plans" :disabled="saving" />
       </ElTabs>
       <template v-if="tab === 'payroll'">
         <ArtTableHeader
@@ -37,12 +91,12 @@
             <ElSpace wrap
               ><ElTag effect="plain">{{ data?.reports.month || selectedMonth }}</ElTag>
               <ElButton
-                v-if="can('salary.manage')"
+                v-if="can('salary.manage') && can('salary.all')"
                 type="primary"
                 :loading="saving"
                 :disabled="!canSettle"
                 @click="pay"
-                >{{ snapshots.length ? '登记差额已结算' : '登记月结工资已发放' }}</ElButton
+                >{{ snapshots.length ? '登记全员差额已结算' : '登记全员月结已发放' }}</ElButton
               >
             </ElSpace>
           </template>
@@ -235,17 +289,22 @@
 
 <script setup lang="ts">
   import { computed, reactive, ref, watch } from 'vue'
+  import { useRoute, useRouter } from 'vue-router'
   import { ElMessage, ElMessageBox } from 'element-plus'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { formatTime, money, roleLabels, useStudio } from '@/hooks/business/useStudio'
   import BusinessAmount from '@/components/business/BusinessAmount.vue'
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import BusinessStatCard from '@/components/business/BusinessStatCard.vue'
   import type { Payroll, PayrollLine, Role, SalaryPlan } from '@/types/studio'
   import { useFinanceActions } from '../modules/useFinanceActions'
 
   defineOptions({ name: 'Salary' })
   const { data, user, can, loading, error, selectedMonth, refresh } = useStudio()
   const { saving, submit } = useFinanceActions()
+  const route = useRoute()
+  const router = useRouter()
   const tab = ref('payroll')
   const appliedKeyword = ref('')
   const search = ref({ keyword: '' })
@@ -288,8 +347,29 @@
   )
   const snapshot = ref<Payroll | null>(null)
   const snapshotLines = computed(() => (snapshot.value?.lines || []).filter(visibleLine))
+  const monthReady = computed(
+    () =>
+      !!data.value &&
+      !loading.value &&
+      !error.value &&
+      data.value.reports.month === selectedMonth.value
+  )
+  const incompleteCount = computed(() => allLines.value.filter((row) => row.incomplete).length)
+  const pendingTotal = computed(() =>
+    allLines.value.some((row) => row.total == null)
+      ? null
+      : allLines.value.reduce((sum, row) => sum + (row.total ?? 0), 0)
+  )
+  const paidLines = computed(() => snapshots.value.flatMap((row) => row.lines.filter(visibleLine)))
+  const paidTotal = computed(() =>
+    paidLines.value.some((row) => row.total == null)
+      ? null
+      : paidLines.value.reduce((sum, row) => sum + (row.total ?? 0), 0)
+  )
   const canSettle = computed(
     () =>
+      can('salary.manage') &&
+      can('salary.all') &&
       !loading.value &&
       !error.value &&
       data.value?.reports.month === selectedMonth.value &&
@@ -396,7 +476,7 @@
   watch(selectedMonth, () => {
     payrollTable.resetPage()
     historyTable.resetPage()
-    void reloadMonth()
+    if (route.path === '/finance/salary') void reloadMonth()
   })
   watch(
     () => can('salary.manage'),
@@ -404,6 +484,34 @@
       if (!allowed && tab.value === 'plans') tab.value = 'payroll'
     }
   )
+  const allowedTabs = computed(() => [
+    'payroll',
+    'history',
+    ...(can('salary.manage') ? ['plans'] : [])
+  ])
+  watch(
+    () => (data.value ? route.fullPath : ''),
+    () => {
+      if (route.path !== '/finance/salary' || !data.value) return
+      const value = route.query.tab
+      if (saving.value) return syncTabQuery(tab.value)
+      const requested = typeof value === 'string' ? value : ''
+      if (allowedTabs.value.includes(requested)) tab.value = requested
+      syncTabQuery(tab.value)
+    },
+    { immediate: true }
+  )
+  watch(tab, syncTabQuery)
+  function syncTabQuery(value: string) {
+    if (route.path !== '/finance/salary') return
+    if (route.query.tab !== value) void router.replace({ query: { ...route.query, tab: value } })
+  }
+  function exportCurrent() {
+    if (saving.value) return
+    const modules =
+      tab.value === 'history' ? 'payrollHistory' : tab.value === 'plans' ? 'salaryPlans' : 'payroll'
+    void router.push({ path: '/reports/export', query: { modules } })
+  }
   function editPlan(row?: SalaryPlan) {
     if (saving.value) return
     Object.assign(
@@ -460,3 +568,20 @@
     await submit('/payrolls', { month }, '工资发放快照已保存')
   }
 </script>
+
+<style scoped>
+  .salary-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+    margin-bottom: 20px;
+  }
+
+  @media (width <= 900px) {
+    .salary-stats {
+      grid-template-columns: 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+  }
+</style>

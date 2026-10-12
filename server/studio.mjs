@@ -491,6 +491,261 @@ export function createStudioService({
     if (!can(user, 'salary.all') && !can(user, 'profit.view')) delete clean.commissionSnapshot
     return clean
   }
+  // 审计记录保存当时的值；读取时与对应业务数据使用相同权限，不从现有记录覆盖历史。
+  function safeAuditLog(state, user, log) {
+    const pick = (value, keys) =>
+      Object.fromEntries(
+        keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]])
+      )
+    const safeAttachment = (value) =>
+      value && typeof value === 'object' ? pick(value, ['id', 'name', 'mime', 'size', 'url']) : null
+    const canViewSalaryLog = can(user, 'salary.all') && can(user, 'profit.view')
+    if (['salary-plan', 'payroll'].includes(log.entity) && !canViewSalaryLog) return null
+    const visibleOrderId = (orderId) => {
+      const order = state.orders.find((row) => row.id === orderId)
+      return Boolean(order && visibleOrder(state, user, order))
+    }
+    const salaryLine = (value) =>
+      pick(value, [
+        'userId',
+        'name',
+        'role',
+        'base',
+        'commission',
+        'deduction',
+        'total',
+        'incomplete'
+      ])
+    const project = (value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+      switch (log.entity) {
+        case 'user': {
+          const managing = can(user, 'users.manage')
+          const result = pick(value, ['id', 'name', 'role', 'status'])
+          if (managing || log.entityId === user.id) Object.assign(result, pick(value, ['username']))
+          if (managing) {
+            Object.assign(result, pick(value, ['levelId', 'maxActiveOrders', 'activeOrders']))
+            if (value.permissionOverrides && typeof value.permissionOverrides === 'object')
+              result.permissionOverrides = Object.fromEntries(
+                Object.entries(value.permissionOverrides).filter(
+                  ([key, enabled]) => ALL_PERMISSIONS.includes(key) && typeof enabled === 'boolean'
+                )
+              )
+          }
+          return result
+        }
+        case 'order': {
+          if (!visibleOrderId(log.entityId)) return null
+          const clean = safeOrder(state, user, value)
+          const result = pick(clean, [
+            'id',
+            'orderNo',
+            'templateId',
+            'title',
+            'customerId',
+            'platformId',
+            'shopId',
+            'externalOrderNo',
+            'channel',
+            'roomCode',
+            'gameId',
+            'map',
+            'amount',
+            'reward',
+            'receivedAmount',
+            'paidAt',
+            'receivedAt',
+            'status',
+            'dispatchMode',
+            'assignedTo',
+            'leaderId',
+            'teammateId',
+            'creatorId',
+            'createdAt',
+            'publishedAt',
+            'completedAt',
+            'remark',
+            'canceledAt',
+            'cancelReason',
+            'canceledFrom',
+            'compensationPending',
+            'compensationSettled'
+          ])
+          if (Object.hasOwn(clean, 'receipt')) result.receipt = safeAttachment(clean.receipt)
+          if (clean.snapshot && typeof clean.snapshot === 'object')
+            result.snapshot = pick(clean.snapshot, [
+              'id',
+              'name',
+              'game',
+              'description',
+              'amount',
+              'reward',
+              'map',
+              'remark',
+              'active'
+            ])
+          if (Array.isArray(clean.assignments))
+            result.assignments = clean.assignments.map((row) =>
+              pick(row, ['leaderId', 'acceptedAt', 'releasedAt', 'reason'])
+            )
+          if (Array.isArray(clean.submissions))
+            result.submissions = clean.submissions.map((row) => ({
+              ...pick(row, [
+                'id',
+                'submittedAt',
+                'leaderId',
+                'teammateId',
+                'review',
+                'reason',
+                'reviewedAt',
+                'reviewerId'
+              ]),
+              screenshots: (row.screenshots || []).map(safeAttachment)
+            }))
+          if (clean.commissionSnapshot && typeof clean.commissionSnapshot === 'object')
+            result.commissionSnapshot = pick(clean.commissionSnapshot, [
+              'supportRate',
+              'operationsRate',
+              'operationsId'
+            ])
+          return result
+        }
+        case 'refund':
+          return visibleOrderId(value.orderId) &&
+            (can(user, 'orders.view') || can(user, 'finance.refunds'))
+            ? pick(value, [
+                'id',
+                'orderId',
+                'amount',
+                'reason',
+                'status',
+                'requestedBy',
+                'createdAt',
+                'processedAt',
+                'processedBy',
+                'manualRewardReview',
+                'manualResolution'
+              ])
+            : null
+        case 'withdrawal': {
+          if (!can(user, 'finance.withdrawals') && value.userId !== user.id) return null
+          const result = pick(value, [
+            'id',
+            'userId',
+            'amount',
+            'status',
+            'createdAt',
+            'processedAt',
+            'paidAt',
+            'reason'
+          ])
+          if (Object.hasOwn(value, 'receipt')) result.receipt = safeAttachment(value.receipt)
+          return result
+        }
+        case 'expense': {
+          if (!can(user, 'finance.expenses') && !can(user, 'profit.view')) return null
+          return {
+            ...pick(value, [
+              'id',
+              'category',
+              'amount',
+              'date',
+              'purpose',
+              'createdBy',
+              'deletedAt'
+            ]),
+            receipt: safeAttachment(value.receipt)
+          }
+        }
+        case 'attendance':
+          return can(user, 'attendance.manage') ||
+            can(user, 'salary.all') ||
+            value.userId === user.id
+            ? pick(value, [
+                'id',
+                'userId',
+                'date',
+                'start',
+                'end',
+                'status',
+                'actualHours',
+                'remark'
+              ])
+            : null
+        case 'customer':
+          return (user.role !== 'player' || can(user, 'orders.view')) &&
+            (can(user, 'orders.view') || can(user, 'orders.create') || can(user, 'users.manage'))
+            ? pick(value, ['id', 'name', 'contact', 'gameId', 'remark'])
+            : null
+        case 'template':
+          return can(user, 'orders.view') ||
+            can(user, 'orders.create') ||
+            can(user, 'templates.manage')
+            ? pick(value, [
+                'id',
+                'name',
+                'game',
+                'description',
+                'amount',
+                'reward',
+                'map',
+                'remark',
+                'active'
+              ])
+            : null
+        case 'platform':
+          return pick(value, ['id', 'name', 'operatorCommission'])
+        case 'shop':
+          return pick(value, ['id', 'name', 'platformId'])
+        case 'level':
+          return pick(value, ['id', 'name', 'delaySeconds'])
+        case 'salary-plan': {
+          const result = pick(value, [
+            'id',
+            'userId',
+            'mode',
+            'base',
+            'rate',
+            'effectiveFrom',
+            'hourlyEnabled'
+          ])
+          if (value.platformRates && typeof value.platformRates === 'object')
+            result.platformRates = Object.fromEntries(
+              Object.entries(value.platformRates).filter(
+                ([key, rate]) =>
+                  state.platforms.some((platform) => platform.id === key) &&
+                  (rate === null || Number.isInteger(rate))
+              )
+            )
+          return result
+        }
+        case 'payroll':
+          return {
+            ...pick(value, ['id', 'month', 'status', 'paidAt', 'paidBy']),
+            lines: (value.lines || []).map(salaryLine)
+          }
+        case 'upload':
+          return log.actorId === user.id || linkedAttachment(state, user, log.entityId)
+            ? safeAttachment(value)
+            : null
+        case 'session':
+          return can(user, 'users.manage') || log.entityId === user.id
+            ? pick(value, ['userId'])
+            : null
+        case 'account-security':
+          return can(user, 'users.manage') || log.entityId === user.id
+            ? pick(value, ['sessionsRevoked'])
+            : null
+        default:
+          return null
+      }
+    }
+    return {
+      ...pick(log, ['id', 'actorId', 'actorName', 'action', 'entity', 'entityId', 'createdAt']),
+      before: project(log.before),
+      after: project(log.after)
+    }
+  }
   function salaryPlan(state, userId, date) {
     return state.salaryPlans
       .filter((plan) => plan.userId === userId && plan.effectiveFrom <= date)
@@ -872,27 +1127,14 @@ export function createStudioService({
         ? state.logs
             .slice(exportMode ? 0 : -1000)
             .reverse()
-            .map((log) => {
-              if (allSalary && viewProfit) return log
-              if (['salary-plan', 'payroll'].includes(log.entity)) return null
-              if (log.entity === 'order')
-                return {
-                  ...log,
-                  before: log.before ? safeOrder(state, user, log.before) : null,
-                  after: log.after ? safeOrder(state, user, log.after) : null
-                }
-              return log
-            })
+            .map((log) => safeAuditLog(state, user, log))
             .filter(Boolean)
         : state.logs
             .filter((log) => log.entity === 'order' && orderIds.has(log.entityId))
             .slice(exportMode ? 0 : -500)
             .reverse()
-            .map((log) => ({
-              ...log,
-              before: log.before ? safeOrder(state, user, log.before) : null,
-              after: log.after ? safeOrder(state, user, log.after) : null
-            })),
+            .map((log) => safeAuditLog(state, user, log))
+            .filter(Boolean),
       reports: result,
       wallets: state.users
         .filter(
@@ -1594,6 +1836,7 @@ export function createStudioService({
       }
       if (path === '/payrolls') {
         requirePermission(user, 'salary.manage')
+        requirePermission(user, 'salary.all')
         const month = validMonth(body.month),
           supplementary = state.payrolls.some((p) => p.month === month)
         const lines = payrollLines(state, month, supplementary)

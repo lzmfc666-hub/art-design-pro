@@ -10,6 +10,7 @@ export const useStudioStore = defineStore('studio', () => {
   const user = ref<Staff | null>(null)
   const loading = ref(false)
   const error = ref('')
+  const lastUpdatedAt = ref<string | null>(null)
   const selectedMonth = ref(
     new Intl.DateTimeFormat('sv-SE', {
       timeZone: 'Asia/Shanghai',
@@ -24,6 +25,7 @@ export const useStudioStore = defineStore('studio', () => {
     loading.value = false
     user.value = null
     data.value = null
+    lastUpdatedAt.value = null
   }
 
   async function request<T>(path: string, body?: unknown, method = 'GET'): Promise<T> {
@@ -46,6 +48,7 @@ export const useStudioStore = defineStore('studio', () => {
       if (version === refreshVersion) {
         data.value = result
         user.value = result.user
+        lastUpdatedAt.value = new Date().toISOString()
       }
     } catch (cause) {
       if (version !== refreshVersion) return
@@ -97,6 +100,7 @@ export const useStudioStore = defineStore('studio', () => {
     user,
     loading,
     error,
+    lastUpdatedAt,
     selectedMonth,
     can,
     refresh,

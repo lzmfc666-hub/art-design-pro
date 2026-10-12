@@ -1,16 +1,20 @@
 <script setup lang="ts">
   import { computed, reactive, ref, watch } from 'vue'
-  import { useRouter } from 'vue-router'
-  import { ElMessage, type UploadFile } from 'element-plus'
+  import { useRouter, onBeforeRouteLeave } from 'vue-router'
+  import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
   import type { Attachment, OrderTemplate } from '@/types/studio'
   import { useStudio, money, formatTime } from '@/hooks/business/useStudio'
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import { useMediaQuery } from '@vueuse/core'
 
-  const { data, can, mutate, upload, loading, refresh } = useStudio()
+  const { data, user, can, mutate, upload, loading, refresh } = useStudio()
+  const isMobile = useMediaQuery('(max-width: 640px)')
   const router = useRouter()
   const saving = ref(false)
   const uploading = ref(false)
   const customerSaving = ref(false)
   const customerDialog = ref(false)
+  const submitted = ref(false)
   const customerDraft = reactive({ name: '', contact: '', gameId: '', remark: '' })
   const form = reactive({
     templateId: '',
@@ -33,6 +37,56 @@
     receipt: null as Attachment | null
   })
   const templates = computed(() => data.value?.templates.filter((item) => item.active) ?? [])
+  const steps = computed(() => [
+    { label: '选择项目', done: !!form.templateId },
+    {
+      label: '完善客户与来源',
+      done: !!form.customerId && !!form.platformId && !!(form.roomCode || form.gameId)
+    },
+    {
+      label: '核对收款与发布',
+      done:
+        form.payOnArrival ||
+        (!!form.receivedAmount && !!form.paidAt && (isXianyu.value || !!form.receipt))
+    }
+  ])
+  const activeStep = computed(() => {
+    const index = steps.value.findIndex((step) => !step.done)
+    return index === -1 ? 3 : index
+  })
+  const dirty = computed(
+    () =>
+      !!(
+        form.templateId ||
+        form.customerId ||
+        form.platformId ||
+        form.roomCode ||
+        form.gameId ||
+        form.remark ||
+        form.receipt ||
+        customerDraft.name ||
+        customerDraft.contact
+      )
+  )
+  onBeforeRouteLeave(async () => {
+    if (!user.value) return true
+    if (submitted.value) return true
+    if (saving.value || uploading.value || customerSaving.value) {
+      ElMessage.warning('正在保存或上传，请稍后离开')
+      return false
+    }
+    if (!dirty.value) return true
+    try {
+      await ElMessageBox.confirm('当前订单尚未发布，离开后会丢失已填写内容。', '离开下单页面', {
+        confirmButtonText: '离开页面',
+        cancelButtonText: '继续填写',
+        type: 'warning'
+      })
+      return true
+    } catch {
+      return false
+    }
+  })
   const selectedTemplate = computed(() =>
     templates.value.find((item) => item.id === form.templateId)
   )
@@ -199,6 +253,7 @@
       )
       const id = result?.id ?? result?.order?.id
       if (can('orders.view')) {
+        submitted.value = true
         await router.push(id ? { path: '/orders/list', query: { id } } : '/orders/list')
       } else {
         Object.assign(form, {
@@ -226,6 +281,7 @@
       ElMessage.error(errorText(error))
     } finally {
       saving.value = false
+      submitted.value = false
     }
   }
 
@@ -234,6 +290,20 @@
 </script>
 <template>
   <div>
+    <BusinessPageHeader
+      title="创建与派单"
+      description="先选择订单项目，再补充客户、来源与付款信息，发布到抢单池或指定打手。"
+      icon="ri:add-box-line"
+      badge="价格与模板快照随单保存"
+    />
+    <ElCard class="mb-5" shadow="never"
+      ><ElSteps
+        :active="activeStep"
+        finish-status="success"
+        :simple="!isMobile"
+        :direction="isMobile ? 'vertical' : 'horizontal'"
+        ><ElStep v-for="step in steps" :key="step.label" :title="step.label" /></ElSteps
+    ></ElCard>
     <ElRow :gutter="20">
       <ElCol :xs="24" :lg="16">
         <ElCard class="mb-5">

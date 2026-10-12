@@ -1,13 +1,19 @@
 <template>
   <div class="attendance-page">
+    <BusinessPageHeader
+      title="排班与考勤"
+      description="先安排班次，实际到岗后登记工时；支持跨夜班次、请假和缺勤。"
+      icon="ri:calendar-check-line"
+    />
     <ElRow :gutter="16" class="mb-4">
       <ElCol :xs="12" :md="6" v-for="item in metrics" :key="item.label" class="mb-4">
-        <ElCard shadow="never"
-          ><div class="text-sm text-g-500">{{ item.label }}</div
-          ><div class="mt-3 text-2xl font-medium"
-            >{{ item.value }}<span class="ml-1 text-sm text-g-500">{{ item.unit }}</span></div
-          ></ElCard
-        >
+        <BusinessStatCard
+          :label="item.label"
+          :value="`${item.value} ${item.unit}`"
+          icon="ri:calendar-check-line"
+          tone="info"
+          description="按当前筛选范围统计"
+        />
       </ElCol>
     </ElRow>
     <ArtSearchBar v-model="search" :items="searchItems" @search="resetPage" @reset="resetSearch" />
@@ -192,6 +198,8 @@
 </template>
 
 <script setup lang="ts">
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import BusinessStatCard from '@/components/business/BusinessStatCard.vue'
   import { computed, onMounted, reactive, ref, watch } from 'vue'
   import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
   import { useStudio } from '@/hooks/business/useStudio'

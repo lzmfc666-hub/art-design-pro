@@ -408,13 +408,25 @@
           `${fieldLabels[key]}：${key in before ? logValue(key, before[key]) + ' → ' : ''}${logValue(key, after[key])}`
       )
   }
+  async function copyOrderNo() {
+    if (!order.value) return
+    try {
+      await navigator.clipboard.writeText(order.value.orderNo)
+      ElMessage.success('订单号已复制')
+    } catch {
+      ElMessage.warning('复制失败，请手动选择订单号')
+    }
+  }
 </script>
 <template>
   <div>
     <template v-if="order">
       <div class="flex items-center justify-between gap-3 mb-5"
         ><div
-          ><p class="text-xs text-g-500">{{ order.orderNo }}</p
+          ><div class="flex items-center gap-2"
+            ><p class="text-xs text-g-500">{{ order.orderNo }}</p
+            ><ElButton link size="small" aria-label="复制订单号" @click="copyOrderNo"
+              ><ArtSvgIcon icon="ri:file-copy-line" /></ElButton></div
           ><h2 class="text-xl font-semibold mt-2">{{ order.title }}</h2
           ><p class="text-xs text-g-500 mt-2"
             >{{ staffName(order.creatorId) }} 创建于 {{ formatTime(order.createdAt) }}</p

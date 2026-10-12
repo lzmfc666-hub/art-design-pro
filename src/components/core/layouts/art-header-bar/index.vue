@@ -116,18 +116,25 @@
           class="notice-button relative"
           @click="visibleNotice"
         >
-          <div class="absolute top-2 right-2 size-1.5 !bg-danger rounded-full"></div>
+          <div
+            v-if="businessTodoCount > 0"
+            class="absolute top-2 right-2 size-1.5 !bg-danger rounded-full"
+          ></div>
         </ArtIconButton>
 
-        <!-- 聊天按钮 -->
-        <ArtIconButton
-          v-if="shouldShowChat"
-          icon="ri:message-3-line"
-          class="chat-button relative"
-          @click="openChat"
+        <!-- 原聊天模板示例 -->
+        <ElTooltip
+          v-if="shouldShowChat && studioUser?.role === 'super_admin'"
+          content="聊天模板演示"
+          placement="bottom"
         >
-          <div class="breathing-dot absolute top-2 right-2 size-1.5 !bg-success rounded-full"></div>
-        </ArtIconButton>
+          <ArtIconButton
+            icon="ri:message-3-line"
+            class="chat-button relative"
+            aria-label="聊天模板演示"
+            @click="openChat"
+          />
+        </ElTooltip>
 
         <!-- 设置按钮 -->
         <div v-if="shouldShowSettings">
@@ -182,6 +189,8 @@
   import { themeAnimation } from '@/utils/ui/animation'
   import { useCommon } from '@/hooks/core/useCommon'
   import { useHeaderBar } from '@/hooks/core/useHeaderBar'
+  import { useStudio } from '@/hooks/business/useStudio'
+  import { useBusinessTodo } from '@/hooks/business/useBusinessTodo'
   import ArtUserMenu from './widget/ArtUserMenu.vue'
 
   defineOptions({ name: 'ArtHeaderBar' })
@@ -196,6 +205,8 @@
   const settingStore = useSettingStore()
   const userStore = useUserStore()
   const menuStore = useMenuStore()
+  const { user: studioUser } = useStudio()
+  const { count: businessTodoCount } = useBusinessTodo()
 
   // 顶部栏功能配置
   const {
@@ -339,6 +350,7 @@
    * 打开聊天窗口
    */
   const openChat = (): void => {
+    if (studioUser.value?.role !== 'super_admin') return
     mittBus.emit('openChat')
   }
 </script>

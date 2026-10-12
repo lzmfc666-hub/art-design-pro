@@ -1,13 +1,38 @@
 <template>
-  <div>
-    <ArtSearchBar v-model="search" :items="searchItems" @search="reloadMonth" @reset="reloadMonth"
-      ><template #month
-        ><ElDatePicker
-          v-model="selectedMonth"
-          type="month"
-          value-format="YYYY-MM"
-          :clearable="false" /></template
-    ></ArtSearchBar>
+  <div class="analysis-page">
+    <BusinessPageHeader
+      title="经营报表"
+      description="从真实收款、退款与经营成本，查看每月经营结果和渠道贡献。"
+      icon="ri:bar-chart-box-line"
+      :badge="loading ? '正在更新' : incomplete ? '利润待核实' : '月度经营核算'"
+    >
+      <template #actions>
+        <ElButton type="primary" plain @click="exportCurrent"
+          ><ArtSvgIcon icon="ri:file-excel-2-line" class="mr-1" />导出经营报表</ElButton
+        >
+      </template>
+    </BusinessPageHeader>
+    <ElCard class="mb-5" shadow="never">
+      <div class="analysis-toolbar">
+        <div class="flex items-center flex-wrap gap-3">
+          <span class="font-medium">经营月份</span>
+          <ElDatePicker
+            v-model="selectedMonth"
+            type="month"
+            value-format="YYYY-MM"
+            :clearable="false"
+            :disabled="loading"
+            class="!w-40"
+          />
+          <ElButton :loading="loading" @click="reloadMonth"
+            ><ArtSvgIcon icon="ri:refresh-line" class="mr-1" />刷新报表</ElButton
+          >
+        </div>
+        <span v-if="lastUpdatedAt" class="text-sm text-g-500"
+          >更新于 {{ formatTime(lastUpdatedAt) }}</span
+        >
+      </div>
+    </ElCard>
     <ElAlert
       class="mb-5"
       title="收款、退款和经营成本归属客户原付款日；日报不扣底薪，月利润扣除当月底薪。提成的工资归属按订单完成月份计算。"
@@ -139,8 +164,10 @@
 
 <script setup lang="ts">
   import { computed, ref, watch } from 'vue'
+  import { useRoute, useRouter } from 'vue-router'
   import { ElMessage } from 'element-plus'
-  import { useStudio, money } from '@/hooks/business/useStudio'
+  import { useStudio, money, formatTime } from '@/hooks/business/useStudio'
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import type { ChannelReport, DayReport, Performance } from '@/types/studio'
@@ -149,17 +176,10 @@
   import TotalRevenue from './modules/total-revenue.vue'
 
   defineOptions({ name: 'Analysis' })
-  const { data, loading, selectedMonth, refresh } = useStudio()
+  const { data, loading, selectedMonth, refresh, lastUpdatedAt } = useStudio()
+  const route = useRoute()
+  const router = useRouter()
   const tab = ref('days')
-  const search = ref<Record<string, unknown>>({})
-  const searchItems = [
-    {
-      key: 'month',
-      label: '经营月份',
-      type: 'date',
-      props: { type: 'month', valueFormat: 'YYYY-MM', clearable: false }
-    }
-  ]
   const days = computed(() => data.value?.reports.days || [])
   const channels = computed(() => {
     const rows = data.value?.reports.channels || []
@@ -174,8 +194,35 @@
     [...(data.value?.reports.performance || [])].sort((a, b) => b.net - a.net)
   )
   const incomplete = computed(
-    () => data.value?.reports.monthlyProfit == null || days.value.some((row) => row.incomplete)
+    () =>
+      !!data.value &&
+      (data.value.reports.monthlyProfit == null || days.value.some((row) => row.incomplete))
   )
+  watch(
+    () => route.fullPath,
+    () => {
+      if (route.path !== '/dashboard/analysis') return
+      const value = route.query.tab
+      if (typeof value === 'string' && ['days', 'channels', 'performance'].includes(value))
+        tab.value = value
+      syncTabQuery(tab.value)
+    },
+    { immediate: true }
+  )
+  watch(tab, syncTabQuery)
+  function syncTabQuery(value: string) {
+    if (route.path !== '/dashboard/analysis') return
+    if (route.query.tab !== value) void router.replace({ query: { ...route.query, tab: value } })
+  }
+  function exportCurrent() {
+    const modules =
+      tab.value === 'channels'
+        ? 'channels'
+        : tab.value === 'performance'
+          ? 'performance'
+          : 'overview,days'
+    void router.push({ path: '/reports/export', query: { modules } })
+  }
   const dayTable = useBusinessTable(days, 10)
   const channelTable = useBusinessTable(channels)
   const performanceTable = useBusinessTable(performance)
@@ -213,6 +260,16 @@
     dayTable.resetPage()
     channelTable.resetPage()
     performanceTable.resetPage()
-    void reloadMonth()
+    if (route.path === '/dashboard/analysis') void reloadMonth()
   })
 </script>
+
+<style scoped>
+  .analysis-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: center;
+    justify-content: space-between;
+  }
+</style>

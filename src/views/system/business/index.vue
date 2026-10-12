@@ -1,5 +1,11 @@
 <template>
   <div class="business-page">
+    <BusinessPageHeader
+      title="业务配置"
+      description="维护订单项目、平台店铺和打手等级，新增业务沿用最新配置。"
+      icon="ri:gamepad-line"
+      badge="历史订单保留快照"
+    />
     <ElCard class="mb-4" shadow="never">
       <ElTabs v-model="tab"
         ><ElTabPane name="templates" label="订单项目 / 模板" /><ElTabPane
@@ -39,7 +45,6 @@
           :columns="templateColumns.columns.value"
           :loading="loading"
           :pagination="templateTable.pagination"
-          :show-table-header="false"
           height="440"
           @pagination:size-change="templateTable.handleSizeChange"
           @pagination:current-change="templateTable.handleCurrentChange"
@@ -89,7 +94,6 @@
           :columns="platformColumns.columns.value"
           :loading="loading"
           :pagination="platformTable.pagination"
-          :show-table-header="false"
           height="280"
           @pagination:size-change="platformTable.handleSizeChange"
           @pagination:current-change="platformTable.handleCurrentChange"
@@ -300,6 +304,7 @@
 </template>
 
 <script setup lang="ts">
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import { computed, onMounted, reactive, ref } from 'vue'
   import { ElMessage } from 'element-plus'
   import { money, useStudio } from '@/hooks/business/useStudio'
@@ -335,7 +340,9 @@
   const templates = computed(() =>
     (data.value?.templates || []).filter(
       (row) =>
-        `${row.name} ${row.game}`.toLowerCase().includes(search.value.query.trim().toLowerCase()) &&
+        `${row.name} ${row.game}`
+          .toLowerCase()
+          .includes((search.value.query || '').trim().toLowerCase()) &&
         (!search.value.active || row.active === (search.value.active === 'active'))
     )
   )
