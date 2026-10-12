@@ -149,7 +149,7 @@
     immediate: true
   })
   const statusLabels = { pending: '待审核', approved: '待发放', paid: '已发放', rejected: '已驳回' }
-  const search = ref({ keyword: '', status: '' })
+  const search = ref({ keyword: '', reason: '', status: '' })
   const applied = ref({ ...search.value })
   const searchItems = [
     {
@@ -157,6 +157,12 @@
       label: '打手',
       type: 'input',
       props: { placeholder: '打手姓名', clearable: true }
+    },
+    {
+      key: 'reason',
+      label: '处理原因',
+      type: 'input',
+      props: { placeholder: '按处理原因搜索', clearable: true }
     },
     {
       key: 'status',
@@ -173,7 +179,10 @@
       .filter(
         (row) =>
           (!applied.value.status || row.status === applied.value.status) &&
-          (!applied.value.keyword || personName(row.userId).includes(applied.value.keyword))
+          personName(row.userId)
+            .toLowerCase()
+            .includes(applied.value.keyword.trim().toLowerCase()) &&
+          (row.reason || '').toLowerCase().includes(applied.value.reason.trim().toLowerCase())
       )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   )
@@ -207,7 +216,7 @@
     resetPage()
   }
   function resetSearch() {
-    search.value = { keyword: '', status: '' }
+    search.value = { keyword: '', reason: '', status: '' }
     applySearch()
   }
   function personName(id: string) {

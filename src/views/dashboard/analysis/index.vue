@@ -7,7 +7,7 @@
       :badge="loading ? '正在更新' : incomplete ? '利润待核实' : '月度经营核算'"
     >
       <template #actions>
-        <ElButton type="primary" plain @click="exportCurrent"
+        <ElButton v-if="can('reports.export')" type="primary" plain @click="exportCurrent"
           ><ArtSvgIcon icon="ri:file-excel-2-line" class="mr-1" />导出经营报表</ElButton
         >
       </template>
@@ -176,7 +176,7 @@
   import TotalRevenue from './modules/total-revenue.vue'
 
   defineOptions({ name: 'Analysis' })
-  const { data, loading, selectedMonth, refresh, lastUpdatedAt } = useStudio()
+  const { data, loading, selectedMonth, refresh, lastUpdatedAt, can } = useStudio()
   const route = useRoute()
   const router = useRouter()
   const tab = ref('days')
@@ -215,6 +215,7 @@
     if (route.query.tab !== value) void router.replace({ query: { ...route.query, tab: value } })
   }
   function exportCurrent() {
+    if (!can('reports.export')) return
     const modules =
       tab.value === 'channels'
         ? 'channels'

@@ -8,8 +8,13 @@ import {
   normalizeAppearance,
   validateAppearanceRevision,
   appearanceAttachments,
-  projectAppearanceAudit
+  projectAppearanceAudit,
+  projectPublicAppearance,
+  publicAppearanceAttachments
 } from './appearance.mjs'
+import { createAuditStore, isAuditCapacityError } from './audit-store.mjs'
+import { platformRules, normalizePlatformRules } from './platform-rules.mjs'
+import { buildPeriodExportSnapshot } from './export-period.mjs'
 
 export const ALL_PERMISSIONS = [
   'orders.view',
@@ -27,7 +32,8 @@ export const ALL_PERMISSIONS = [
   'templates.manage',
   'settings.manage',
   'attendance.manage',
-  'logs.view'
+  'logs.view',
+  'reports.export'
 ]
 const ROLES = [
   'owner',
@@ -73,6 +79,22 @@ const DEFAULT_PERMISSIONS = {
   admin: ['orders.view', 'users.manage', 'templates.manage', 'settings.manage', 'logs.view'],
   player: []
 }
+const COMPLETE_AUDIT_PERMISSIONS = [
+  'settings.manage',
+  'logs.view',
+  'reports.export',
+  'orders.view',
+  'users.manage',
+  'salary.all',
+  'profit.view',
+  'finance.review',
+  'finance.refunds',
+  'finance.withdrawals',
+  'finance.expenses'
+]
+for (const [role, permissions] of Object.entries(DEFAULT_PERMISSIONS))
+  if (!['support', 'support_lead'].includes(role) && !permissions.includes('reports.export'))
+    permissions.push('reports.export')
 export class ApiError extends Error {
   constructor(message, status = 400) {
     super(message)
@@ -154,6 +176,7 @@ export function permissionsFor(user) {
     if (enabled) permissions.add(key)
     else permissions.delete(key)
   }
+  if (['support', 'support_lead'].includes(user.role)) permissions.delete('reports.export')
   return [...permissions]
 }
 const can = (user, permission) => permissionsFor(user).includes(permission)
@@ -213,6 +236,8 @@ function emptyState() {
     commissionPaid: {},
     commissionAdjustments: [],
     rewardReviews: [],
+    playerAdjustments: [],
+    statusCorrectionReversals: {},
     appearance: defaultAppearance(),
     demo: false,
     schemaVersion: 2
@@ -363,7 +388,10 @@ export function createStudioService({
   dbPath = resolve('.data/studio.sqlite'),
   password = process.env.STUDIO_ADMIN_PASSWORD,
   seed = true,
-  clock = () => new Date()
+  clock = () => new Date(),
+  auditRetentionDays = Number(process.env.STUDIO_AUDIT_RETENTION_DAYS || 90),
+  auditHotMaxRows = Number(process.env.STUDIO_AUDIT_HOT_MAX_ROWS || 10000),
+  auditArchiveMaxBytes = Number(process.env.STUDIO_AUDIT_ARCHIVE_MAX_BYTES || 500 * 1024 * 1024)
 } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true })
   const db = new DatabaseSync(dbPath)
@@ -371,6 +399,50 @@ export function createStudioService({
     'PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS studio_state (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL);'
   )
   const now = () => new Date(clock()).toISOString()
+  const auditStore = createAuditStore(db, {
+    retentionDays: auditRetentionDays,
+    hotMaxRows: auditHotMaxRows,
+    archiveMaxBytes: auditArchiveMaxBytes,
+    clock
+  })
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS audit_archive_backups(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,before_date TEXT NOT NULL,scope_json TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 0,expires_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS audit_backup_expiry ON audit_archive_backups(expires_at)'
+  )
+  const canBackupAudit = (user) =>
+    COMPLETE_AUDIT_PERMISSIONS.every((permission) => can(user, permission))
+  const requireBackupAudit = (user) => {
+    if (!canBackupAudit(user))
+      fail('完整日志备份与清理需要全部业务审计查看及配置权限，当前账号不能执行', 403)
+  }
+  const checkBackupReceipt = (user, token, beforeDate, { ready = true } = {}) => {
+    requireBackupAudit(user)
+    if (typeof token !== 'string' || token.length > 128 || !/^[A-Za-z0-9_-]+$/.test(token))
+      fail('请先完成对应截止日期的完整归档备份', 409)
+    const receipt = db
+      .prepare('SELECT * FROM audit_archive_backups WHERE token_hash=? AND user_id=?')
+      .get(sessionHash(token), user.id)
+    if (
+      !receipt ||
+      receipt.expires_at <= Date.parse(now()) ||
+      receipt.before_date !== beforeDate ||
+      (ready && !receipt.ready)
+    )
+      fail('备份凭据无效、未完成或已过期，请重新下载完整归档备份', 409)
+    if (receipt.scope_json !== JSON.stringify(auditStore.backupScope(beforeDate)))
+      fail('归档记录在备份后已变化，请重新下载完整备份再清理', 409)
+    return receipt
+  }
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS customer_order_references(id TEXT PRIMARY KEY,customer_id TEXT NOT NULL,platform_id TEXT NOT NULL,shop_id TEXT NOT NULL,external_order_no TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS customer_refs_unique ON customer_order_references(customer_id,platform_id,shop_id,external_order_no); CREATE INDEX IF NOT EXISTS customer_refs_customer ON customer_order_references(customer_id,id)'
+  )
+  // 与导出字段的 JavaScript 搜索保持同一 Unicode 大小写规则，避免 SQLite lower 仅处理 ASCII。
+  db.function('customer_ref_contains', { deterministic: true }, (value, keyword) =>
+    String(value ?? '')
+      .toLowerCase()
+      .includes(String(keyword))
+      ? 1
+      : 0
+  )
   if (!db.prepare('SELECT 1 FROM studio_state WHERE id=1').get()) {
     let initialPassword = password
     if (!initialPassword) {
@@ -392,7 +464,26 @@ export function createStudioService({
       JSON.stringify(seedState(now(), initialPassword, seed))
     )
   }
-  const read = () => JSON.parse(db.prepare('SELECT json FROM studio_state WHERE id=1').get().json)
+  const read = () => {
+    const state = JSON.parse(db.prepare('SELECT json FROM studio_state WHERE id=1').get().json)
+    state.playerAdjustments ||= []
+    state.statusCorrectionReversals ||= {}
+    if (state.logs?.length) {
+      const ownsTransaction = !db.isTransaction
+      if (ownsTransaction) db.exec('BEGIN IMMEDIATE')
+      try {
+        auditStore.importLegacy(state.logs)
+        state.logs = []
+        db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(state))
+        if (ownsTransaction) db.exec('COMMIT')
+      } catch (error) {
+        if (ownsTransaction) db.exec('ROLLBACK')
+        throw error
+      }
+    }
+    state.logs = []
+    return state
+  }
   const save = (state) =>
     db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(state))
   // 旧版首次创建的 admin 本来就拥有全部权限，迁移成独立的超管角色。
@@ -404,7 +495,7 @@ export function createStudioService({
     save(existingState)
   }
   const audit = (state, user, action, entity, entityId, before, after) => {
-    state.logs.push({
+    auditStore.append({
       id: id(),
       actorId: user.id,
       actorName: user.name,
@@ -438,6 +529,70 @@ export function createStudioService({
     size: record.size,
     url: `/api/studio/uploads/${record.id}`
   })
+  const publicReference = (row) => ({
+    id: row.id,
+    customerId: row.customer_id,
+    platformId: row.platform_id,
+    shopId: row.shop_id || null,
+    externalOrderNo: row.external_order_no
+  })
+  const publicCustomer = (customer) => ({
+    ...customer,
+    platformId: customer.platformId || null,
+    orderReferences: db
+      .prepare(
+        'SELECT * FROM customer_order_references WHERE customer_id=? ORDER BY rowid DESC LIMIT 20'
+      )
+      .all(customer.id)
+      .map(publicReference),
+    orderReferenceCount: Number(
+      db
+        .prepare('SELECT COUNT(*) AS n FROM customer_order_references WHERE customer_id=?')
+        .get(customer.id).n
+    )
+  })
+  const requireCustomerAccess = (user, editing = false) => {
+    if (
+      (user.role === 'player' && !can(user, 'orders.view')) ||
+      (!can(user, 'orders.create') &&
+        !can(user, 'users.manage') &&
+        (editing || !can(user, 'orders.view')))
+    )
+      fail('没有查看或维护客户资料的权限', 403)
+  }
+  function createPlayerAdjustment(state, user, body, source = 'manual') {
+    const target = find(state, 'users', body.userId, '打手')
+    if (target.role !== 'player') fail('扣补款对象必须是打手')
+    const kind = choice(body.kind, ['deduction', 'supplement'], '扣补类型')
+    const amount = cents(body.amount, '扣补款金额', { positive: true })
+    const appliedAmount =
+      kind === 'supplement' ? amount : Math.min(amount, wallet(state, target.id).available)
+    const row = {
+      id: id(),
+      userId: target.id,
+      orderId: body.orderId ? find(state, 'orders', body.orderId, '订单').id : null,
+      kind,
+      amount,
+      appliedAmount,
+      manualAmount: amount - appliedAmount,
+      status: amount > appliedAmount ? 'manual' : 'applied',
+      reason: requiredReason(body),
+      createdAt: now(),
+      createdBy: user.id,
+      source
+    }
+    state.playerAdjustments.push(row)
+    audit(
+      state,
+      user,
+      kind === 'deduction' ? '登记打手扣款' : '登记打手补款',
+      'player-adjustment',
+      row.id,
+      null,
+      row
+    )
+    return row
+  }
   const linkedAttachment = (state, user, attachmentId) => {
     const has = (item) => item?.id === attachmentId
     if (
@@ -598,7 +753,7 @@ export function createStudioService({
             ])
           if (Array.isArray(clean.assignments))
             result.assignments = clean.assignments.map((row) =>
-              pick(row, ['leaderId', 'acceptedAt', 'releasedAt', 'reason'])
+              pick(row, ['leaderId', 'acceptedAt', 'releasedAt', 'reason', 'correctedBy'])
             )
           if (Array.isArray(clean.submissions))
             result.submissions = clean.submissions.map((row) => ({
@@ -610,7 +765,11 @@ export function createStudioService({
                 'review',
                 'reason',
                 'reviewedAt',
-                'reviewerId'
+                'reviewerId',
+                'recheckBy',
+                'recheckedAt',
+                'recheckReason',
+                'previousSubmissionId'
               ]),
               screenshots: (row.screenshots || []).map(safeAttachment)
             }))
@@ -681,13 +840,14 @@ export function createStudioService({
                 'end',
                 'status',
                 'actualHours',
+                'hoursRegistered',
                 'remark'
               ])
             : null
         case 'customer':
           return (user.role !== 'player' || can(user, 'orders.view')) &&
             (can(user, 'orders.view') || can(user, 'orders.create') || can(user, 'users.manage'))
-            ? pick(value, ['id', 'name', 'contact', 'gameId', 'remark'])
+            ? pick(value, ['id', 'name', 'platformId', 'contact', 'gameId', 'remark', 'createdAt'])
             : null
         case 'template':
           return can(user, 'orders.view') ||
@@ -705,8 +865,17 @@ export function createStudioService({
                 'active'
               ])
             : null
-        case 'platform':
-          return pick(value, ['id', 'name', 'operatorCommission'])
+        case 'platform': {
+          const result = pick(value, ['id', 'name', 'operatorCommission'])
+          if (value.rules && typeof value.rules === 'object' && !Array.isArray(value.rules))
+            result.rules = pick(value.rules, [
+              'requiresShop',
+              'requiresExternalOrderNo',
+              'requiresReceipt',
+              'allowPayOnArrival'
+            ])
+          return result
+        }
         case 'shop':
           return pick(value, ['id', 'name', 'platformId'])
         case 'level':
@@ -750,6 +919,49 @@ export function createStudioService({
             : null
         case 'appearance':
           return can(user, 'settings.manage') ? projectAppearanceAudit(value) : null
+        case 'player-adjustment':
+          return can(user, 'finance.withdrawals') || value.userId === user.id
+            ? pick(value, [
+                'id',
+                'userId',
+                'orderId',
+                'kind',
+                'amount',
+                'appliedAmount',
+                'manualAmount',
+                'status',
+                'reason',
+                'createdAt',
+                'createdBy',
+                'resolution',
+                'resolvedAt',
+                'resolvedBy',
+                'resolutionReason',
+                'source'
+              ])
+            : null
+        case 'reward-review':
+          return can(user, 'finance.withdrawals')
+            ? pick(value, [
+                'id',
+                'orderId',
+                'expectedReward',
+                'reason',
+                'createdAt',
+                'actorId',
+                'resolvedAt',
+                'resolvedBy',
+                'resolution'
+              ])
+            : null
+        case 'customer-reference':
+          return can(user, 'orders.view') || can(user, 'orders.create') || can(user, 'users.manage')
+            ? pick(value, ['id', 'customerId', 'platformId', 'shopId', 'externalOrderNo'])
+            : null
+        case 'audit-maintenance':
+          return can(user, 'settings.manage') && can(user, 'logs.view')
+            ? pick(value, ['action', 'beforeDate', 'reason', 'affectedRows'])
+            : null
         default:
           return null
       }
@@ -776,10 +988,7 @@ export function createStudioService({
     const isHall = platform?.id === 'hall' || platform?.name === '游戏大厅'
     let operationsId = isHall ? null : (previous?.operationsId ?? null)
     const operationsApplicable =
-      !isHall &&
-      (previous
-        ? previous.operationsRate !== 0 || operationsId !== null
-        : platform?.operatorCommission)
+      !isHall && (previous ? previous.operationsRate !== 0 || operationsId !== null : true)
     if (
       operationsApplicable &&
       operationsId == null &&
@@ -817,9 +1026,17 @@ export function createStudioService({
     return { support, operations, incomplete: support == null || operations == null }
   }
   function wallet(state, userId) {
-    const earned = state.rewardCredits
-      .filter((row) => row.userId === userId)
-      .reduce((total, row) => total + row.amount, 0)
+    const earned =
+      state.rewardCredits
+        .filter((row) => row.userId === userId)
+        .reduce((total, row) => total + row.amount, 0) +
+      state.playerAdjustments
+        .filter((row) => row.userId === userId)
+        .reduce(
+          (total, row) =>
+            total + (row.kind === 'supplement' ? row.appliedAmount : -row.appliedAmount),
+          0
+        )
     const occupied = state.withdrawals
       .filter((w) => w.userId === userId && ['pending', 'approved'].includes(w.status))
       .reduce((total, w) => total + w.amount, 0)
@@ -829,6 +1046,7 @@ export function createStudioService({
     return { userId, earned, occupied, paid, available: Math.max(0, earned - occupied - paid) }
   }
   function settleReward(state, order, user) {
+    restoreStatusReward(state, order, user)
     const allocations = new Map()
     if (order.leaderId && order.reward > 0) {
       if (order.teammateId) {
@@ -876,6 +1094,79 @@ export function createStudioService({
       }
     }
     return manual
+  }
+  function restoreStatusReward(state, order, user) {
+    const reversal = state.statusCorrectionReversals[order.id]
+    if (!reversal?.active) return
+    if (
+      order.reward !== reversal.reward ||
+      order.leaderId !== reversal.leaderId ||
+      order.teammateId !== reversal.teammateId
+    )
+      fail(
+        '该订单已有结算冲正，恢复时须沿用原负责人和原报酬；不同金额或人员请先由财务处理扣补款差额',
+        409
+      )
+    for (const adjustmentId of reversal.adjustmentIds) {
+      const row = state.playerAdjustments.find((item) => item.id === adjustmentId)
+      if (!row) continue
+      const recovered = row.resolution === 'recovered' ? row.manualAmount : 0
+      const restore = row.appliedAmount + recovered
+      if (restore > 0)
+        createPlayerAdjustment(
+          state,
+          user,
+          {
+            userId: row.userId,
+            kind: 'supplement',
+            amount: restore,
+            reason: '恢复原订单结算：' + order.orderNo,
+            orderId: order.id
+          },
+          'status-correction'
+        )
+      if (row.status === 'manual') {
+        const before = clone(row)
+        Object.assign(row, {
+          status: 'resolved',
+          resolution: 'waived',
+          resolvedAt: now(),
+          resolvedBy: user.id,
+          resolutionReason: '订单重新结算，取消此次状态冲正待追回金额'
+        })
+        audit(state, user, '订单恢复结算取消待追回', 'player-adjustment', row.id, before, row)
+      }
+    }
+    reversal.active = false
+  }
+  function reverseStatusReward(state, order, user, reason) {
+    if (state.statusCorrectionReversals[order.id]?.active) return
+    const adjustmentIds = []
+    for (const credit of state.rewardCredits.filter(
+      (row) => row.orderId === order.id && row.amount > 0
+    ))
+      adjustmentIds.push(
+        createPlayerAdjustment(
+          state,
+          user,
+          {
+            userId: credit.userId,
+            kind: 'deduction',
+            amount: credit.amount,
+            reason,
+            orderId: order.id
+          },
+          'status-correction'
+        ).id
+      )
+    state.statusCorrectionReversals[order.id] = {
+      active: true,
+      adjustmentIds,
+      completedAt: order.completedAt,
+      reward: order.reward,
+      leaderId: order.leaderId,
+      teammateId: order.teammateId
+    }
   }
   function recordCommissionAdjustment(state, order, sourceId, reason) {
     const record = state.commissionPaid[order.id]
@@ -932,7 +1223,9 @@ export function createStudioService({
             !supplementary &&
             plan?.mode !== 'fixed' &&
             user.role === 'operations' &&
-            state.platforms.some((p) => p.operatorCommission && plan?.platformRates[p.id] == null)
+            state.platforms.some(
+              (p) => p.id !== 'hall' && p.name !== '游戏大厅' && plan?.platformRates[p.id] == null
+            )
           )
             incomplete = true
           for (const order of state.orders.filter(
@@ -1004,6 +1297,27 @@ export function createStudioService({
     }
     for (const expense of state.expenses.filter((e) => !e.deletedAt && e.date.startsWith(month)))
       days[Number(expense.date.slice(8)) - 1].expenses += expense.amount
+    for (const adjustment of state.playerAdjustments.filter(
+      (row) => row.source !== 'status-correction'
+    )) {
+      const order = adjustment.orderId
+        ? state.orders.find((row) => row.id === adjustment.orderId)
+        : null
+      const date = order?.paidAt ? shanghaiDate(order.paidAt) : shanghaiDate(adjustment.createdAt)
+      if (!date.startsWith(month)) continue
+      const recovered = adjustment.resolution === 'recovered' ? adjustment.manualAmount : 0
+      days[Number(date.slice(8)) - 1].expenses +=
+        adjustment.kind === 'supplement'
+          ? adjustment.appliedAmount
+          : -adjustment.appliedAmount - recovered
+    }
+    for (const adjustment of state.playerAdjustments.filter(
+      (row) => row.source === 'status-correction' && row.status === 'manual'
+    )) {
+      const order = state.orders.find((row) => row.id === adjustment.orderId)
+      if (order?.paidAt && shanghaiDate(order.paidAt).startsWith(month))
+        days[Number(shanghaiDate(order.paidAt).slice(8)) - 1].incomplete = true
+    }
     for (const day of days) {
       day.net = day.received - day.refunds
       day.profit = day.incomplete
@@ -1117,9 +1431,12 @@ export function createStudioService({
         user.role === 'player' && !can(user, 'orders.view')
           ? []
           : can(user, 'orders.view') || can(user, 'orders.create') || can(user, 'users.manage')
-            ? state.customers
+            ? state.customers.map(publicCustomer)
             : [],
-      platforms: state.platforms,
+      platforms: state.platforms.map((platform) => ({
+        ...platform,
+        rules: platformRules(platform)
+      })),
       shops: state.shops,
       levels: state.levels,
       templates:
@@ -1143,18 +1460,21 @@ export function createStudioService({
             .map((p) => ({ ...p, lines: p.lines.filter(salaryVisible) }))
             .filter((p) => p.lines.length)
         : [],
-      logs: can(user, 'logs.view')
-        ? state.logs
-            .slice(exportMode ? 0 : -1000)
-            .reverse()
-            .map((log) => safeAuditLog(state, user, log))
-            .filter(Boolean)
-        : state.logs
-            .filter((log) => log.entity === 'order' && orderIds.has(log.entityId))
-            .slice(exportMode ? 0 : -500)
-            .reverse()
-            .map((log) => safeAuditLog(state, user, log))
-            .filter(Boolean),
+      logs: auditStore
+        .rows({
+          source: exportMode ? 'all' : 'hot',
+          limit: exportMode ? 100001 : 1000,
+          omitEntities: allSalary && viewProfit ? [] : ['salary-plan', 'payroll']
+        })
+        .filter(
+          (log) => can(user, 'logs.view') || (log.entity === 'order' && orderIds.has(log.entityId))
+        )
+        .map((log) => safeAuditLog(state, user, log))
+        .filter(Boolean),
+      playerAdjustments: state.playerAdjustments.filter(
+        (row) => can(user, 'finance.withdrawals') || row.userId === user.id
+      ),
+      rewardReviews: can(user, 'finance.withdrawals') ? state.rewardReviews : [],
       reports: result,
       wallets: state.users
         .filter(
@@ -1170,12 +1490,7 @@ export function createStudioService({
     const receivedAmount = cents(body.receivedAmount, '实收金额', { positive: true })
     const paidAt = normalizedTime(body.paidAt, '客户付款时间')
     if (Date.parse(paidAt) > Date.parse(now()) + 60_000) fail('客户付款时间不能晚于当前时间')
-    const receipt = attachment(
-      state,
-      user,
-      body.receipt,
-      platform.id !== 'xianyu' && platform.name !== '闲鱼'
-    )
+    const receipt = attachment(state, user, body.receipt, platformRules(platform).requiresReceipt)
     return { receivedAmount, paidAt, receivedAt: now(), receipt }
   }
   function validateTarget(state, assignedTo) {
@@ -1209,15 +1524,20 @@ export function createStudioService({
       text(body.platformId, '来源平台', { required: true }),
       '来源平台'
     )
-    const isXianyu = platform.id === 'xianyu' || platform.name === '闲鱼'
-    const isHall = platform.id === 'hall' || platform.name === '游戏大厅'
-    const shopId = isXianyu
-      ? find(state, 'shops', text(body.shopId, '闲鱼店铺', { required: true }), '店铺').id
-      : null
+    const rules = platformRules(platform)
+    const shopId =
+      body.shopId || rules.requiresShop
+        ? find(
+            state,
+            'shops',
+            text(body.shopId, '来源店铺', { required: rules.requiresShop }),
+            '店铺'
+          ).id
+        : null
     if (shopId && find(state, 'shops', shopId).platformId !== platform.id)
       fail('店铺与来源平台不一致')
     const externalOrderNo = text(body.externalOrderNo, '平台订单号', {
-      required: isXianyu,
+      required: rules.requiresExternalOrderNo,
       max: 128
     })
     if (
@@ -1234,7 +1554,8 @@ export function createStudioService({
       reward = cents(body.reward ?? template.reward, '整单打手报酬')
     const dispatchMode = choice(body.dispatchMode, ['pool', 'direct'], '派单方式')
     const assignedTo = dispatchMode === 'direct' ? validateTarget(state, body.assignedTo) : null
-    if (body.payOnArrival && !isHall) fail('落地付仅限游戏大厅')
+    if (body.payOnArrival && !rules.allowPayOnArrival)
+      fail('当前平台不允许落地付，请先确认客户付款')
     let payment = { receivedAmount: 0, paidAt: null, receivedAt: null, receipt: null }
     if (!body.payOnArrival || Number(body.receivedAmount) > 0)
       payment = paymentData(state, user, body, platform)
@@ -1249,7 +1570,7 @@ export function createStudioService({
       platformId: platform.id,
       shopId,
       externalOrderNo,
-      channel: text(body.channel, '成交渠道', { max: 128 }),
+      channel: '',
       roomCode,
       gameId,
       map: text(body.map ?? template.map, '地图', { max: 128 }),
@@ -1278,7 +1599,96 @@ export function createStudioService({
     const order = find(state, 'orders', orderId, '订单'),
       before = clone(order)
     const action = body.action
-    if (action === 'review-pass' || action === 'review-return') {
+    if (action === 'correct-status') {
+      if (!['finance', 'manager', 'owner', 'super_admin'].includes(user.role))
+        fail('仅财务、店长、老板或超级管理员可以更正订单状态', 403)
+      requirePermission(user, 'orders.edit')
+      const reason = requiredReason(body)
+      const next = choice(
+        body.status,
+        ['pending', 'active', 'review', 'completed', 'canceled'],
+        '目标状态'
+      )
+      if (next === order.status) fail('订单已经是该状态，无需重复更正', 409)
+      const leaderId = body.leaderId || order.leaderId || order.assignments.at(-1)?.leaderId
+      if (['active', 'review', 'completed'].includes(next) && !leaderId)
+        fail('请先选择实际负责打手，不能无负责人更正为执行或完成状态')
+      if (leaderId && ['active', 'review', 'completed'].includes(next))
+        validateTarget(state, leaderId)
+      const priorSettlement = state.statusCorrectionReversals[order.id]
+      const resolvedTeammate = Object.hasOwn(body, 'teammateId')
+        ? body.teammateId
+        : (order.teammateId ?? priorSettlement?.teammateId)
+      if (
+        ['active', 'review', 'completed'].includes(next) &&
+        state.rewardCredits.some((row) => row.orderId === order.id && row.amount > 0) &&
+        (leaderId !== (priorSettlement?.leaderId || order.leaderId) ||
+          (resolvedTeammate ?? null) !==
+            (priorSettlement ? priorSettlement.teammateId : order.teammateId))
+      )
+        fail('已结算订单不能直接更换结算打手，请先由财务处理原打手与新打手的扣补款差额', 409)
+      if (
+        next === 'active' &&
+        order.status !== 'active' &&
+        activeCount(state, leaderId) >= find(state, 'users', leaderId).maxActiveOrders
+      )
+        fail('负责人已经达到同时接单上限', 409)
+      if (next === 'completed' && (!paidOrder(order) || order.receivedAmount !== order.amount))
+        fail('完成前必须确认客户足额收款')
+      if (next === 'review' && !order.submissions.at(-1)?.screenshots?.length)
+        fail('尚无完成材料，不能直接更正为待验收')
+      if (order.status === 'completed' || order.compensationSettled)
+        reverseStatusReward(state, order, user, reason)
+      if (['active', 'review', 'completed'].includes(next)) {
+        if (order.leaderId !== leaderId || !order.assignments.some((row) => !row.releasedAt)) {
+          const old = order.assignments.findLast((row) => !row.releasedAt)
+          if (old) Object.assign(old, { releasedAt: now(), reason })
+          order.assignments.push({ leaderId, acceptedAt: now(), correctedBy: user.id })
+        }
+        order.leaderId = leaderId
+        order.teammateId = validateTeammate(state, leaderId, resolvedTeammate)
+        if (order.teammateId && order.reward % 2) fail('双人平分报酬必须为偶数分')
+      }
+      if (next === 'review' && order.submissions.at(-1)?.review) {
+        const previous = order.submissions.at(-1)
+        order.submissions.push({
+          id: id(),
+          submittedAt: previous.submittedAt,
+          leaderId: order.leaderId,
+          teammateId: order.teammateId,
+          screenshots: clone(previous.screenshots),
+          previousSubmissionId: previous.id,
+          recheckBy: user.id,
+          recheckedAt: now(),
+          recheckReason: reason
+        })
+      }
+      order.status = next
+      if (next === 'pending') {
+        const active = order.assignments.findLast((row) => !row.releasedAt)
+        if (active) Object.assign(active, { releasedAt: now(), reason })
+        order.leaderId = null
+        order.teammateId = null
+        order.assignedTo = null
+        order.dispatchMode = 'pool'
+        order.publishedAt = now()
+      }
+      if (next === 'completed') {
+        order.completedAt ||= state.statusCorrectionReversals[order.id]?.completedAt || now()
+        snapshotCommission(state, order)
+        settleReward(state, order, user)
+        order.compensationPending = false
+        order.compensationSettled = false
+      } else if (next === 'canceled') {
+        order.canceledAt = now()
+        order.cancelReason = reason
+        order.canceledFrom = before.status
+        order.compensationPending = order.assignments.length > 0
+        order.compensationSettled = !order.compensationPending
+        if (!order.compensationPending) order.reward = 0
+      }
+      recordCommissionAdjustment(state, order, order.id, reason)
+    } else if (action === 'review-pass' || action === 'review-return') {
       requirePermission(user, 'finance.review')
       if (order.status !== 'review') fail('只有待验收订单可以审核', 409)
       const submission = order.submissions.at(-1)
@@ -1287,7 +1697,7 @@ export function createStudioService({
         if (!paidOrder(order) || order.receivedAmount !== order.amount) fail('验收前请确认足额收款')
         if (!submission.screenshots.length) fail('完成截图不能为空')
         order.status = 'completed'
-        order.completedAt = now()
+        order.completedAt ||= state.statusCorrectionReversals[order.id]?.completedAt || now()
         submission.review = 'passed'
         snapshotCommission(state, order)
         settleReward(state, order, user)
@@ -1498,6 +1908,130 @@ export function createStudioService({
     if (body == null || typeof body !== 'object' || Array.isArray(body))
       fail('请求内容必须为JSON对象')
     return transact(userId, (state, user) => {
+      if (path === '/logs/maintenance') {
+        requirePermission(user, 'settings.manage')
+        requirePermission(user, 'logs.view')
+        let affectedRows
+        if (body.action === 'archive') affectedRows = auditStore.archive()
+        else if (body.action === 'purge-archive') {
+          requireBackupAudit(user)
+          if (body.backupConfirmed !== true) fail('请先导出并确认已经保存日志备份')
+          requiredReason(body)
+          checkBackupReceipt(user, body.backupToken, validDate(body.beforeDate, '归档清理截止日期'))
+          affectedRows = auditStore.purge(validDate(body.beforeDate, '归档清理截止日期'))
+          db.prepare('DELETE FROM audit_archive_backups WHERE token_hash=?').run(
+            sessionHash(body.backupToken)
+          )
+        } else fail('日志维护操作无效')
+        audit(
+          state,
+          user,
+          body.action === 'archive' ? '主动归档日志' : '清理已备份归档日志',
+          'audit-maintenance',
+          id(),
+          null,
+          {
+            action: body.action,
+            beforeDate: body.beforeDate || null,
+            reason: body.reason || '按热日志保留规则归档',
+            affectedRows
+          }
+        )
+        return { affectedRows, storage: auditStore.storage() }
+      }
+      const rewardReviewMatch = path.match(/^\/reward-reviews\/([^/]+)\/action$/)
+      if (rewardReviewMatch) {
+        requirePermission(user, 'finance.withdrawals')
+        const row = find(state, 'rewardReviews', rewardReviewMatch[1], '历史人工差额'),
+          before = clone(row)
+        if (body.action !== 'resolve' || row.resolvedAt) fail('该人工差额已处理或操作无效', 409)
+        Object.assign(row, {
+          resolvedAt: now(),
+          resolvedBy: user.id,
+          resolution: requiredReason(body)
+        })
+        audit(state, user, '登记历史报酬差额人工处理', 'reward-review', row.id, before, row)
+        return clone(row)
+      }
+      if (path === '/player-adjustments') {
+        requirePermission(user, 'finance.withdrawals')
+        return clone(createPlayerAdjustment(state, user, body))
+      }
+      const adjustmentMatch = path.match(/^\/player-adjustments\/([^/]+)\/action$/)
+      if (adjustmentMatch) {
+        requirePermission(user, 'finance.withdrawals')
+        const row = find(state, 'playerAdjustments', adjustmentMatch[1], '扣补款记录'),
+          before = clone(row)
+        if (body.action !== 'resolve' || row.status !== 'manual')
+          fail('该记录没有待追回差额或已处理', 409)
+        Object.assign(row, {
+          resolution: choice(body.resolution, ['recovered', 'waived'], '处理结果'),
+          resolutionReason: requiredReason(body),
+          status: 'resolved',
+          resolvedAt: now(),
+          resolvedBy: user.id
+        })
+        audit(state, user, '登记扣款人工处理结果', 'player-adjustment', row.id, before, row)
+        return clone(row)
+      }
+      if (path === '/customer-order-references') {
+        requireCustomerAccess(user, true)
+        const customer = find(state, 'customers', body.customerId, '客户')
+        if (body.action === 'remove') {
+          const row = db
+            .prepare('SELECT * FROM customer_order_references WHERE id=? AND customer_id=?')
+            .get(body.id, customer.id)
+          if (!row) fail('客户平台订单号记录不存在', 404)
+          db.prepare('DELETE FROM customer_order_references WHERE id=?').run(row.id)
+          audit(
+            state,
+            user,
+            '移除客户平台订单号',
+            'customer-reference',
+            row.id,
+            publicReference(row),
+            null
+          )
+          return { ok: true }
+        }
+        const platform = find(state, 'platforms', body.platformId, '来源平台'),
+          rules = platformRules(platform)
+        if (!rules.requiresExternalOrderNo) fail('该来源不要求平台订单号，无需添加关联编号')
+        const shopId =
+          body.shopId || rules.requiresShop
+            ? find(state, 'shops', body.shopId, '来源店铺').id
+            : null
+        if (shopId && find(state, 'shops', shopId).platformId !== platform.id)
+          fail('店铺与来源平台不一致')
+        const externalOrderNo = text(body.externalOrderNo, '平台订单号', {
+          required: true,
+          max: 128
+        })
+        if (
+          db
+            .prepare(
+              'SELECT id FROM customer_order_references WHERE customer_id=? AND platform_id=? AND shop_id=? AND external_order_no=?'
+            )
+            .get(customer.id, platform.id, shopId || '', externalOrderNo)
+        )
+          fail('该客户已有相同来源、店铺和平台订单号', 409)
+        const row = {
+          id: id(),
+          customerId: customer.id,
+          platformId: platform.id,
+          shopId,
+          externalOrderNo
+        }
+        db.prepare('INSERT INTO customer_order_references VALUES(?,?,?,?,?)').run(
+          row.id,
+          customer.id,
+          platform.id,
+          shopId || '',
+          externalOrderNo
+        )
+        audit(state, user, '新增客户平台订单号', 'customer-reference', row.id, null, row)
+        return row
+      }
       if (path === '/appearance' || path === '/appearance/reset') {
         requirePermission(user, 'settings.manage')
         const before = state.appearance || defaultAppearance()
@@ -1724,6 +2258,9 @@ export function createStudioService({
         const row = {
           id: existing?.id || id(),
           name: text(body.name, '客户名称', { required: true, max: 100 }),
+          platformId: body.platformId
+            ? find(state, 'platforms', body.platformId, '来源平台').id
+            : null,
           contact: text(body.contact, '联系方式', { max: 200 }),
           gameId: text(body.gameId, '游戏ID', { max: 128 }),
           remark: text(body.remark, '备注'),
@@ -1736,7 +2273,7 @@ export function createStudioService({
         audit(state, user, existing ? '修改客户' : '新增客户', 'customer', row.id, existing, row)
         if (existing) state.customers[state.customers.indexOf(existing)] = row
         else state.customers.push(row)
-        return clone(row)
+        return clone(publicCustomer(row))
       }
       if (path === '/templates') {
         requirePermission(user, 'templates.manage')
@@ -1765,13 +2302,19 @@ export function createStudioService({
           id: existing?.id || id(),
           name: text(body.name, '名称', { required: true, max: 100 })
         }
-        if (state[table].some((r) => r.name === row.name && r.id !== row.id))
+        if (
+          state[table].some(
+            (r) =>
+              r.name === row.name &&
+              r.id !== row.id &&
+              (table !== 'shops' || r.platformId === body.platformId)
+          )
+        )
           fail('名称已存在', 409)
         if (table === 'platforms') {
-          if (typeof body.operatorCommission !== 'boolean') fail('请选择是否参与运营提成')
           if ((row.id === 'hall' || row.name === '游戏大厅') && body.operatorCommission)
             fail('游戏大厅不参与运营提成')
-          row.operatorCommission = body.operatorCommission
+          row.rules = normalizePlatformRules(body.rules, existing || row)
         }
         if (table === 'shops') {
           row.platformId = find(state, 'platforms', body.platformId, '平台').id
@@ -1824,16 +2367,22 @@ export function createStudioService({
           if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(clockValue)) fail(`${label}无效`)
           return clockValue
         }
-        const start = toClock(body.start, '上班时间'),
-          end = toClock(body.end, '下班时间')
+        const status = choice(
+          body.status,
+          ['scheduled', 'present', 'normal', 'rest', 'leave', 'absent'],
+          '考勤状态'
+        )
+        const noShift = ['normal', 'rest'].includes(status) && !body.start && !body.end
+        if (Boolean(body.start) !== Boolean(body.end)) fail('班次开始和结束时间需要成对填写')
+        const start = noShift ? '' : toClock(body.start, '上班时间'),
+          end = noShift ? '' : toClock(body.end, '下班时间')
         const minutes = (value) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3))
         let shiftMinutes = minutes(end) - minutes(start)
-        if (shiftMinutes === 0) fail('班次开始和结束时间不能相同')
+        if (shiftMinutes === 0 && !noShift) fail('班次开始和结束时间不能相同')
         if (shiftMinutes < 0) shiftMinutes += 1440
-        const status = choice(body.status, ['scheduled', 'present', 'leave', 'absent'], '考勤状态')
         if (status === 'present' && date > shanghaiDate(now()))
           fail('未来排班不能提前登记到岗，请选择待登记状态')
-        const maxHours = shiftMinutes / 60
+        const maxHours = noShift ? 24 : shiftMinutes / 60
         const actualHours =
           body.actualHours == null
             ? status === 'present'
@@ -1849,8 +2398,9 @@ export function createStudioService({
           actualHours > maxHours + 0.01
         )
           fail('实际工时应在班次时长范围内')
-        if (status !== 'present' && actualHours !== 0)
+        if (!['present', 'normal'].includes(status) && actualHours !== 0)
           fail('待登记、请假或缺勤记录的实际工时必须为0')
+        if (date > shanghaiDate(now()) && actualHours !== 0) fail('未来排班不能提前登记实际工时')
         if (
           state.attendance.some(
             (a) => a.userId === userId && a.date === date && a.id !== existing?.id
@@ -1865,6 +2415,10 @@ export function createStudioService({
           end,
           status,
           actualHours: Math.round(actualHours * 100) / 100,
+          hoursRegistered:
+            date <= shanghaiDate(now()) &&
+            ['present', 'normal'].includes(status) &&
+            body.actualHours != null,
           remark: text(body.remark, '考勤备注')
         }
         audit(state, user, existing ? '修改考勤' : '登记考勤', 'attendance', row.id, existing, row)
@@ -2049,6 +2603,256 @@ export function createStudioService({
       if (user.status !== 'active') fail('账号已停用', 403)
       return clone(state.appearance || defaultAppearance())
     },
+    publicAppearance() {
+      return projectPublicAppearance(read().appearance || defaultAppearance())
+    },
+    publicAsset(attachmentId) {
+      const appearance = read().appearance || defaultAppearance()
+      if (!publicAppearanceAttachments(appearance).some((row) => row.id === attachmentId))
+        fail('公开图片不存在', 404)
+      const row = db.prepare('SELECT * FROM uploads WHERE id=?').get(attachmentId)
+      if (!row) fail('公开图片不存在', 404)
+      return { ...metadata(row), data: Buffer.from(row.data) }
+    },
+    customerReferences(userId, customerId, input = {}) {
+      const state = read(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      requireCustomerAccess(user)
+      find(state, 'customers', customerId, '客户')
+      const current = Number(input.current || 1),
+        size = Number(input.size || 20)
+      if (
+        !Number.isSafeInteger((current - 1) * size) ||
+        !Number.isSafeInteger(current) ||
+        current < 1 ||
+        !Number.isSafeInteger(size) ||
+        size < 1 ||
+        size > 100
+      )
+        fail('客户编号分页参数无效')
+      const records = db
+        .prepare(
+          'SELECT * FROM customer_order_references WHERE customer_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?'
+        )
+        .all(customerId, size, (current - 1) * size)
+        .map(publicReference)
+      return {
+        records,
+        total: Number(
+          db
+            .prepare('SELECT COUNT(*) AS n FROM customer_order_references WHERE customer_id=?')
+            .get(customerId).n
+        ),
+        current,
+        size
+      }
+    },
+    logs(userId, input = {}) {
+      const state = read(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      requirePermission(user, 'logs.view')
+      const current = Number(input.current || 1),
+        size = Number(input.size || 50)
+      if (
+        !Number.isSafeInteger((current - 1) * size) ||
+        !Number.isSafeInteger(current) ||
+        current < 1 ||
+        !Number.isSafeInteger(size) ||
+        size < 1 ||
+        size > 200
+      )
+        fail('日志分页参数无效')
+      const options = {
+        source: input.source || (input.archived === 'true' ? 'archive' : 'hot'),
+        actorId: input.actorId,
+        entity: input.entity,
+        entityId: input.entityId,
+        action: input.action,
+        keyword: text(input.keyword || input.search, '日志搜索', { max: 200 }),
+        start:
+          input.start || input.dateStart ? validDate(input.start || input.dateStart) : undefined,
+        end: input.end || input.dateEnd ? validDate(input.end || input.dateEnd) : undefined,
+        omitEntities:
+          can(user, 'salary.all') && can(user, 'profit.view') ? [] : ['salary-plan', 'payroll']
+      }
+      return {
+        records: auditStore
+          .rows({ ...options, limit: size, offset: (current - 1) * size })
+          .map((row) => safeAuditLog(state, user, row))
+          .filter(Boolean),
+        total: auditStore.total(options),
+        current,
+        size
+      }
+    },
+    logDetail(userId, logId) {
+      const state = read(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      requirePermission(user, 'logs.view')
+      const row = auditStore.get(logId),
+        result = row ? safeAuditLog(state, user, row) : null
+      if (!result) fail('日志不存在或当前账号无权查看', 404)
+      return result
+    },
+    logStorage(userId) {
+      const state = read(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      requirePermission(user, 'settings.manage')
+      requirePermission(user, 'logs.view')
+      return { ...auditStore.storage(), canBackup: canBackupAudit(user) }
+    },
+    prepareArchiveBackup(userId, beforeDate) {
+      const state = read(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      requireBackupAudit(user)
+      beforeDate = validDate(beforeDate, '备份截止日期')
+      const scope = auditStore.backupScope(beforeDate)
+      if (!scope.count) fail('该截止日期之前没有可备份的归档记录', 409)
+      const token = randomBytes(32).toString('base64url')
+      db.prepare('DELETE FROM audit_archive_backups WHERE expires_at<=?').run(Date.parse(now()))
+      db.prepare(
+        'INSERT INTO audit_archive_backups(token_hash,user_id,before_date,scope_json,ready,expires_at) VALUES(?,?,?,?,0,?)'
+      ).run(
+        sessionHash(token),
+        user.id,
+        beforeDate,
+        JSON.stringify(scope),
+        Date.parse(now()) + 30 * 60000
+      )
+      return {
+        backupToken: token,
+        rowCount: scope.count,
+        beforeDate,
+        generatedAt: now(),
+        records: auditStore.backupIterator(beforeDate)
+      }
+    },
+    completeArchiveBackup(userId, token, beforeDate) {
+      const state = read(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      checkBackupReceipt(user, token, beforeDate, { ready: false })
+      db.prepare('UPDATE audit_archive_backups SET ready=1 WHERE token_hash=?').run(
+        sessionHash(token)
+      )
+    },
+    cancelArchiveBackup(token) {
+      db.prepare('DELETE FROM audit_archive_backups WHERE token_hash=? AND ready=0').run(
+        sessionHash(token)
+      )
+    },
+    exportSnapshot(userId, request = {}) {
+      const state = read(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      requirePermission(user, 'reports.export')
+      const base = bootstrap(userId, request.month)
+      const logBounds = auditStore.bounds()
+      state.logs = [logBounds.start, logBounds.end]
+        .filter(Boolean)
+        .map((createdAt) => ({ createdAt }))
+      const result = buildPeriodExportSnapshot({
+        base,
+        state,
+        request,
+        now: now(),
+        monthReport: (month) => reports(state, month)
+      })
+      const filters = request.filters || {},
+        dateRange = filters.dateRange
+      const referenceRequested = request.modules?.some(
+        (row) => row.id === 'customerOrderReferences'
+      )
+      const referenceConditions = ['customer_id IN (SELECT value FROM json_each(?))'],
+        referenceParams = [JSON.stringify(result.customers.map((row) => row.id))]
+      if (filters.platformId != null) {
+        if (typeof filters.platformId !== 'string' || filters.platformId.length > 200)
+          fail('导出来源筛选格式无效')
+        if (filters.platformId) {
+          referenceConditions.push('platform_id=?')
+          referenceParams.push(filters.platformId)
+        }
+      }
+      const referenceKeyword = text(filters.keyword, '关联编号搜索', { max: 200 }).toLowerCase()
+      if (referenceKeyword) {
+        if (filters.keywordField === 'externalOrderNo') {
+          referenceConditions.push('customer_ref_contains(external_order_no,?)=1')
+          referenceParams.push(referenceKeyword)
+        } else {
+          const source = new Map([
+            ['customerName', { column: 'customer_id', rows: result.customers }],
+            ['platformName', { column: 'platform_id', rows: result.platforms }],
+            ['shopName', { column: 'shop_id', rows: result.shops }]
+          ]).get(filters.keywordField)
+          if (source) {
+            referenceConditions.push(`${source.column} IN (SELECT value FROM json_each(?))`)
+            referenceParams.push(
+              JSON.stringify(
+                source.rows
+                  .filter((row) => row.name.toLowerCase().includes(referenceKeyword))
+                  .map((row) => row.id)
+              )
+            )
+          } else referenceConditions.push('0')
+        }
+      }
+      const referenceWhere = ' WHERE ' + referenceConditions.join(' AND ')
+      result.customerOrderReferenceCount = Number(
+        db
+          .prepare('SELECT COUNT(*) AS n FROM customer_order_references' + referenceWhere)
+          .get(...referenceParams).n
+      )
+      if (referenceRequested && result.customerOrderReferenceCount > 100000)
+        fail('客户关联编号匹配超过 100000 条，请缩小来源或关键词范围后重试')
+      if (referenceRequested && result.customers.length) {
+        const records = db
+          .prepare(
+            'SELECT * FROM customer_order_references' +
+              referenceWhere +
+              ' ORDER BY rowid DESC LIMIT 100001'
+          )
+          .all(...referenceParams)
+          .map(publicReference)
+        for (const customer of result.customers)
+          customer.orderReferences = records.filter((row) => row.customerId === customer.id)
+      }
+      const logRequested = request.modules?.some((row) => row.id === 'logs')
+      const logKeywordFields = ['id', 'action', 'actorName', 'entity', 'entityId', 'createdAt']
+      if (logRequested && filters.keyword && ['before', 'after'].includes(filters.keywordField))
+        fail('日志关键词不检索权限过滤的修改前后内容，请选择操作人、操作动作或记录号')
+      const unmatchedLogField = Boolean(
+        filters.keyword && filters.keywordField && !logKeywordFields.includes(filters.keywordField)
+      )
+      const start = dateRange ? validDate(dateRange[0]) : result.exportPeriod.start
+      const end = dateRange ? validDate(dateRange[1]) : result.exportPeriod.end
+      const options = {
+        source: filters.archived || 'all',
+        start: start > result.exportPeriod.start ? start : result.exportPeriod.start,
+        end: end < result.exportPeriod.end ? end : result.exportPeriod.end,
+        actorId: filters.personId,
+        keyword:
+          filters.keyword && !unmatchedLogField
+            ? text(filters.keyword, '日志搜索', { max: 200 })
+            : undefined,
+        keywordField: unmatchedLogField ? undefined : filters.keywordField,
+        omitEntities:
+          can(user, 'salary.all') && can(user, 'profit.view') ? [] : ['salary-plan', 'payroll']
+      }
+      result.auditLogCount =
+        can(user, 'logs.view') && !unmatchedLogField ? auditStore.total(options) : 0
+      if (logRequested && can(user, 'logs.view') && !unmatchedLogField)
+        result.logs = auditStore
+          .rows({ ...options, limit: 100001 })
+          .map((row) => safeAuditLog(state, user, row))
+          .filter(Boolean)
+      else if (logRequested) result.logs = []
+      return result
+    },
     overview(userId, input = {}) {
       const dates = normalizeOverviewRange(input, shanghaiDate(now()))
       const snapshots = overviewMonths(dates).map((month) => bootstrap(userId, month))
@@ -2083,16 +2887,42 @@ export function createStudioService({
         fail('账号或密码错误，或账号已停用', 401)
       const token = randomBytes(32).toString('base64url'),
         expiresAt = Date.parse(now()) + 12 * 3600000
-      db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.parse(now()))
-      db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(
-        sessionHash(token),
-        user.id,
-        expiresAt
-      )
-      transact(user.id, (s, actor) =>
-        audit(s, actor, '登录', 'session', actor.id, null, { userId: actor.id })
-      )
-      return { token, user: publicStaff(state, user) }
+      const registerSession = () => {
+        db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.parse(now()))
+        db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(
+          sessionHash(token),
+          user.id,
+          expiresAt
+        )
+      }
+      let maintenanceNotice
+      try {
+        transact(user.id, (s, actor) => {
+          registerSession()
+          audit(s, actor, '登录', 'session', actor.id, null, { userId: actor.id })
+        })
+      } catch (error) {
+        if (!isAuditCapacityError(error) || !canBackupAudit(user)) throw error
+        // The failed session transaction has rolled back. Only fully authorized
+        // backup operators can recover access, with a separate bounded login audit.
+        transact(user.id, (s, actor) => {
+          requireBackupAudit(actor)
+          registerSession()
+          auditStore.appendEmergencyLogin({
+            id: id(),
+            actorId: actor.id,
+            actorName: actor.name,
+            createdAt: now()
+          })
+        })
+        maintenanceNotice =
+          '日志归档容量已满，请进入操作日志下载完整备份并清理已备份归档；业务修改暂不可保存'
+      }
+      return {
+        token,
+        user: publicStaff(state, user),
+        ...(maintenanceNotice ? { maintenanceNotice } : {})
+      }
     },
     session(token) {
       if (!token || typeof token !== 'string' || token.length > 128) return null

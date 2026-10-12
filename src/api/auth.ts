@@ -3,8 +3,8 @@ import { toFrameworkUser } from '@/utils/auth/studio-user'
 
 /** 使用工作室服务器会话，保留原框架的登录及路由流程。 */
 export async function fetchLogin(params: Api.Auth.LoginParams) {
-  await useStudio().login(params.userName, params.password)
-  return fetchGetUserInfo()
+  const result = await useStudio().login(params.userName, params.password)
+  return { ...(await fetchGetUserInfo()), maintenanceNotice: result.maintenanceNotice }
 }
 
 export async function fetchGetUserInfo(): Promise<Api.Auth.UserInfo> {

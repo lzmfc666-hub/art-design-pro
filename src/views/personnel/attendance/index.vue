@@ -2,7 +2,7 @@
   <div class="attendance-page">
     <BusinessPageHeader
       title="排班与考勤"
-      description="先安排班次，实际到岗后登记工时；支持跨夜班次、请假和缺勤。"
+      description="按日展示启用人员，未登记默认为正常；实际工时单独登记，支持休息与跨夜排班。"
       icon="ri:calendar-check-line"
     />
     <ElRow :gutter="16" class="mb-4">
@@ -50,7 +50,9 @@
           data?.users.find((item) => item.id === row.userId)?.name || row.userId
         }}</template>
         <template #shift="{ row }"
-          >{{ timePart(row.start) }} — {{ timePart(row.end) }}
+          >{{
+            row.start && row.end ? timePart(row.start) + ' — ' + timePart(row.end) : '未安排班次'
+          }}
           <ElTag v-if="timePart(row.end) < timePart(row.start)" size="small" type="info"
             >次日</ElTag
           ></template
@@ -63,7 +65,9 @@
             labels[row.status as Attendance['status']]
           }}</ElTag></template
         >
-        <template #actualHours="{ row }">{{ row.actualHours.toFixed(2) }} h</template>
+        <template #actualHours="{ row }">{{
+          registered(row) ? row.actualHours.toFixed(2) + ' h' : '未登记'
+        }}</template>
         <template #operation="{ row }"
           ><ElButton
             v-if="can('attendance.manage')"
@@ -71,7 +75,7 @@
             type="primary"
             :disabled="saving"
             @click="edit(row)"
-            >编辑记录</ElButton
+            >{{ row.synthetic ? '登记考勤' : '编辑记录' }}</ElButton
           ></template
         >
       </ArtTable>
@@ -94,9 +98,11 @@
         @submit.prevent="save"
       >
         <ElFormItem label="人员" prop="userId"
-          ><ElSelect v-model="form.userId" filterable class="w-full"
+          ><ElSelect v-model="form.userId" :disabled="!!form.id" filterable class="w-full"
             ><ElOption
-              v-for="item in data?.users"
+              v-for="item in data?.users.filter(
+                (item) => item.status === 'active' || item.id === form.userId
+              )"
               :key="item.id"
               :value="item.id"
               :label="item.name" /></ElSelect
@@ -104,6 +110,7 @@
         <ElFormItem label="班次开始日期" prop="date"
           ><ElDatePicker
             v-model="form.date"
+            :disabled="!!form.id"
             type="date"
             value-format="YYYY-MM-DD"
             style="width: 100%"
@@ -138,11 +145,11 @@
               :key="key"
               :value="key"
               :label="label"
-              :disabled="futureDate && key !== 'scheduled'" /></ElSelect
+              :disabled="futureDate && key === 'present'" /></ElSelect
         ></ElFormItem>
         <ElAlert
           v-if="futureDate"
-          title="未来班次先保存为待登记，到岗后再登记出勤与实际工时。"
+          title="未来日期可安排正常、休息或排班，实际工时需到当天或之后另行登记。"
           type="info"
           :closable="false"
           class="mb-4"
@@ -150,15 +157,15 @@
         <ElFormItem label="实际工作时长（小时）">
           <ElSpace wrap
             ><ElInputNumber
-              :model-value="form.status === 'present' ? form.actualHours : 0"
-              :disabled="form.status !== 'present'"
+              :model-value="canRegisterHours ? form.actualHours : undefined"
+              :disabled="!canRegisterHours"
               :min="0"
               :precision="2"
               :step="0.01"
               controls-position="right"
               @update:model-value="changeActualHours"
             /><ElButton
-              v-if="form.status === 'present'"
+              v-if="canRegisterHours && plannedHours > 0"
               link
               type="primary"
               @click="usePlannedHours"
@@ -166,15 +173,15 @@
             ></ElSpace
           >
           <p class="mt-2 text-xs text-g-500 w-full">{{
-            form.status !== 'present'
-              ? '待登记、请假与缺勤的实际工时保存为 0。'
-              : manualHours
-                ? '当前采用人工工时，调整班次时保留人工值。'
-                : '当前按班次时长计算，手工修改后保留人工值。'
+            !canRegisterHours
+              ? '未来日期、休息、待登记、请假与缺勤不计实际工时。'
+              : form.actualHours === null
+                ? '留空表示未登记，正常状态不会自动计入实际工时。'
+                : '采用人工登记工时，调整班次不会覆盖此值。'
           }}</p>
         </ElFormItem>
         <ElAlert
-          v-if="form.status === 'present' && manualHours && shiftChanged"
+          v-if="canRegisterHours && form.actualHours !== null && shiftChanged"
           title="班次已变更，人工工时已保留。请核对后保存，或重新按班次时长填入。"
           type="warning"
           :closable="false"
@@ -206,13 +213,32 @@
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import type { Attendance } from '@/types/studio'
+  type AttendanceRow = Attendance & { synthetic?: boolean }
 
   defineOptions({ name: 'Attendance' })
   const { data, loading, can, mutate, refresh } = useStudio()
-  const labels = { scheduled: '待登记', present: '到岗', leave: '请假', absent: '缺勤' }
-  const emptySearch = () => ({ userId: '', status: '', dates: null as [string, string] | null })
+  const labels = {
+    normal: '正常',
+    rest: '休息',
+    scheduled: '待登记',
+    present: '到岗',
+    leave: '请假',
+    absent: '缺勤'
+  }
+  const emptySearch = () => ({
+    userId: '',
+    status: '',
+    date: today(),
+    dates: null as [string, string] | null
+  })
   const search = ref(emptySearch())
   const searchItems = computed(() => [
+    {
+      key: 'date',
+      label: '登记日期',
+      type: 'date',
+      props: { valueFormat: 'YYYY-MM-DD', clearable: false }
+    },
     {
       key: 'userId',
       label: '人员',
@@ -244,17 +270,38 @@
       }
     }
   ])
-  const rows = computed(() =>
-    (data.value?.attendance || [])
+  const rows = computed<AttendanceRow[]>(() => {
+    const range = search.value.dates
+    const date = range ? (range[0] === range[1] ? range[0] : null) : search.value.date || today()
+    const recorded = (data.value?.attendance || []).filter((row) =>
+      range ? row.date >= range[0] && row.date <= range[1] : row.date === date
+    )
+    const projected: AttendanceRow[] = date
+      ? (data.value?.users || [])
+          .filter(
+            (user) => user.status === 'active' && !recorded.some((row) => row.userId === user.id)
+          )
+          .map((user) => ({
+            id: 'unregistered:' + date + ':' + user.id,
+            userId: user.id,
+            date,
+            start: '',
+            end: '',
+            status: 'normal',
+            actualHours: 0,
+            hoursRegistered: false,
+            remark: '',
+            synthetic: true
+          }))
+      : []
+    return [...recorded, ...projected]
       .filter(
         (row) =>
           (!search.value.userId || row.userId === search.value.userId) &&
-          (!search.value.status || row.status === search.value.status) &&
-          (!search.value.dates ||
-            (row.date >= search.value.dates[0] && row.date <= search.value.dates[1]))
+          (!search.value.status || row.status === search.value.status)
       )
       .sort((a, b) => b.date.localeCompare(a.date))
-  )
+  })
   const metrics = computed(() => [
     {
       label: '应出勤工时',
@@ -265,8 +312,12 @@
     },
     {
       label: '实际出勤工时',
-      value: rows.value.reduce((sum, row) => sum + row.actualHours, 0).toFixed(2),
-      unit: '小时'
+      value: rows.value.some(registered)
+        ? rows.value
+            .reduce((sum, row) => sum + (registered(row) ? row.actualHours : 0), 0)
+            .toFixed(2)
+        : '未登记',
+      unit: rows.value.some(registered) ? '小时' : ''
     },
     {
       label: '到岗 / 请假 / 缺勤',
@@ -274,14 +325,17 @@
       unit: '次'
     },
     {
-      label: '排班待登记',
-      value: rows.value.filter((row) => row.status === 'scheduled').length,
+      label: '实际工时未登记',
+      value: rows.value.filter(
+        (row) =>
+          row.date <= today() && ['normal', 'present'].includes(row.status) && !registered(row)
+      ).length,
       unit: '次'
     }
   ])
   const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =
     useBusinessTable(rows)
-  const { columns, columnChecks } = useTableColumns<Attendance>(() => [
+  const { columns, columnChecks } = useTableColumns<AttendanceRow>(() => [
     { prop: 'date', label: '班次日期', width: 130 },
     { prop: 'userId', label: '人员', minWidth: 120, useSlot: true },
     { prop: 'shift', label: '班次时间', minWidth: 200, useSlot: true },
@@ -296,14 +350,29 @@
     resetPage()
   }
   function statusType(status: Attendance['status']) {
-    return ({ scheduled: 'info', present: 'success', leave: 'warning', absent: 'danger' } as const)[
-      status
-    ]
+    return (
+      {
+        normal: 'primary',
+        rest: 'info',
+        scheduled: 'info',
+        present: 'success',
+        leave: 'warning',
+        absent: 'danger'
+      } as const
+    )[status]
   }
   function today() {
-    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
+    const parts = new Intl.DateTimeFormat('en', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date())
+    const value = (key: string) => parts.find((part) => part.type === key)?.value || ''
+    return value('year') + '-' + value('month') + '-' + value('day')
   }
   function timePart(value: string) {
+    if (!value) return ''
     if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
     const parsed = new Date(value)
     return Number.isNaN(parsed.getTime())
@@ -326,22 +395,21 @@
   }
   const open = ref(false),
     saving = ref(false),
-    manualHours = ref(false),
     originalShift = ref('')
   const formRef = ref<FormInstance>()
   const emptyForm = () => ({
     id: '',
     userId: '',
     date: today(),
-    start: '09:00',
-    end: '18:00',
-    status: 'scheduled' as Attendance['status'],
-    actualHours: 0,
+    start: '',
+    end: '',
+    status: 'normal' as Attendance['status'],
+    actualHours: null as number | null,
     remark: ''
   })
   const form = reactive(emptyForm())
   const rules: FormRules = Object.fromEntries(
-    ['userId', 'date', 'start', 'end'].map((key) => [
+    ['userId', 'date'].map((key) => [
       key,
       [{ required: true, message: '此项不能为空', trigger: 'change' }]
     ])
@@ -350,54 +418,96 @@
   const plannedHours = computed(() => hours(form.start, form.end))
   const shiftChanged = computed(() => originalShift.value !== `${form.start}|${form.end}`)
   watch(
-    () => [form.start, form.end, form.status],
+    () => search.value.date,
     () => {
-      if (!manualHours.value && form.status === 'present') form.actualHours = plannedHours.value
+      search.value.dates = null
+      resetPage()
     }
   )
+  const canRegisterHours = computed(
+    () => !futureDate.value && ['normal', 'present'].includes(form.status)
+  )
+  function registered(row: AttendanceRow) {
+    return row.date <= today() && (row.hoursRegistered ?? row.status === 'present')
+  }
   watch(
     () => form.date,
     () => {
-      if (futureDate.value) form.status = 'scheduled'
+      if (futureDate.value && form.status === 'present') form.status = 'normal'
     }
   )
   function changeActualHours(value: number | undefined) {
-    manualHours.value = true
-    form.actualHours = value ?? 0
+    form.actualHours = value ?? null
   }
   function usePlannedHours() {
     form.actualHours = plannedHours.value
-    manualHours.value = false
   }
-  function edit(row?: Attendance) {
+  function edit(row?: AttendanceRow) {
     if (!can('attendance.manage') || saving.value) return
-    Object.assign(form, emptyForm(), row || {})
+    Object.assign(
+      form,
+      emptyForm(),
+      row
+        ? {
+            id: row.id,
+            userId: row.userId,
+            date: row.date,
+            start: row.start,
+            end: row.end,
+            status: row.status,
+            actualHours: row.actualHours,
+            remark: row.remark
+          }
+        : {}
+    )
+    form.id = row?.synthetic ? '' : row?.id || ''
+    if (!row) form.date = search.value.date || today()
     form.start = timePart(form.start)
     form.end = timePart(form.end)
-    form.actualHours = row?.actualHours ?? 0
-    manualHours.value = !!row && row.status === 'present'
+    form.actualHours = row && registered(row) ? row.actualHours : null
     originalShift.value = `${form.start}|${form.end}`
     open.value = true
   }
+  watch(
+    () => [form.userId, form.date],
+    () => {
+      if (!open.value || form.id || !form.userId) return
+      const existing = data.value?.attendance.find(
+        (row) => row.userId === form.userId && row.date === form.date
+      )
+      if (existing) edit(existing)
+    }
+  )
   async function save() {
     if (!can('attendance.manage') || saving.value) return
     saving.value = true
     try {
       if (!(await formRef.value?.validate().catch(() => false))) return
-      if (!plannedHours.value) return void ElMessage.warning('班次起止时间不能相同')
-      if (futureDate.value && form.status !== 'scheduled')
-        return void ElMessage.warning('未来排班只能保存为待登记')
+      if (Boolean(form.start) !== Boolean(form.end))
+        return void ElMessage.warning('上班与下班时间需要成对填写')
       if (
-        form.status === 'present' &&
+        (!['normal', 'rest'].includes(form.status) || form.start || form.end) &&
+        !plannedHours.value
+      )
+        return void ElMessage.warning('请填写有效且不相同的班次起止时间')
+      if (futureDate.value && form.status === 'present')
+        return void ElMessage.warning('未来日期不能登记到岗')
+      if (form.status === 'present' && form.actualHours === null)
+        return void ElMessage.warning('请手工登记实际工时')
+      if (
+        canRegisterHours.value &&
+        form.actualHours !== null &&
         (!Number.isFinite(form.actualHours) ||
           form.actualHours < 0 ||
-          form.actualHours > plannedHours.value)
+          form.actualHours > (plannedHours.value || 24))
       )
-        return void ElMessage.warning(`实际工时应在 0 至 ${plannedHours.value} 小时之间`)
+        return void ElMessage.warning(`实际工时应在 0 至 ${plannedHours.value || 24} 小时之间`)
       await mutate('/attendance', {
         ...form,
         id: form.id || undefined,
-        actualHours: form.status === 'present' ? form.actualHours : 0
+        start: form.start || '',
+        end: form.end || '',
+        actualHours: canRegisterHours.value ? form.actualHours : form.status === 'rest' ? 0 : null
       })
       open.value = false
       ElMessage.success('排班考勤已保存')

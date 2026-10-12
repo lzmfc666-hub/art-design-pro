@@ -233,7 +233,16 @@ test('外观审计详情只对配置管理员开放，普通日志与导出不�
     assert.equal(log.after, null)
     assert.ok(log.actorName && log.createdAt)
   }
-  const exported = buildExportSheets(plain, {
+  rejected(
+    () =>
+      buildExportSheets(plain, {
+        modules: [{ id: 'logs', fields: ['action', 'before', 'after'] }]
+      }),
+    403
+  )
+  const exportedActor = f.staff('appearance-export-check', 'hr', { 'logs.view': true })
+  const exportedData = f.service.bootstrap(exportedActor.id, '2026-10', { exportMode: true })
+  const exported = buildExportSheets(exportedData, {
     modules: [{ id: 'logs', fields: ['action', 'before', 'after'] }]
   }).sheets[0]
   assert.equal(JSON.stringify(exported).includes('brand-private-old.png'), false)

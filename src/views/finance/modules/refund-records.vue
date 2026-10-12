@@ -178,14 +178,20 @@
   })
   const router = useRouter()
   const statusLabels = { pending: '待审核', paid: '已退款', rejected: '已驳回' }
-  const search = ref({ keyword: '', status: '' })
+  const search = ref({ orderNo: '', reason: '', status: '' })
   const applied = ref({ ...search.value })
   const searchItems = [
     {
-      key: 'keyword',
-      label: '退款查询',
+      key: 'orderNo',
+      label: '关联订单号',
       type: 'input',
-      props: { placeholder: '订单号 / 原因', clearable: true }
+      props: { placeholder: '按订单号搜索', clearable: true }
+    },
+    {
+      key: 'reason',
+      label: '退款原因',
+      type: 'input',
+      props: { placeholder: '按原因搜索', clearable: true }
     },
     {
       key: 'status',
@@ -209,10 +215,10 @@
             (applied.value.status === 'manual' &&
               row.manualRewardReview &&
               !row.manualResolution)) &&
-          (!applied.value.keyword ||
-            `${orderName(row.orderId)} ${row.reason}`
-              .toLowerCase()
-              .includes(applied.value.keyword.toLowerCase()))
+          orderName(row.orderId)
+            .toLowerCase()
+            .includes(applied.value.orderNo.trim().toLowerCase()) &&
+          row.reason.toLowerCase().includes(applied.value.reason.trim().toLowerCase())
       )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   )
@@ -267,7 +273,7 @@
     resetPage()
   }
   function resetSearch() {
-    search.value = { keyword: '', status: '' }
+    search.value = { orderNo: '', reason: '', status: '' }
     applySearch()
   }
   function orderName(id: string) {

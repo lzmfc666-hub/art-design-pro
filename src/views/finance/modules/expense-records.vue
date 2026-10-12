@@ -125,14 +125,20 @@
   })
   const today = () =>
     new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date())
-  const search = ref({ keyword: '', status: 'active' })
+  const search = ref({ category: '', purpose: '', status: 'active' })
   const applied = ref({ ...search.value })
   const searchItems = [
     {
-      key: 'keyword',
-      label: '费用查询',
+      key: 'category',
+      label: '费用类别',
       type: 'input',
-      props: { placeholder: '类别 / 用途', clearable: true }
+      props: { placeholder: '按类别搜索', clearable: true }
+    },
+    {
+      key: 'purpose',
+      label: '费用用途',
+      type: 'input',
+      props: { placeholder: '按用途搜索', clearable: true }
     },
     {
       key: 'status',
@@ -153,8 +159,8 @@
         (row) =>
           (!applied.value.status ||
             (applied.value.status === 'deleted' ? !!row.deletedAt : !row.deletedAt)) &&
-          (!applied.value.keyword ||
-            `${row.category} ${row.purpose}`.includes(applied.value.keyword))
+          row.category.toLowerCase().includes(applied.value.category.trim().toLowerCase()) &&
+          row.purpose.toLowerCase().includes(applied.value.purpose.trim().toLowerCase())
       )
       .sort((a, b) => b.date.localeCompare(a.date))
   )
@@ -183,7 +189,7 @@
     resetPage()
   }
   function resetSearch() {
-    search.value = { keyword: '', status: 'active' }
+    search.value = { category: '', purpose: '', status: 'active' }
     applySearch()
   }
   function personName(id: string) {

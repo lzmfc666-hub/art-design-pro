@@ -100,20 +100,26 @@
   const { data, user, loading, can, refresh } = useStudio()
   const isAdmin = computed(() => ['super_admin', 'admin'].includes(user.value?.role || ''))
   const tab = ref('staff')
-  const search = ref<SearchParams>({ keyword: '', role: '', status: '' })
-  const applied = reactive<SearchParams>({ keyword: '', role: '', status: '' })
+  const emptySearch = (): SearchParams => ({ name: '', username: '', role: '', status: '' })
+  const search = ref<SearchParams>(emptySearch())
+  const applied = reactive<SearchParams>(emptySearch())
   const route = useRoute()
   watch(
-    () => route.query.keyword,
-    (value) => {
-      search.value.keyword = typeof value === 'string' ? value : ''
-      applied.keyword = search.value.keyword
+    [() => route.query.name, () => route.query.username, () => route.query.keyword],
+    ([name, username, keyword]) => {
+      if (route.path !== '/system/user') return
+      search.value.name =
+        typeof name === 'string' ? name : typeof keyword === 'string' ? keyword : ''
+      search.value.username = typeof username === 'string' ? username : ''
+      applied.name = search.value.name
+      applied.username = search.value.username
     },
     { immediate: true }
   )
   watch(
     () => route.query.role,
     (value) => {
+      if (route.path !== '/system/user') return
       const role = typeof value === 'string' && value in roleLabels ? value : ''
       search.value.role = role
       applied.role = role
@@ -125,9 +131,8 @@
     (data.value?.users || []).filter(
       (row) =>
         (tab.value === 'players' ? row.role === 'player' : row.role !== 'player') &&
-        `${row.name} ${row.username}`
-          .toLowerCase()
-          .includes((applied.keyword || '').toLowerCase()) &&
+        row.name.toLowerCase().includes((applied.name || '').trim().toLowerCase()) &&
+        row.username.toLowerCase().includes((applied.username || '').trim().toLowerCase()) &&
         (!applied.role || row.role === applied.role) &&
         (!applied.status || row.status === applied.status)
     )
@@ -151,11 +156,11 @@
     dialogVisible.value = true
   }
   function applySearch() {
-    Object.assign(applied, { keyword: '', role: '', status: '' }, search.value)
+    Object.assign(applied, emptySearch(), search.value)
     resetPage()
   }
   function resetSearch() {
-    search.value = { keyword: '', role: '', status: '' }
+    search.value = emptySearch()
     applySearch()
   }
   async function refreshData() {

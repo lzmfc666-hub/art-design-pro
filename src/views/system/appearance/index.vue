@@ -2,7 +2,7 @@
   <div class="appearance-page">
     <BusinessPageHeader
       title="界面外观"
-      description="设置工作室名称、图标和界面背景，让业务后台呈现统一的品牌风格。"
+      description="设置品牌、业务与登录背景、文案及毛玻璃效果。"
       icon="ri:palette-line"
       badge="工作室共享配置"
     >
@@ -57,6 +57,7 @@
         <ElTabs v-model="tab" :before-leave="() => !busy">
           <ElTabPane name="brand" label="品牌与页面背景" :disabled="busy" />
           <ElTabPane name="hero" label="主页横幅" :disabled="busy" />
+          <ElTabPane name="login" label="登录外观" :disabled="busy" />
           <ElTabPane name="icons" label="菜单与快捷图标" :disabled="busy" />
         </ElTabs>
         <ElForm
@@ -80,6 +81,17 @@
                   show-word-limit
                   placeholder="输入工作室名称"
               /></ElFormItem>
+              <ElFormItem label="全站毛玻璃效果">
+                <div class="switch-control">
+                  <ElSwitch v-model="form.glass.enabled" />
+                  <span>{{
+                    form.glass.enabled ? '卡片、顶栏与弹窗使用柔和透明表面' : '使用原不透明表面'
+                  }}</span>
+                </div>
+                <p class="field-tip"
+                  >支持浅色和深色；浏览器不支持模糊或偏好减少透明时，自动使用清晰表面。</p
+                >
+              </ElFormItem>
               <ElFormItem label="工作室 Logo"
                 ><AppearanceImageUpload
                   label="Logo"
@@ -199,6 +211,79 @@
             </section>
           </template>
 
+          <template v-else-if="tab === 'login'">
+            <section class="settings-section">
+              <div class="section-title"
+                ><ArtSvgIcon icon="ri:login-box-line" /><div>
+                  <h3>登录页面</h3><p>这里的品牌、背景和文字会在登录前公开展示。</p>
+                </div></div
+              >
+              <ElFormItem label="登录标题" required
+                ><ElInput v-model="form.login.title" maxlength="80" show-word-limit
+              /></ElFormItem>
+              <ElFormItem label="登录副标题"
+                ><ElInput
+                  v-model="form.login.subtitle"
+                  type="textarea"
+                  :rows="2"
+                  maxlength="200"
+                  show-word-limit
+              /></ElFormItem>
+              <ElFormItem label="登录说明"
+                ><ElInput
+                  v-model="form.login.description"
+                  type="textarea"
+                  :rows="3"
+                  maxlength="800"
+                  show-word-limit
+              /></ElFormItem>
+              <ElFormItem label="背景类型"
+                ><ElRadioGroup v-model="form.login.background.mode">
+                  <ElRadioButton value="default">原默认背景</ElRadioButton
+                  ><ElRadioButton value="color">纯色</ElRadioButton
+                  ><ElRadioButton value="image">图片</ElRadioButton>
+                </ElRadioGroup></ElFormItem
+              >
+              <ElFormItem v-if="form.login.background.mode === 'color'" label="登录背景颜色（HEX）">
+                <div class="color-control"
+                  ><ElColorPicker
+                    :model-value="form.login.background.color"
+                    color-format="hex"
+                    :predefine="pageColors"
+                    @update:model-value="updateColor('login', $event)" /><ElInput
+                    v-model="form.login.background.color"
+                    maxlength="7"
+                    placeholder="#EEF4FF"
+                /></div>
+              </ElFormItem>
+              <template v-if="form.login.background.mode === 'image'">
+                <ElFormItem label="登录背景图片"
+                  ><AppearanceImageUpload
+                    label="登录背景"
+                    :image-url="form.login.background.image?.url"
+                    :filename="form.login.background.image?.name"
+                    recommended="此图片保存后可在登录前查看，请使用适合公开展示的图片"
+                    :disabled="locked"
+                    @uploaded="setImage('login', $event)"
+                    @remove="removeImage('login')"
+                    @busy="uploading = $event"
+                /></ElFormItem>
+                <ElFormItem label="图片遮罩强度"
+                  ><div class="overlay-control"
+                    ><ElSlider v-model="form.login.background.overlay" :min="0" :max="90" /><span
+                      >{{ form.login.background.overlay }}%</span
+                    ></div
+                  ><p class="field-tip"
+                    >浅色与深色模式使用对应遮罩，建议让登录文字保持清晰。</p
+                  ></ElFormItem
+                >
+              </template>
+              <p class="field-tip"
+                >文案以纯文本显示。保存后刷新登录页即可查看；业务页面背景和菜单配置不会公开读取。</p
+              >
+            </section>
+          </template>
+
           <template v-else>
             <section class="settings-section"
               ><div class="section-title"
@@ -272,7 +357,30 @@
               }}</ElTag></div
             ></template
           >
-          <div class="mini-layout" :style="pagePreviewStyle"
+          <div
+            v-if="tab === 'login'"
+            class="mini-login"
+            :class="{ 'mini-login-glass': form.glass.enabled }"
+            :style="loginPreviewStyle"
+          >
+            <div class="mini-login-brand"
+              ><img v-if="form.logo" :src="form.logo.url" alt="Logo 草稿" /><strong>{{
+                form.studioName
+              }}</strong></div
+            >
+            <div class="mini-login-form"
+              ><h3>{{ form.login.title }}</h3
+              ><p>{{ form.login.subtitle }}</p
+              ><div class="mini-login-field">工作室账号</div><div class="mini-login-field">密码</div
+              ><small>{{ form.login.description }}</small
+              ><div class="mini-login-button">登录</div></div
+            >
+          </div>
+          <div
+            v-else
+            class="mini-layout"
+            :class="{ 'mini-layout-glass': form.glass.enabled }"
+            :style="pagePreviewStyle"
             ><div
               v-if="form.page.mode === 'image'"
               class="mini-page-veil"
@@ -309,7 +417,7 @@
                 ><div v-for="index in 4" :key="index"><i /><span /><span /></div></div></div
           ></div>
           <p class="preview-description"
-            >小预览展示品牌、背景和图标布局。点击“预览应用”可在当前窗口查看实际外观。</p
+            >小预览随编辑更新。点击“预览应用”可在当前窗口查看实际外观，登录页可在此预览。</p
           >
           <div class="preview-actions"
             ><ElButton type="primary" plain :disabled="locked" @click="applyPreview"
@@ -338,6 +446,7 @@
   import AppearanceImageUpload from './modules/appearance-image-upload.vue'
   import { useAppearanceStore } from '@/store/modules/appearance'
   import { useStudio, formatTime } from '@/hooks/business/useStudio'
+  import { appearanceBackgroundStyle } from '@/hooks/business/useAppearance'
   import {
     APPEARANCE_ICON_OPTIONS,
     APPEARANCE_ICON_TARGETS,
@@ -373,6 +482,8 @@
       logo: value.logo,
       page: value.page,
       hero: value.hero,
+      login: value.login,
+      glass: value.glass,
       icons: value.icons
     })
   const dirty = computed(
@@ -439,22 +550,26 @@
           }
         : {}
   )
+  const loginPreviewStyle = computed(() => appearanceBackgroundStyle(form.value.login.background))
+  const backgroundFor = (target: 'page' | 'hero' | 'login') =>
+    target === 'login' ? form.value.login.background : form.value[target]
 
-  function setImage(target: 'logo' | 'page' | 'hero', attachment: Attachment) {
+  function setImage(target: 'logo' | 'page' | 'hero' | 'login', attachment: Attachment) {
     if (!canEdit.value) return
     if (target === 'logo') form.value.logo = attachment
-    else form.value[target].image = attachment
+    else backgroundFor(target).image = attachment
   }
-  function removeImage(target: 'logo' | 'page' | 'hero') {
+  function removeImage(target: 'logo' | 'page' | 'hero' | 'login') {
     if (locked.value) return
     if (target === 'logo') form.value.logo = null
     else {
-      form.value[target].image = null
-      if (form.value[target].mode === 'image') form.value[target].mode = 'default'
+      const background = backgroundFor(target)
+      background.image = null
+      if (background.mode === 'image') background.mode = 'default'
     }
   }
-  function updateColor(target: 'page' | 'hero', value: string | null | undefined) {
-    if (!locked.value && value) form.value[target].color = value
+  function updateColor(target: 'page' | 'hero' | 'login', value: string | null | undefined) {
+    if (!locked.value && value) backgroundFor(target).color = value
   }
   function setIcon(key: string, value: string) {
     if (
@@ -483,6 +598,32 @@
       )
     )
       return '工作室名称需为 1 至 40 个字符，不含 HTML 符号'
+    for (const [text, label, max] of [
+      [value.login.title, '登录标题', 80],
+      [value.login.subtitle, '登录副标题', 200],
+      [value.login.description, '登录说明', 800]
+    ] as const) {
+      if (
+        text.trim().length > max ||
+        /[<>]/.test(text) ||
+        [...text].some((character) => {
+          const code = character.charCodeAt(0)
+          return (code < 32 && ![9, 10, 13].includes(code)) || code === 127
+        })
+      )
+        return `${label}需为纯文本，最多 ${max} 个字符`
+    }
+    if (!value.login.title.trim()) return '请填写登录标题'
+    if (typeof value.glass.enabled !== 'boolean') return '请选择是否启用毛玻璃'
+    const loginBackground = value.login.background
+    if (!/^#[0-9a-fA-F]{6}$/.test(loginBackground.color)) return '登录背景颜色需为 #RRGGBB 格式'
+    if (
+      !Number.isInteger(loginBackground.overlay) ||
+      loginBackground.overlay < 0 ||
+      loginBackground.overlay > 90
+    )
+      return '登录背景遮罩应为0至90%'
+    if (loginBackground.mode === 'image' && !loginBackground.image) return '请先上传登录背景图片'
     for (const [key, label, max] of [
       ['page', '页面', 90],
       ['hero', '横幅', 70]
@@ -621,7 +762,7 @@
     confirming.value = true
     try {
       await ElMessageBox.confirm(
-        '将工作室名称、Logo、页面背景、主页横幅及菜单图标恢复为默认外观并保存。历史上传图片继续保留。',
+        '将品牌、页面背景、主页横幅、登录背景与文案、毛玻璃和菜单图标恢复为默认外观并保存。历史上传图片继续保留。',
         '恢复工作室默认外观',
         {
           confirmButtonText: '确认恢复并保存',
@@ -728,6 +869,79 @@
 </script>
 
 <style scoped lang="scss">
+  .mini-login {
+    min-height: 340px;
+    padding: 18px;
+    background: var(--el-color-primary-light-9);
+    border-radius: 12px;
+  }
+
+  .mini-login-brand {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 18px;
+    font-size: 12px;
+
+    img {
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+    }
+  }
+
+  .mini-login-form {
+    padding: 18px;
+    overflow-wrap: anywhere;
+    background: var(--default-box-color);
+    border: 1px solid var(--default-border);
+    border-radius: 12px;
+
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    p,
+    small {
+      display: block;
+      margin-top: 10px;
+      font-size: 10px;
+      color: var(--art-gray-600);
+      white-space: pre-line;
+    }
+  }
+
+  .mini-login-field {
+    padding: 8px;
+    margin-top: 12px;
+    font-size: 10px;
+    color: var(--art-gray-500);
+    border: 1px solid var(--default-border);
+    border-radius: 6px;
+  }
+
+  .mini-login-button {
+    padding: 8px;
+    margin-top: 14px;
+    font-size: 11px;
+    color: white;
+    text-align: center;
+    background: var(--theme-color);
+    border-radius: 6px;
+  }
+
+  @supports ((backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px))) {
+    .mini-login-glass .mini-login-form,
+    .mini-layout-glass .mini-sidebar,
+    .mini-layout-glass .mini-topbar,
+    .mini-layout-glass .mini-data-cards > div {
+      background: color-mix(in srgb, var(--default-box-color) 88%, transparent);
+      -webkit-backdrop-filter: blur(10px);
+      backdrop-filter: blur(10px);
+    }
+  }
+
   .appearance-layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 360px;

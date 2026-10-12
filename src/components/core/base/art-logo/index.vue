@@ -35,7 +35,8 @@
   const failedLogoUrl = ref('')
   const logoUrl = computed(() => {
     const url = config.value.logo?.url
-    return typeof url === 'string' && /^\/api\/studio\/uploads\/[A-Za-z0-9_-]+$/.test(url)
+    return typeof url === 'string' &&
+      /^\/api\/studio\/(?:uploads|public-assets)\/[A-Za-z0-9_-]+$/.test(url)
       ? url
       : ''
   })

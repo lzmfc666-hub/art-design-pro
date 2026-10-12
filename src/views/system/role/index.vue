@@ -89,22 +89,30 @@
   }
   const router = useRouter()
   const { data, loading, refresh } = useStudio()
-  const search = ref({ keyword: '' })
-  const applied = reactive({ keyword: '' })
+  const search = ref({ name: '', code: '' })
+  const applied = reactive({ name: '', code: '' })
   const searchItems = [
     {
-      key: 'keyword',
+      key: 'name',
       type: 'input',
-      label: '角色名称 / 编码',
-      props: { placeholder: '搜索岗位角色', clearable: true }
+      label: '角色名称',
+      props: { placeholder: '按角色名称搜索', clearable: true }
+    },
+    {
+      key: 'code',
+      type: 'input',
+      label: '角色编码',
+      props: { placeholder: '按角色编码搜索', clearable: true }
     }
   ]
   const rows = computed<RoleRow[]>(() =>
     Object.entries(data.value?.roleDefaults || {})
-      .filter(([role]) =>
-        `${role} ${roleLabels[role as Role]}`
-          .toLowerCase()
-          .includes((applied.keyword || '').toLowerCase())
+      .filter(
+        ([role]) =>
+          roleLabels[role as Role]
+            .toLowerCase()
+            .includes((applied.name || '').trim().toLowerCase()) &&
+          role.toLowerCase().includes((applied.code || '').trim().toLowerCase())
       )
       .map(([role, permissions]) => {
         const members = data.value?.users.filter((staff) => staff.role === role) || []
@@ -134,11 +142,11 @@
     permissionVisible.value = true
   }
   function applySearch() {
-    applied.keyword = search.value.keyword || ''
+    Object.assign(applied, { name: '', code: '' }, search.value)
     resetPage()
   }
   function resetSearch() {
-    search.value.keyword = ''
+    search.value = { name: '', code: '' }
     applySearch()
   }
   async function refreshData() {

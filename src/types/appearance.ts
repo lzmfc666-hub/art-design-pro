@@ -11,11 +11,20 @@ export interface AppearanceConfig {
   logo: Attachment | null
   page: AppearanceBackground
   hero: AppearanceBackground & { showDecoration: boolean }
+  login: LoginAppearance
+  glass: { enabled: boolean }
   icons: Record<string, string>
   revision: number
   updatedAt?: string
   updatedBy?: string
 }
+export interface LoginAppearance {
+  title: string
+  subtitle: string
+  description: string
+  background: AppearanceBackground
+}
+export type PublicAppearance = Pick<AppearanceConfig, 'studioName' | 'logo' | 'login' | 'glass'>
 
 export const APPEARANCE_ICON_TARGETS = [
   { key: 'dashboard', label: '工作台', icon: 'ri:pie-chart-line' },
@@ -68,8 +77,32 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   logo: null,
   page: { mode: 'default', color: '#f5f8fc', image: null, overlay: 50 },
   hero: { mode: 'default', color: '#80b7ff', image: null, overlay: 35, showDecoration: true },
+  login: {
+    title: '欢迎使用电竞工作室后台',
+    subtitle: '统一管理订单、人员与财务',
+    description: '账号由工作室管理员分配，忘记密码请联系管理员。',
+    background: { mode: 'default', color: '#eef4ff', image: null, overlay: 50 }
+  },
+  glass: { enabled: false },
   icons: {},
   revision: 0
 }
 export const cloneAppearance = (value: AppearanceConfig): AppearanceConfig =>
   JSON.parse(JSON.stringify(value))
+
+/** 旧数据库外观缺少新设置时，保持原行为并补充默认登录页。 */
+export function completeAppearance(value: AppearanceConfig): AppearanceConfig {
+  const defaults = cloneAppearance(DEFAULT_APPEARANCE)
+  return {
+    ...defaults,
+    ...value,
+    login: value.login
+      ? {
+          ...defaults.login,
+          ...value.login,
+          background: { ...defaults.login.background, ...value.login.background }
+        }
+      : defaults.login,
+    glass: value.glass ? { ...defaults.glass, ...value.glass } : defaults.glass
+  }
+}

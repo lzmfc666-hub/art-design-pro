@@ -38,7 +38,7 @@ function fixture(t) {
     paidAt: '2026-10-01T16:01:00.000Z',
     dispatchMode: 'pool'
   })
-  const staff = (role) =>
+  const staff = (role, permissionOverrides = {}) =>
     service.mutate('admin', '/users', {
       username: `export-${role}`,
       name: `测试${role}`,
@@ -46,24 +46,42 @@ function fixture(t) {
       status: 'active',
       levelId: 'priority',
       maxActiveOrders: 1,
-      permissionOverrides: {},
+      permissionOverrides,
       password
     })
-  const snapshot = (actor = 'admin') => service.bootstrap(actor, '2026-10', { exportMode: true })
+  const snapshot = (actor = 'admin', request = {}) =>
+    service.exportSnapshot(actor, { month: '2026-10', ...request })
   const exportSheet = (data, id, keys, filters = {}) =>
     buildExportSheets(data, { month: '2026-10', modules: [{ id, fields: keys }], filters })
       .sheets[0]
   return { service, staff, snapshot, exportSheet, order, customer, template }
 }
 
-test('导出模块按角色数据权限开放，客服无工资利润、打手仅本人资料和钱包', (t) => {
+test('客服与主管即使覆盖授权也禁导，其他账号仅导出各自业务权限内的数据', (t) => {
   const f = fixture(t)
-  const support = f.staff('support')
+  const support = f.staff('support', { 'reports.export': true })
+  const supportLead = f.staff('support_lead', { 'reports.export': true })
+  const operations = f.staff('operations')
   const hr = f.staff('hr')
   const player = f.staff('player')
-  const supportData = f.snapshot(support.id)
-  const supportModules = getExportCatalog(supportData).modules.map((row) => row.id)
-  assert.ok(supportModules.includes('orders') && supportModules.includes('customers'))
+  for (const actor of [support, supportLead]) {
+    const denied = f.service.bootstrap(actor.id, '2026-10')
+    assert.throws(
+      () => getExportCatalog(denied),
+      (error) => error instanceof ApiError && error.status === 403
+    )
+    assert.throws(
+      () => f.exportSheet(denied, 'profile', ['username']),
+      (error) => error instanceof ApiError && error.status === 403
+    )
+    assert.throws(
+      () => f.snapshot(actor.id),
+      (error) => error instanceof ApiError && error.status === 403
+    )
+  }
+  const operationsData = f.snapshot(operations.id)
+  const operationsModules = getExportCatalog(operationsData).modules.map((row) => row.id)
+  assert.ok(operationsModules.includes('orders') && operationsModules.includes('customers'))
   for (const id of [
     'overview',
     'days',
@@ -75,9 +93,9 @@ test('导出模块按角色数据权限开放，客服无工资利润、打手�
     'wallets',
     'withdrawals'
   ])
-    assert.ok(!supportModules.includes(id), id)
+    if (!['payroll', 'salaryPlans'].includes(id)) assert.ok(!operationsModules.includes(id), id)
   assert.throws(
-    () => f.exportSheet(supportData, 'payroll', ['total']),
+    () => f.exportSheet(operationsData, 'overview', ['net']),
     (error) => error instanceof ApiError && error.status === 403
   )
   const hrData = f.snapshot(hr.id)
@@ -100,6 +118,7 @@ test('导出模块按角色数据权限开放，客服无工资利润、打手�
 test('自选字段仅输出指定列，数字金额和长编号前导零保留原类型', (t) => {
   const f = fixture(t)
   const sheet = f.exportSheet(f.snapshot(), 'orders', ['externalOrderNo', 'gameId', 'amount'], {
+    keywordField: 'externalOrderNo',
     keyword: '00012345678901234567890'
   })
   assert.equal(sheet.rowCount, 1)
@@ -130,14 +149,20 @@ test('付款日期范围使用上海时区，预览限制不截总量，空筛�
     dateRange: ['2026-10-01', '2026-10-01']
   })
   assert.ok(!previous.rows.some((row) => row.orderNo === f.order.orderNo))
-  const empty = f.exportSheet(data, 'orders', ['amount'], { keyword: '无记录关键词' })
+  const empty = f.exportSheet(data, 'orders', ['amount'], {
+    keywordField: 'orderNo',
+    keyword: '无记录关键词'
+  })
   assert.equal(empty.rowCount, 0)
   assert.deepEqual(empty.rows, [])
   assert.equal(empty.fields[0].key, 'amount')
   const request = { modules: [{ id: 'orders', fields: ['orderNo'] }] }
   const preview = buildExportSheets(data, request, { previewLimit: 1 }).sheets[0]
   assert.equal(preview.rows.length, 1)
-  assert.equal(preview.rowCount, data.orders.length)
+  assert.equal(
+    preview.rowCount,
+    data.orders.filter((row) => row.createdAt.startsWith('2026-10')).length
+  )
   assert.throws(
     () => f.exportSheet(data, 'orders', ['orderNo'], { dateRange: ['2026-02-30', '2026-10-01'] }),
     (error) => error instanceof ApiError && error.status === 400
@@ -148,7 +173,7 @@ test('批量覆盖业务模块，空配置保持待配置而非零，静态配�
   const f = fixture(t)
   const data = f.snapshot()
   const catalog = getExportCatalog(data)
-  assert.ok(catalog.modules.length >= 24)
+  assert.equal(catalog.modules.length, 29)
   const result = buildExportSheets(data, {
     modules: catalog.modules.map((module) => ({
       id: module.id,
@@ -166,6 +191,23 @@ test('批量覆盖业务模块，空配置保持待配置而非零，静态配�
     result.sheets.every((sheet) =>
       sheet.rows.every((row) => !Object.keys(row).some((key) => key.startsWith('_')))
     )
+  )
+  const sources = result.sheets.find((row) => row.id === 'platforms')
+  assert.ok(!sources.fields.some((field) => field.key === 'operatorCommission'))
+  const xianyu = sources.rows.find((row) => row.id === 'xianyu')
+  assert.deepEqual(
+    [
+      xianyu.requiresShop,
+      xianyu.requiresExternalOrderNo,
+      xianyu.requiresReceipt,
+      xianyu.allowPayOnArrival
+    ],
+    ['是', '是', '否', '否']
+  )
+  const hall = sources.rows.find((row) => row.id === 'hall')
+  assert.deepEqual(
+    [hall.requiresShop, hall.requiresExternalOrderNo, hall.requiresReceipt, hall.allowPayOnArrival],
+    ['否', '否', '是', '是']
   )
 })
 
@@ -226,12 +268,109 @@ test('界面外观导出只投影所选配置和站内图片地址，普通账�
     () => f.exportSheet(adminData, 'appearance', ['data']),
     (error) => error instanceof ApiError && error.status === 400
   )
-  const support = f.staff('support')
-  const supportData = f.snapshot(support.id)
-  assert.equal(supportData.appearance.studioName, '外观导出工作室')
-  assert.ok(!getExportCatalog(supportData).modules.some((item) => item.id === 'appearance'))
+  const hr = f.staff('hr')
+  const hrData = f.snapshot(hr.id)
+  assert.equal(hrData.appearance.studioName, '外观导出工作室')
+  assert.ok(!getExportCatalog(hrData).modules.some((item) => item.id === 'appearance'))
   assert.throws(
-    () => f.exportSheet(supportData, 'appearance', ['studioName', 'logoUrl']),
+    () => f.exportSheet(hrData, 'appearance', ['studioName', 'logoUrl']),
     (error) => error instanceof ApiError && error.status === 403
+  )
+})
+
+function largeReferenceFixture(t) {
+  const service = createStudioService({ dbPath: ':memory:', password, seed: false })
+  t.after(() => service.close())
+  const customer = service.mutate('admin', '/customers', { name: '旧客户 ÉTHAN' })
+  const other = service.mutate('admin', '/customers', { name: '其他客户' })
+  const platform = service.mutate('admin', '/platforms', {
+    name: '独立来源É',
+    rules: {
+      requiresShop: true,
+      requiresExternalOrderNo: true,
+      requiresReceipt: false,
+      allowPayOnArrival: false
+    }
+  })
+  const shop = service.mutate('admin', '/shops', { platformId: platform.id, name: '旧店铺É' })
+  const target = service.mutate('admin', '/customer-order-references', {
+    customerId: customer.id,
+    platformId: platform.id,
+    shopId: shop.id,
+    externalOrderNo: '000-É-Référence'
+  })
+  // 直接填充合法关联表作为大数据夹具，避免生成十万条无关审计操作。
+  const insert = service.db.prepare('INSERT INTO customer_order_references VALUES(?,?,?,?,?)')
+  service.db.exec('BEGIN')
+  for (let index = 0; index < 100001; index++)
+    insert.run(`export-bulk-${index}`, other.id, 'xianyu', 'jindun', `BULK-${index}`)
+  service.db.exec('COMMIT')
+  const request = (
+    filters = {},
+    modules = [{ id: 'customerOrderReferences', fields: ['externalOrderNo'] }]
+  ) => ({
+    month: '2026-10',
+    period: { type: 'total' },
+    modules,
+    filters
+  })
+  const exportRows = (body) => {
+    const snapshot = service.exportSnapshot('admin', body)
+    return { snapshot, result: buildExportSheets(snapshot, body) }
+  }
+  return { service, customer, platform, shop, target, request, exportRows }
+}
+
+test('十万条之后的旧客户编号按所选字段和来源在SQL截取前筛选，Unicode大小写与导出一致', (t) => {
+  const f = largeReferenceFixture(t)
+  for (const filters of [
+    { keywordField: 'externalOrderNo', keyword: 'é-référence' },
+    { keywordField: 'customerName', keyword: 'éthan' },
+    { keywordField: 'platformName', keyword: '独立来源é' },
+    { keywordField: 'shopName', keyword: '旧店铺é' },
+    { platformId: f.platform.id },
+    { platformId: f.platform.id, keywordField: 'externalOrderNo', keyword: '000-É' }
+  ]) {
+    const { snapshot, result } = f.exportRows(f.request(filters))
+    assert.equal(snapshot.customerOrderReferenceCount, 1)
+    assert.equal(
+      getExportCatalog(snapshot).modules.find((row) => row.id === 'customerOrderReferences')
+        .rowCount,
+      1
+    )
+    assert.equal(result.sheets[0].rowCount, 1)
+    assert.deepEqual(result.sheets[0].rows, [{ externalOrderNo: f.target.externalOrderNo }])
+  }
+  const unmatched = f.exportRows(
+    f.request({ keywordField: 'customerName', keyword: f.target.externalOrderNo })
+  )
+  assert.equal(unmatched.snapshot.customerOrderReferenceCount, 0)
+  assert.equal(unmatched.result.sheets[0].rowCount, 0)
+  assert.equal(f.service.bootstrap('admin').orders.length, 0)
+})
+
+test('客户编号匹配超限明确拒绝且未选择该模块不受影响，筛选可缩小到完整可导出结果', (t) => {
+  const f = largeReferenceFixture(t)
+  const catalog = f.service.exportSnapshot('admin', { month: '2026-10' })
+  assert.equal(catalog.customerOrderReferenceCount, 100002)
+  for (const filters of [
+    {},
+    { platformId: 'xianyu' },
+    { keywordField: 'externalOrderNo', keyword: 'BULK-' }
+  ])
+    assert.throws(
+      () => f.service.exportSnapshot('admin', f.request(filters)),
+      (error) => error instanceof ApiError && error.status === 400 && error.message.includes('缩小')
+    )
+  const own = f.exportRows(f.request({}, [{ id: 'profile', fields: ['username'] }]))
+  assert.deepEqual(own.result.sheets[0].rows, [{ username: 'admin' }])
+  const empty = f.exportRows(
+    f.request({ platformId: f.platform.id, keywordField: 'externalOrderNo', keyword: 'BULK-' })
+  )
+  assert.equal(empty.snapshot.customerOrderReferenceCount, 0)
+  assert.deepEqual(empty.result.sheets[0].rows, [])
+  assert.throws(
+    () => f.exportRows(f.request({ keywordField: '__proto__', keyword: 'test' })),
+    (error) => error instanceof ApiError && error.status === 400
   )
 })

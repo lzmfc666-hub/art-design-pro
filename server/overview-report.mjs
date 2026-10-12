@@ -156,11 +156,13 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
             : null,
         profit: profit ? (report?.profit ?? null) : null,
         accepted: ordersVisible ? accepted.length : null,
-        expenses: expensesVisible
-          ? snapshot.expenses
-              .filter((row) => !row.deletedAt && row.date === date)
-              .reduce((total, row) => total + row.amount, 0)
-          : null,
+        expenses: profit
+          ? (report?.expenses ?? null)
+          : expensesVisible
+            ? snapshot.expenses
+                .filter((row) => !row.deletedAt && row.date === date)
+                .reduce((total, row) => total + row.amount, 0)
+            : null,
         personalNet: can('orders.view')
           ? snapshot.personalPerformance
             ? snapshot.personalPerformance

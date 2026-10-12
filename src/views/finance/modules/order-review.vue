@@ -85,14 +85,20 @@
   watch(detailBusy, (busy) => emit('busy', busy), { immediate: true })
   const { reload } = useFinanceActions()
   const router = useRouter()
-  const search = ref({ keyword: '', status: '' })
+  const search = ref({ orderNo: '', title: '', status: '' })
   const applied = ref({ ...search.value })
   const searchItems = [
     {
-      key: 'keyword',
-      label: '订单查询',
+      key: 'orderNo',
+      label: '订单号',
       type: 'input',
-      props: { placeholder: '订单号 / 项目', clearable: true }
+      props: { placeholder: '按订单号搜索', clearable: true }
+    },
+    {
+      key: 'title',
+      label: '订单项目',
+      type: 'input',
+      props: { placeholder: '按项目名称搜索', clearable: true }
     },
     {
       key: 'status',
@@ -113,8 +119,8 @@
         (row.status === 'review' ||
           (row.status === 'canceled' && row.compensationPending && !row.compensationSettled)) &&
         (!applied.value.status || row.status === applied.value.status) &&
-        (!applied.value.keyword ||
-          `${row.orderNo} ${row.title}`.toLowerCase().includes(applied.value.keyword.toLowerCase()))
+        row.orderNo.toLowerCase().includes(applied.value.orderNo.trim().toLowerCase()) &&
+        row.title.toLowerCase().includes(applied.value.title.trim().toLowerCase())
     )
   )
   const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =
@@ -134,7 +140,7 @@
     resetPage()
   }
   function resetSearch() {
-    search.value = { keyword: '', status: '' }
+    search.value = { orderNo: '', title: '', status: '' }
     applySearch()
   }
   function personName(id: string) {

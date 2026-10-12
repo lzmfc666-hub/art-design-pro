@@ -15,5 +15,6 @@ export const permissionLabels: Record<string, string> = {
   'templates.manage': '订单模板维护',
   'settings.manage': '来源和等级配置',
   'attendance.manage': '排班考勤管理',
-  'logs.view': '查看操作日志'
+  'logs.view': '查看操作日志',
+  'reports.export': '导出业务数据'
 }

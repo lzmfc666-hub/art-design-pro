@@ -7,7 +7,13 @@
       :badge="can('salary.all') ? '全员工资核算' : '本人工资'"
     >
       <template #actions>
-        <ElButton type="primary" plain :disabled="saving" @click="exportCurrent">
+        <ElButton
+          v-if="can('reports.export')"
+          type="primary"
+          plain
+          :disabled="saving"
+          @click="exportCurrent"
+        >
           <ArtSvgIcon icon="ri:file-excel-2-line" class="mr-1" />导出工资报表
         </ElButton>
       </template>
@@ -432,7 +438,7 @@
   const planRole = computed(() => staff.value.find((row) => row.id === plan.userId)?.role)
   const modeLabels = { base_commission: '底薪 + 提成', commission: '纯提成', fixed: '固定工资' }
   const participating = computed(() =>
-    (data.value?.platforms || []).filter((row) => row.operatorCommission)
+    (data.value?.platforms || []).filter((row) => row.id !== 'hall' && row.name !== '游戏大厅')
   )
   function personName(id: string) {
     return data.value?.users.find((row) => row.id === id)?.name || id
@@ -507,6 +513,7 @@
     if (route.query.tab !== value) void router.replace({ query: { ...route.query, tab: value } })
   }
   function exportCurrent() {
+    if (!can('reports.export')) return
     if (saving.value) return
     const modules =
       tab.value === 'history' ? 'payrollHistory' : tab.value === 'plans' ? 'salaryPlans' : 'payroll'

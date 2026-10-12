@@ -1,13 +1,15 @@
 <script setup lang="ts">
   import { computed, reactive, ref, watch } from 'vue'
   import { useRouter, onBeforeRouteLeave } from 'vue-router'
-  import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
+  import { ElMessage, ElMessageBox } from 'element-plus'
   import type { Attachment, OrderTemplate } from '@/types/studio'
   import { useStudio, money, formatTime } from '@/hooks/business/useStudio'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import BusinessUpload from '@/components/business/BusinessUpload.vue'
+  import { rulesForPlatform } from '@/utils/business/platform-rules'
   import { useMediaQuery } from '@vueuse/core'
 
-  const { data, user, can, mutate, upload, loading, refresh } = useStudio()
+  const { data, user, can, mutate, loading, refresh } = useStudio()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const router = useRouter()
   const saving = ref(false)
@@ -15,14 +17,20 @@
   const customerSaving = ref(false)
   const customerDialog = ref(false)
   const submitted = ref(false)
-  const customerDraft = reactive({ name: '', contact: '', gameId: '', remark: '' })
+  const customerDraft = reactive({
+    name: '',
+    contact: '',
+    gameId: '',
+    remark: '',
+    platformId: null as string | null
+  })
+  const operationBusy = computed(() => saving.value || uploading.value || customerSaving.value)
   const form = reactive({
     templateId: '',
     customerId: '',
     platformId: '',
     shopId: '',
     externalOrderNo: '',
-    channel: '微信',
     roomCode: '',
     gameId: '',
     map: '不限',
@@ -41,13 +49,18 @@
     { label: '选择项目', done: !!form.templateId },
     {
       label: '完善客户与来源',
-      done: !!form.customerId && !!form.platformId && !!(form.roomCode || form.gameId)
+      done:
+        !!form.customerId &&
+        !!form.platformId &&
+        !!(form.roomCode || form.gameId) &&
+        (!rules.value.requiresShop || !!form.shopId) &&
+        (!rules.value.requiresExternalOrderNo || !!form.externalOrderNo.trim())
     },
     {
       label: '核对收款与发布',
       done:
         form.payOnArrival ||
-        (!!form.receivedAmount && !!form.paidAt && (isXianyu.value || !!form.receipt))
+        (!!form.receivedAmount && !!form.paidAt && (!rules.value.requiresReceipt || !!form.receipt))
     }
   ])
   const activeStep = computed(() => {
@@ -93,12 +106,7 @@
   const selectedPlatform = computed(() =>
     data.value?.platforms.find((item) => item.id === form.platformId)
   )
-  const isHall = computed(
-    () => selectedPlatform.value?.id === 'hall' || selectedPlatform.value?.name === '游戏大厅'
-  )
-  const isXianyu = computed(
-    () => selectedPlatform.value?.id === 'xianyu' || selectedPlatform.value?.name === '闲鱼'
-  )
+  const rules = computed(() => rulesForPlatform(selectedPlatform.value))
   const shops = computed(
     () => data.value?.shops.filter((item) => item.platformId === form.platformId) ?? []
   )
@@ -125,10 +133,19 @@
     form.map = template.map || '不限'
     form.remark = template.remark
   }
+  function changeTemplate(id: string) {
+    const item = templates.value.find((template) => template.id === id)
+    if (item) selectTemplate(item)
+  }
+  function openCustomerDialog() {
+    if (operationBusy.value) return
+    customerDraft.platformId = form.platformId || null
+    customerDialog.value = true
+  }
   watch(
     () => form.platformId,
     () => {
-      form.shopId = isXianyu.value ? (shops.value[0]?.id ?? '') : ''
+      form.shopId = rules.value.requiresShop ? (shops.value[0]?.id ?? '') : ''
       form.payOnArrival = false
       form.externalOrderNo = ''
     }
@@ -137,7 +154,10 @@
     () => form.customerId,
     (id) => {
       const customer = data.value?.customers.find((item) => item.id === id)
-      if (customer) form.gameId = customer.gameId
+      if (customer) {
+        form.gameId = customer.gameId
+        if (!form.platformId && customer.platformId) form.platformId = customer.platformId
+      }
     }
   )
   watch(
@@ -147,26 +167,12 @@
     }
   )
 
-  async function uploadReceipt(file: UploadFile) {
-    if (!file.raw || uploading.value) return
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.raw.type)) {
-      ElMessage.warning('请上传 PNG、JPG 或 WebP 图片')
-      return
+  watch(
+    () => rules.value.allowPayOnArrival,
+    (allowed) => {
+      if (!allowed) form.payOnArrival = false
     }
-    if (file.raw.size > 8 * 1024 * 1024) {
-      ElMessage.warning('凭证图片不能超过 8 MB')
-      return
-    }
-    uploading.value = true
-    try {
-      form.receipt = await upload(file.raw)
-      ElMessage.success('付款凭证已上传')
-    } catch (error) {
-      ElMessage.error(errorText(error))
-    } finally {
-      uploading.value = false
-    }
-  }
+  )
 
   async function saveCustomer() {
     if (customerSaving.value) return
@@ -189,7 +195,13 @@
         )?.id ??
         ''
       customerDialog.value = false
-      Object.assign(customerDraft, { name: '', contact: '', gameId: '', remark: '' })
+      Object.assign(customerDraft, {
+        name: '',
+        contact: '',
+        gameId: '',
+        remark: '',
+        platformId: null
+      })
       ElMessage.success('客户已建档')
     } catch (error) {
       ElMessage.error(errorText(error))
@@ -199,7 +211,7 @@
   }
 
   async function submitOrder() {
-    if (saving.value || uploading.value) return
+    if (operationBusy.value) return
     const warning = !form.templateId
       ? '请先选择订单项目'
       : !form.customerId
@@ -212,23 +224,25 @@
               ? '请填写有效的客户订单金额'
               : form.reward === null || !Number.isFinite(form.reward) || form.reward < 0
                 ? '请填写有效的整单打手报酬'
-                : isXianyu.value && !form.shopId
-                  ? '请选择闲鱼店铺'
-                  : isXianyu.value && !form.externalOrderNo.trim()
-                    ? '请填写闲鱼平台订单号'
-                    : form.dispatchMode === 'direct' && !form.assignedTo
-                      ? '请选择要指派的打手'
-                      : !form.payOnArrival &&
-                          (form.receivedAmount === null || form.receivedAmount <= 0)
-                        ? '普通订单须先确认客户已付款'
+                : rules.value.requiresShop && !form.shopId
+                  ? '请选择来源店铺'
+                  : rules.value.requiresExternalOrderNo && !form.externalOrderNo.trim()
+                    ? '请填写平台订单号'
+                    : form.payOnArrival && !rules.value.allowPayOnArrival
+                      ? '当前订单来源不允许落地付'
+                      : form.dispatchMode === 'direct' && !form.assignedTo
+                        ? '请选择要指派的打手'
                         : !form.payOnArrival &&
-                            toCents(form.receivedAmount) !== toCents(form.amount)
-                          ? '普通订单须足额收款，请核对订单金额与实收金额'
-                          : !form.payOnArrival && !form.paidAt
-                            ? '请选择客户实际付款时间'
-                            : !form.payOnArrival && !isXianyu.value && !form.receipt
-                              ? '请上传客户付款凭证'
-                              : ''
+                            (form.receivedAmount === null || form.receivedAmount <= 0)
+                          ? '普通订单须先确认客户已付款'
+                          : !form.payOnArrival &&
+                              toCents(form.receivedAmount) !== toCents(form.amount)
+                            ? '普通订单须足额收款，请核对订单金额与实收金额'
+                            : !form.payOnArrival && !form.paidAt
+                              ? '请选择客户实际付款时间'
+                              : !form.payOnArrival && rules.value.requiresReceipt && !form.receipt
+                                ? '请上传客户付款凭证'
+                                : ''
     if (warning) {
       ElMessage.warning(warning)
       return
@@ -241,8 +255,8 @@
         reward: toCents(form.reward),
         receivedAmount: form.payOnArrival ? 0 : toCents(form.receivedAmount),
         paidAt: form.payOnArrival ? null : form.paidAt,
-        receipt: form.payOnArrival || isXianyu.value ? null : form.receipt,
-        shopId: isXianyu.value ? form.shopId : null,
+        receipt: form.payOnArrival || !rules.value.requiresReceipt ? null : form.receipt,
+        shopId: form.shopId || null,
         assignedTo: form.dispatchMode === 'direct' ? form.assignedTo : null,
         roomCode: form.roomCode.trim(),
         gameId: form.gameId.trim(),
@@ -262,7 +276,6 @@
           platformId: '',
           shopId: '',
           externalOrderNo: '',
-          channel: '微信',
           roomCode: '',
           gameId: '',
           map: '不限',
@@ -317,7 +330,7 @@
             novalidate
             :model="form"
             label-position="top"
-            :disabled="saving"
+            :disabled="operationBusy"
             @submit.prevent="submitOrder"
           >
             <ElFormItem label="订单项目" required>
@@ -325,12 +338,7 @@
                 v-model="form.templateId"
                 filterable
                 placeholder="选择已启用的订单模板"
-                @change="
-                  (id: string) => {
-                    const item = templates.find((t) => t.id === id)
-                    if (item) selectTemplate(item)
-                  }
-                "
+                @change="changeTemplate"
               >
                 <ElOption
                   v-for="item in templates"
@@ -357,21 +365,12 @@
                         :key="item.id"
                         :value="item.id"
                         :label="item.name + (item.contact ? ' · ' + item.contact : '')" /></ElSelect
-                    ><ElButton :disabled="customerSaving" @click="customerDialog = true"
+                    ><ElButton :disabled="operationBusy" @click="openCustomerDialog"
                       >新增</ElButton
                     ></div
                   ></ElFormItem
                 ></ElCol
               >
-              <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="沟通渠道"
-                  ><ElSelect v-model="form.channel" filterable allow-create default-first-option
-                    ><ElOption
-                      v-for="item in ['微信', '企业微信', '平台内沟通', '游戏内沟通']"
-                      :key="item"
-                      :value="item"
-                      :label="item" /></ElSelect></ElFormItem
-              ></ElCol>
               <ElCol :xs="24" :sm="12"
                 ><ElFormItem label="订单来源" required
                   ><ElSelect v-model="form.platformId" placeholder="选择来源"
@@ -381,9 +380,12 @@
                       :value="item.id"
                       :label="item.name" /></ElSelect></ElFormItem
               ></ElCol>
-              <ElCol v-if="isXianyu" :xs="24" :sm="12"
-                ><ElFormItem label="闲鱼店铺" required
-                  ><ElSelect v-model="form.shopId" placeholder="选择店铺"
+              <ElCol v-if="shops.length || rules.requiresShop" :xs="24" :sm="12"
+                ><ElFormItem label="来源店铺" :required="rules.requiresShop"
+                  ><ElSelect
+                    v-model="form.shopId"
+                    :clearable="!rules.requiresShop"
+                    placeholder="选择同来源店铺"
                     ><ElOption
                       v-for="item in shops"
                       :key="item.id"
@@ -394,11 +396,11 @@
                   ></ElFormItem
                 ></ElCol
               >
-              <ElCol v-if="isXianyu" :xs="24" :sm="12"
+              <ElCol v-if="rules.requiresExternalOrderNo" :xs="24" :sm="12"
                 ><ElFormItem label="平台订单号" required
                   ><ElInput
                     v-model="form.externalOrderNo"
-                    maxlength="100"
+                    maxlength="128"
                     placeholder="填写完整平台订单号" /></ElFormItem
               ></ElCol>
               <ElCol :xs="24" :sm="12"
@@ -461,7 +463,7 @@
                 placeholder="订单向打手开放后即可查看"
             /></ElFormItem>
             <ElDivider content-position="left">收款确认</ElDivider>
-            <ElFormItem v-if="isHall" label="大厅付款方式"
+            <ElFormItem v-if="rules.allowPayOnArrival" label="付款方式"
               ><ElSwitch v-model="form.payOnArrival" active-text="落地付：先发布，后补收款"
             /></ElFormItem>
             <ElAlert
@@ -492,33 +494,15 @@
                       format="YYYY-MM-DD HH:mm"
                       class="!w-full" /></ElFormItem></ElCol
               ></ElRow>
-              <ElFormItem v-if="!isXianyu" label="付款凭证" required
-                ><ElUpload
-                  :auto-upload="false"
-                  :show-file-list="false"
-                  :on-change="uploadReceipt"
-                  :disabled="uploading || saving"
-                  accept="image/png,image/jpeg,image/webp"
-                  ><ElButton :loading="uploading"
-                    ><ArtSvgIcon icon="ri:upload-2-line" class="mr-1" />{{
-                      form.receipt ? '替换凭证' : '上传付款凭证'
-                    }}</ElButton
-                  ><template #tip
-                    ><p class="text-xs text-g-500">JPG / PNG / WebP，最大 8MB</p></template
-                  ></ElUpload
-                ><ElLink
-                  v-if="form.receipt"
-                  :href="form.receipt.url"
-                  target="_blank"
-                  rel="noopener"
-                  type="primary"
-                  class="ml-3"
-                  >{{ form.receipt.name }}</ElLink
-                ></ElFormItem
-              >
+              <ElFormItem v-if="rules.requiresReceipt" label="付款凭证" required
+                ><BusinessUpload
+                  v-model="form.receipt"
+                  :disabled="saving || customerSaving"
+                  @busy="uploading = $event"
+              /></ElFormItem>
               <ElAlert
                 v-else
-                title="闲鱼订单免传付款截图，请核对平台订单号与实际付款时间。"
+                title="当前来源无需付款截图，请核对实际付款时间与相关平台信息。"
                 type="info"
                 :closable="false"
                 class="mb-5"
@@ -548,12 +532,15 @@
               :closable="false"
             />
             <div class="flex justify-end gap-3 mt-5"
-              ><ElButton v-if="can('orders.view')" @click="router.push('/orders/list')"
+              ><ElButton
+                v-if="can('orders.view')"
+                :disabled="operationBusy"
+                @click="router.push('/orders/list')"
                 >返回订单</ElButton
               ><ElButton
                 type="primary"
                 :loading="saving"
-                :disabled="uploading"
+                :disabled="uploading || customerSaving"
                 native-type="submit"
                 >{{ form.payOnArrival ? '发布落地付订单' : '确认收款并发布订单' }}</ElButton
               ></div
@@ -625,9 +612,17 @@
         label-position="top"
         :disabled="customerSaving"
         @submit.prevent="saveCustomer"
-        ><ElFormItem label="客户姓名 / 称呼" required
+        ><ElFormItem label="客户名称" required
           ><ElInput v-model="customerDraft.name" maxlength="100" /></ElFormItem
-        ><ElFormItem label="联系方式"
+        ><ElFormItem label="客户来源"
+          ><ElSelect v-model="customerDraft.platformId" clearable placeholder="选择来源"
+            ><ElOption
+              v-for="item in data?.platforms || []"
+              :key="item.id"
+              :value="item.id"
+              :label="item.name" /></ElSelect
+        ></ElFormItem>
+        <ElFormItem label="联系方式"
           ><ElInput v-model="customerDraft.contact" maxlength="100" /></ElFormItem
         ><ElFormItem label="客户游戏 ID"
           ><ElInput v-model="customerDraft.gameId" maxlength="100" /></ElFormItem

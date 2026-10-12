@@ -1,6 +1,10 @@
 <!-- 登录页面 -->
 <template>
-  <div class="flex w-full h-screen">
+  <div
+    class="auth-page flex w-full min-h-screen"
+    :class="{ 'auth-custom-background': config.login.background.mode !== 'default' }"
+    :style="loginBackground"
+  >
     <LoginLeftView />
 
     <div class="relative flex-1">
@@ -8,8 +12,10 @@
 
       <div class="auth-right-wrap">
         <div class="form">
-          <h3 class="title">{{ $t('login.title') }}</h3>
-          <p class="sub-title">{{ $t('login.subTitle') }}</p>
+          <h3 class="title">{{ config.login.title }}</h3>
+          <p v-if="config.login.subtitle" class="sub-title whitespace-pre-line">{{
+            config.login.subtitle
+          }}</p>
           <ElAlert
             v-if="studioError"
             :title="studioError"
@@ -69,7 +75,11 @@
               </p>
             </div>
 
-            <p class="mt-2 text-sm text-gray-500">请使用工作室分配的账号，忘记密码请联系管理员。</p>
+            <p
+              v-if="config.login.description"
+              class="login-description mt-2 text-sm text-g-600 whitespace-pre-line"
+              >{{ config.login.description }}</p
+            >
 
             <div style="margin-top: 30px">
               <ElButton
@@ -90,7 +100,7 @@
 </template>
 
 <script setup lang="ts">
-  import AppConfig from '@/config'
+  import { useAppearance, appearanceBackgroundStyle } from '@/hooks/business/useAppearance'
   import { useUserStore } from '@/store/modules/user'
   import { useI18n } from 'vue-i18n'
   import { fetchLogin } from '@/api/auth'
@@ -99,6 +109,8 @@
   import { useStudio } from '@/hooks/business/useStudio'
 
   defineOptions({ name: 'Login' })
+  const { config } = useAppearance()
+  const loginBackground = computed(() => appearanceBackgroundStyle(config.value.login.background))
 
   const settingStore = useSettingStore()
   const { isDark } = storeToRefs(settingStore)
@@ -119,7 +131,7 @@
   const isPassing = ref(false)
   const isClickPass = ref(false)
 
-  const systemName = AppConfig.systemInfo.name
+  const systemName = computed(() => config.value.studioName)
   const formRef = ref<FormInstance>()
 
   const formData = reactive({
@@ -154,13 +166,19 @@
       // 登录请求
       const { username, password } = formData
 
-      const userInfo = await fetchLogin({
+      const { maintenanceNotice, ...userInfo } = await fetchLogin({
         userName: username,
         password
       })
 
       userStore.setUserInfo(userInfo)
       userStore.setLoginStatus(true)
+
+      if (maintenanceNotice) {
+        ElMessage.warning({ message: maintenanceNotice, duration: 8000 })
+        await router.push('/system/logs')
+        return
+      }
 
       // 登录成功处理
       showLoginSuccessNotice()
@@ -193,7 +211,7 @@
         type: 'success',
         duration: 2500,
         zIndex: 10000,
-        message: `${t('login.success.message')}, ${systemName}!`
+        message: `${t('login.success.message')}, ${systemName.value}!`
       })
     }, 1000)
   }

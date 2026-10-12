@@ -11,7 +11,9 @@
           <ArtSvgIcon icon="ri:refresh-line" class="mr-1" />刷新记录
         </ElButton>
         <ElButton
-          v-if="activeTab && (activeTab !== 'review' || can('orders.view'))"
+          v-if="
+            can('reports.export') && activeTab && (activeTab !== 'review' || can('orders.view'))
+          "
           type="primary"
           plain
           :disabled="operationBusy"
@@ -98,6 +100,10 @@
         v-else-if="activeTab === 'expenses' && can('finance.expenses')"
         @busy="operationBusy = $event"
       />
+      <PlayerAdjustments
+        v-else-if="activeTab === 'adjustments' && can('finance.withdrawals')"
+        @busy="operationBusy = $event"
+      />
       <ElEmpty v-else description="当前账号没有财务结算权限" />
     </ElCard>
   </div>
@@ -114,6 +120,7 @@
   import RefundRecords from '../modules/refund-records.vue'
   import WithdrawalRecords from '../modules/withdrawal-records.vue'
   import ExpenseRecords from '../modules/expense-records.vue'
+  import PlayerAdjustments from '../modules/player-adjustments.vue'
 
   defineOptions({ name: 'Settlement' })
   const { can, data, loading, refresh, selectedMonth } = useStudio()
@@ -165,6 +172,11 @@
     monthExpenses.value.reduce((sum, row) => sum + row.amount, 0)
   )
   const sections: Record<string, { title: string; description: string; modules: string }> = {
+    adjustments: {
+      title: '打手扣款与补款',
+      description: '独立登记金额和原因，超出可用余额的差额由财务人工处理。',
+      modules: 'playerAdjustments,wallets'
+    },
     review: {
       title: '核查交付，再确认结算',
       description: '查看上报材料与订单金额，处理待验收订单和取消补偿。',
@@ -192,7 +204,8 @@
       { name: 'review', label: '订单验收 / 取消补偿', permission: 'finance.review' },
       { name: 'refunds', label: '客户退款', permission: 'finance.refunds' },
       { name: 'withdrawals', label: '打手提现', permission: 'finance.withdrawals' },
-      { name: 'expenses', label: '费用报账', permission: 'finance.expenses' }
+      { name: 'expenses', label: '费用报账', permission: 'finance.expenses' },
+      { name: 'adjustments', label: '打手扣款 / 补款', permission: 'finance.withdrawals' }
     ].filter((item) => can(item.permission))
   )
   watch(
@@ -232,6 +245,7 @@
     if (tab && route.query.tab !== tab) void router.replace({ query: { ...route.query, tab } })
   }
   function exportCurrent() {
+    if (!can('reports.export')) return
     if (!operationBusy.value && activeDescription.value)
       void router.push({
         path: '/reports/export',

@@ -332,3 +332,93 @@
     width: calc(100% - 24px);
   }
 }
+
+// 手机闭合菜单宽度为零时，原菜单子项仍会溢出；双列保留独立导航列。
+@media screen and (width <= 800px) {
+  .layout-sidebar:not(:has(.dual-menu-left)) .menu-left-close {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
+// 原 Vue DevTools 插件继续保留；登录前和普通岗位不显示入口。
+#__vue-devtools-container__ {
+  display: none !important;
+}
+
+html.studio-super-admin #__vue-devtools-container__ {
+  display: block !important;
+}
+
+.auth-page {
+  min-height: 100dvh;
+  overflow-wrap: anywhere;
+
+  > .relative {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding-top: 72px;
+    padding-bottom: 24px;
+  }
+
+  .login-left-view {
+    align-self: stretch;
+    height: auto !important;
+    min-height: 100dvh;
+  }
+
+  .form {
+    min-width: 0;
+  }
+}
+
+.auth-custom-background .form {
+  padding: 28px;
+  background: var(--default-box-color);
+  border: 1px solid var(--default-border);
+  border-radius: calc(var(--custom-radius) + 4px);
+}
+
+.dark [style*='--appearance-dark-veil'] {
+  --appearance-veil: var(--appearance-dark-veil) !important;
+}
+
+// 保持内容不透明；透明只作用于表面，不降低文字和控件的可读性。
+@supports ((backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px))) {
+  html.studio-glass {
+    .el-card,
+    .art-card,
+    .art-card-sm,
+    .art-table-card,
+    .art-search-bar,
+    .art-header-bar,
+    .art-notification-panel,
+    .el-dialog,
+    .el-drawer,
+    .auth-page .form {
+      background: color-mix(in srgb, var(--default-box-color) 88%, transparent) !important;
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+    }
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html.studio-glass {
+    .el-card,
+    .art-card,
+    .art-card-sm,
+    .art-table-card,
+    .art-search-bar,
+    .art-header-bar,
+    .art-notification-panel,
+    .el-dialog,
+    .el-drawer,
+    .auth-page .form {
+      background: var(--default-box-color) !important;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}

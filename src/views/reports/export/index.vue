@@ -54,12 +54,36 @@
       <template #header
         ><div class="step-heading"
           ><span class="step-number">1</span
-          ><div><h3>设置导出范围</h3><p>核算月份与明细日期分开选择</p></div></div
+          ><div><h3>设置导出范围</h3><p>先选报表周期，再按业务日期口径筛选明细</p></div></div
         ></template
       >
       <ElForm label-position="top" :disabled="busy || catalogLoading">
+        <ElFormItem label="报表类型"
+          ><ElRadioGroup v-model="reportType"
+            ><ElRadioButton value="daily">日报</ElRadioButton
+            ><ElRadioButton value="weekly">周报</ElRadioButton
+            ><ElRadioButton value="monthly">月报</ElRadioButton
+            ><ElRadioButton value="total">总计报表</ElRadioButton></ElRadioGroup
+          ></ElFormItem
+        >
+        <ElFormItem
+          v-if="reportType === 'daily' || reportType === 'weekly'"
+          :label="reportType === 'daily' ? '日报日期' : '周报所在日期（周一至周日）'"
+          ><ElDatePicker
+            v-model="reportDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :clearable="false"
+        /></ElFormItem>
+        <ElAlert
+          v-if="periodInfo"
+          :title="`${periodInfo.label} · ${periodInfo.start} 至 ${periodInfo.end}`"
+          type="info"
+          :closable="false"
+          class="mb-4"
+        />
         <ElRow :gutter="20">
-          <ElCol :xs="24" :sm="12" :lg="6">
+          <ElCol v-if="reportType === 'monthly'" :xs="24" :sm="12" :lg="6">
             <ElFormItem label="经营 / 工资核算月份">
               <ElDatePicker
                 v-model="month"
@@ -80,7 +104,7 @@
             </ElFormItem>
           </ElCol>
           <ElCol :xs="24" :lg="12">
-            <ElFormItem label="明细日期范围（留空导出全部可见明细）">
+            <ElFormItem label="附加明细日期筛选（留空使用各模块报表口径）">
               <ElDatePicker
                 v-model="dateRange"
                 type="daterange"
@@ -128,18 +152,36 @@
                   :label="option.label"
                   :value="option.value" /></ElSelect></ElFormItem
           ></ElCol>
+          <ElCol v-if="selectedIds.includes('logs')" :xs="24" :sm="12" :lg="6"
+            ><ElFormItem label="日志存储范围"
+              ><ElSelect v-model="filters.archived"
+                ><ElOption label="全部可见日志" value="all" /><ElOption
+                  label="近期日志"
+                  value="hot" /><ElOption label="已归档日志" value="archive" /></ElSelect
+            ></ElFormItem>
+          </ElCol>
           <ElCol :xs="24" :sm="12" :lg="6"
             ><ElFormItem label="关键词"
+              ><ElSelect
+                v-model="filters.keywordField"
+                clearable
+                placeholder="选择查询字段"
+                class="mb-2"
+                ><ElOption
+                  v-for="field in searchableFields"
+                  :key="field.key"
+                  :value="field.key"
+                  :label="field.label" /></ElSelect
               ><ElInput
                 v-model="filters.keyword"
                 clearable
                 maxlength="100"
-                placeholder="订单号、客户、姓名、用途等" /></ElFormItem
+                placeholder="仅搜索所选字段" /></ElFormItem
           ></ElCol>
         </ElRow>
       </ElForm>
       <p class="text-sm text-g-500"
-        >经营和工资报表使用核算月份；日期范围按各模块注明的日期筛选。人员、角色和业务配置导出当前配置。</p
+        >经营报表按原付款日汇总；月报工资按核算月份，其他周期工资只统计实际发放。附加筛选不重算经营汇总。余额、人员与业务配置导出当前快照；月工资发放记录可发生在次月。</p
       >
     </ElCard>
     <ElCard class="mb-5" shadow="never" v-loading="catalogLoading">
@@ -280,7 +322,7 @@
         <ArtExcelExport
           :prepare-export="prepareExport"
           :disabled="!ready || previewLoading"
-          :filename="filename.trim() || '工作室数据报表'"
+          :filename="`${filename.trim() || '工作室数据报表'}-${periodInfo?.label || '月报'}`"
           :auto-index="autoIndex"
           :max-rows="100000"
           :show-success-message="false"
@@ -348,7 +390,8 @@
     type ReportModule,
     type ReportFilters,
     type ReportResult,
-    type ReportRequest
+    type ReportRequest,
+    type ReportPeriodType
   } from '@/api/report-export'
 
   defineOptions({ name: 'ReportExport' })
@@ -356,6 +399,22 @@
   const router = useRouter()
   const { data, selectedMonth } = useStudio()
   const month = ref(selectedMonth.value)
+  const reportType = ref<ReportPeriodType>(
+    ['daily', 'weekly', 'monthly', 'total'].includes(String(route.query.periodType))
+      ? (route.query.periodType as ReportPeriodType)
+      : 'monthly'
+  )
+  const reportDate = ref(
+    typeof route.query.periodDate === 'string'
+      ? route.query.periodDate
+      : new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
+  )
+  const periodInfo = ref<{
+    type: ReportPeriodType
+    start: string
+    end: string
+    label: string
+  } | null>(null)
   const catalog = ref<ReportModule[]>([])
   const catalogLoading = ref(false)
   const previewLoading = ref(false)
@@ -375,6 +434,13 @@
   const dateRange = ref<[string, string] | null>(initialDates)
   const filters = reactive<ReportFilters>({
     keyword: '',
+    keywordField: '',
+    archived:
+      route.query.archived === 'archive'
+        ? 'archive'
+        : route.query.archived === 'hot'
+          ? 'hot'
+          : 'all',
     personId: '',
     platformId: '',
     status: '',
@@ -401,11 +467,16 @@
     { value: 'paid', label: '已退款 / 已发放' },
     { value: 'rejected', label: '已驳回' },
     { value: 'scheduled', label: '排班待登记' },
+    { value: 'normal', label: '正常' },
+    { value: 'rest', label: '休息' },
     { value: 'present', label: '实际到岗' },
     { value: 'leave', label: '请假' },
     { value: 'absent', label: '缺勤' },
     { value: 'disabled', label: '账号停用' },
-    { value: 'deleted', label: '费用已删除' }
+    { value: 'deleted', label: '费用已删除' },
+    { value: 'applied', label: '扣补款已入账' },
+    { value: 'manual', label: '调整待人工处理' },
+    { value: 'resolved', label: '人工差额已处理' }
   ]
   const groups = computed(() =>
     [...new Set(catalog.value.map((item) => item.group))].map((name) => ({
@@ -416,6 +487,20 @@
   const selectedModules = computed(() =>
     catalog.value.filter((item) => selectedIds.value.includes(item.id))
   )
+  const searchableFields = computed(() => [
+    ...new Map(
+      selectedModules.value
+        .flatMap((item) =>
+          item.fields.filter(
+            (field) =>
+              field.type === 'text' &&
+              (item.id !== 'logs' ||
+                ['id', 'action', 'actorName', 'entity', 'entityId'].includes(field.key))
+          )
+        )
+        .map((field) => [field.key, field])
+    ).values()
+  ])
   const selectedFieldCount = computed(() =>
     selectedModules.value.reduce((sum, item) => sum + (selectedFields[item.id]?.length || 0), 0)
   )
@@ -429,8 +514,14 @@
   )
   const rangeSummary = computed(() => {
     const parts = [
-      `核算 ${month.value}`,
-      dateRange.value ? `${dateRange.value[0]} 至 ${dateRange.value[1]}` : '全部可见明细'
+      periodInfo.value
+        ? `${periodInfo.value.label} ${periodInfo.value.start} 至 ${periodInfo.value.end}`
+        : reportType.value === 'monthly'
+          ? `月报 ${month.value}`
+          : '正在读取报表区间',
+      dateRange.value
+        ? `附加筛选 ${dateRange.value[0]} 至 ${dateRange.value[1]}`
+        : '各模块默认日期口径'
     ]
     if (filters.personId)
       parts.push(data.value?.users.find((item) => item.id === filters.personId)?.name || '已选人员')
@@ -442,7 +533,10 @@
       parts.push(
         statusOptions.find((item) => item.value === filters.status)?.label || filters.status
       )
-    if (filters.keyword?.trim()) parts.push(`关键词：${filters.keyword.trim()}`)
+    if (filters.keyword?.trim())
+      parts.push(
+        `${searchableFields.value.find((field) => field.key === filters.keywordField)?.label || '所选字段'}：${filters.keyword.trim()}`
+      )
     return parts.join(' · ')
   })
   const groupIcons: Record<string, string> = {
@@ -467,7 +561,9 @@
       !catalogLoading.value &&
       !pageError.value &&
       selectedModules.value.length > 0 &&
-      selectedModules.value.every((item) => selectedFields[item.id]?.length)
+      selectedModules.value.every((item) => selectedFields[item.id]?.length) &&
+      (!filters.keyword?.trim() ||
+        searchableFields.value.some((field) => field.key === filters.keywordField))
   )
   const previewSheet = computed(() =>
     previewResult.value?.sheets.find((item) => item.id === previewTab.value)
@@ -484,8 +580,15 @@
   const errorText = (cause: unknown) =>
     cause instanceof Error ? cause.message : '加载失败，请稍后重试'
   function requestBody(): ReportRequest {
+    if (filters.keyword?.trim() && !filters.keywordField) throw new Error('请选择要查询的具体字段')
     return {
       month: month.value,
+      period: {
+        type: reportType.value,
+        ...(reportType.value === 'daily' || reportType.value === 'weekly'
+          ? { date: reportDate.value }
+          : {})
+      },
       modules: selectedModules.value.map((item) => ({
         id: item.id,
         fields: [...selectedFields[item.id]]
@@ -519,10 +622,21 @@
     catalogLoading.value = true
     pageError.value = ''
     previewResult.value = null
+    periodInfo.value = null
     try {
-      const result = await getExportCatalog(month.value)
+      const result = await getExportCatalog(
+        month.value,
+        {
+          type: reportType.value,
+          ...(reportType.value === 'daily' || reportType.value === 'weekly'
+            ? { date: reportDate.value }
+            : {})
+        },
+        filters.archived || 'all'
+      )
       if (version !== catalogVersion) return
       catalog.value = result.modules
+      periodInfo.value = result.period || null
       for (const item of result.modules) {
         const allowed = new Set(item.fields.map((field) => field.key))
         selectedFields[item.id] =
@@ -581,7 +695,7 @@
     exporting.value = false
   }
   watch(
-    [month, dateRange, filters, selectedIds, selectedFields],
+    [month, reportType, reportDate, dateRange, filters, selectedIds, selectedFields],
     () => {
       previewStale.value = true
     },
@@ -611,7 +725,7 @@
       if (previewResult.value?.sheets.some((item) => item.id === value)) previewTab.value = value
     }
   )
-  watch(month, (value) => {
+  watch([month, reportType, reportDate, () => filters.archived], ([value]) => {
     if (value) void reloadCatalog()
   })
   watch(
@@ -628,6 +742,17 @@
       expanded.value = preferred.slice(0, 1)
     }
   })
+  watch(
+    [() => route.query.periodType, () => route.query.periodDate, () => route.query.archived],
+    ([type, date, archived]) => {
+      if (route.path !== '/reports/export' || busy.value) return
+      if (typeof type === 'string' && ['daily', 'weekly', 'monthly', 'total'].includes(type))
+        reportType.value = type as ReportPeriodType
+      if (typeof date === 'string') reportDate.value = date
+      if (archived === 'archive' || archived === 'hot' || archived === 'all')
+        filters.archived = archived
+    }
+  )
   onMounted(reloadCatalog)
 </script>
 

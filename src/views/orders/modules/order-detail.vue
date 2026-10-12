@@ -3,10 +3,11 @@
   import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
   import { useStudio, money, formatTime, statusLabels } from '@/hooks/business/useStudio'
   import type { Attachment, AuditLog, OrderStatus } from '@/types/studio'
+  import { rulesForPlatform } from '@/utils/business/platform-rules'
 
   const props = defineProps<{ orderId: string }>()
   const emit = defineEmits<{ busy: [value: boolean] }>()
-  const { data, can, mutate, upload } = useStudio()
+  const { data, user, can, mutate, upload } = useStudio()
   const order = computed(() => data.value?.orders.find((item) => item.id === props.orderId))
   const activeTab = ref('information')
   const dialog = ref<
@@ -19,6 +20,7 @@
     | 'adjust'
     | 'cancel-settle'
     | 'review-return'
+    | 'correct-status'
     | null
   >(null)
   const saving = ref(false)
@@ -36,11 +38,12 @@
     receipt: null as Attachment | null,
     dispatchMode: 'pool' as 'pool' | 'direct',
     assignedTo: '',
+    status: 'pending' as OrderStatus,
+    leaderId: '',
     teammateId: '',
     roomCode: '',
     gameId: '',
     map: '',
-    channel: '',
     remark: ''
   })
   const platform = computed(() =>
@@ -53,12 +56,19 @@
   const isHall = computed(
     () => platform.value?.id === 'hall' || platform.value?.name === '游戏大厅'
   )
-  const isXianyu = computed(
-    () => platform.value?.id === 'xianyu' || platform.value?.name === '闲鱼'
-  )
+  const rules = computed(() => rulesForPlatform(platform.value))
   const players = computed(
     () =>
       data.value?.users.filter((item) => item.role === 'player' && item.status === 'active') ?? []
+  )
+  const correctionPlayers = computed(() =>
+    (data.value?.users || []).filter((item) => item.role === 'player')
+  )
+  watch(
+    () => fields.leaderId,
+    (id) => {
+      if (fields.teammateId === id) fields.teammateId = ''
+    }
   )
   const refunds = computed(
     () => data.value?.refunds.filter((item) => item.orderId === props.orderId) ?? []
@@ -87,6 +97,11 @@
   )
   const canEdit = computed(() => can('orders.edit'))
   const canReview = computed(() => can('finance.review'))
+  const canCorrectStatus = computed(
+    () =>
+      can('orders.edit') &&
+      ['finance', 'manager', 'owner', 'super_admin'].includes(user.value?.role || '')
+  )
   const canCancel = computed(
     () =>
       !!order.value &&
@@ -107,7 +122,8 @@
         edit: '编辑实际订单',
         adjust: '财务金额更正',
         'cancel-settle': '确认取消订单打手报酬',
-        'review-return': '退回完成材料'
+        'review-return': '退回完成材料',
+        'correct-status': '财务订单状态更正'
       })[dialog.value ?? 'payment']
   )
   const staffName = (id: string | null | undefined) =>
@@ -143,11 +159,12 @@
       receipt: null,
       dispatchMode: order.value.dispatchMode,
       assignedTo: order.value.assignedTo ?? '',
+      status: order.value.status,
+      leaderId: order.value.leaderId ?? order.value.assignedTo ?? '',
       teammateId: order.value.teammateId ?? '',
       roomCode: order.value.roomCode,
       gameId: order.value.gameId,
       map: order.value.map,
-      channel: order.value.channel,
       remark: order.value.remark
     })
     dialog.value = action
@@ -194,7 +211,8 @@
       'edit',
       'adjust',
       'cancel-settle',
-      'review-return'
+      'review-return',
+      'correct-status'
     ].includes(action)
     if (requiresReason && !fields.reason.trim()) {
       ElMessage.warning('请填写本次操作的原因或处理说明')
@@ -213,7 +231,7 @@
         ElMessage.warning('请选择客户实际付款时间')
         return
       }
-      if (!isXianyu.value && !fields.receipt) {
+      if (rules.value.requiresReceipt && !fields.receipt) {
         ElMessage.warning('请上传客户付款凭证')
         return
       }
@@ -249,6 +267,19 @@
       ElMessage.warning('房间码与客户游戏 ID 至少填写一项')
       return
     }
+    if (action === 'correct-status') {
+      if (!canCorrectStatus.value) return void ElMessage.warning('当前账号没有状态更正权限')
+      if (fields.status === order.value.status)
+        return void ElMessage.warning('请先选择需要更正的新状态')
+      if (['active', 'review', 'completed'].includes(fields.status) && !fields.leaderId)
+        return void ElMessage.warning('执行、验收和完成状态必须选择负责人')
+      if (fields.leaderId && fields.leaderId === fields.teammateId)
+        return void ElMessage.warning('负责人和队友不能是同一人')
+      if (fields.status === 'review' && !order.value.submissions.at(-1)?.screenshots.length)
+        return void ElMessage.warning('待验收状态需要已有完成截图')
+      if (fields.status === 'completed' && order.value.receivedAmount !== order.value.amount)
+        return void ElMessage.warning('已完成状态须已足额收款')
+    }
     saving.value = true
     try {
       if (action === 'refund') {
@@ -264,7 +295,7 @@
             action: 'confirm-payment',
             receivedAmount: toCents(fields.amount),
             paidAt: fields.paidAt,
-            receipt: isXianyu.value ? null : fields.receipt
+            receipt: rules.value.requiresReceipt ? fields.receipt : null
           })
         if (action === 'dispatch')
           Object.assign(body, {
@@ -280,8 +311,13 @@
             roomCode: fields.roomCode.trim(),
             gameId: fields.gameId.trim(),
             map: fields.map,
-            channel: fields.channel,
             remark: fields.remark
+          })
+        if (action === 'correct-status')
+          Object.assign(body, {
+            status: fields.status,
+            leaderId: fields.leaderId || null,
+            teammateId: fields.teammateId || null
           })
         if (action === 'cancel-settle')
           Object.assign(body, {
@@ -473,6 +509,14 @@
       />
       <ElSpace wrap class="mb-5">
         <ElButton
+          v-if="canCorrectStatus"
+          type="warning"
+          plain
+          :disabled="saving || uploading"
+          @click="openAction('correct-status')"
+          >更正订单状态</ElButton
+        >
+        <ElButton
           v-if="canEdit && ['pending', 'active', 'review'].includes(order.status)"
           :disabled="saving"
           @click="openAction('edit')"
@@ -544,8 +588,7 @@
               customer?.contact || '—'
             }}</ElDescriptionsItem>
             <ElDescriptionsItem label="订单来源">{{ platform?.name || '—' }}</ElDescriptionsItem
-            ><ElDescriptionsItem label="店铺">{{ shop?.name || '—' }}</ElDescriptionsItem>
-            <ElDescriptionsItem label="沟通渠道">{{ order.channel || '—' }}</ElDescriptionsItem
+            ><ElDescriptionsItem label="店铺">{{ shop?.name || '—' }}</ElDescriptionsItem
             ><ElDescriptionsItem label="平台订单号">{{
               order.externalOrderNo || '—'
             }}</ElDescriptionsItem>
@@ -588,7 +631,7 @@
                 type="primary"
                 >{{ order.receipt.name }}</ElLink
               ><span v-else>{{
-                isXianyu ? '闲鱼免传截图，请核对平台订单号' : '尚未上传'
+                !rules.requiresReceipt ? '本来源免传付款截图，请核对收款记录' : '尚未上传'
               }}</span></ElDescriptionsItem
             >
           </ElDescriptions>
@@ -685,7 +728,9 @@
             shadow="never"
             ><template #header
               ><div class="flex justify-between gap-3"
-                ><span>{{ formatTime(submission.submittedAt) }}</span
+                ><span
+                  >{{ submission.recheckBy ? '财务复核申请：' : '打手提交：'
+                  }}{{ formatTime(submission.recheckedAt || submission.submittedAt) }}</span
                 ><ElTag
                   :type="
                     submission.review === 'passed'
@@ -703,7 +748,20 @@
                   }}</ElTag
                 ></div
               ></template
-            ><p class="text-sm mb-3"
+            ><ElAlert
+              v-if="submission.recheckBy"
+              title="财务复核（沿用原完成材料）"
+              :description="
+                '原材料提交于 ' +
+                formatTime(submission.submittedAt) +
+                '，申请人 ' +
+                staffName(submission.recheckBy) +
+                '；' +
+                (submission.recheckReason || '')
+              "
+              type="info"
+              :closable="false"
+              class="mb-4" /><p class="text-sm mb-3"
               >负责人 {{ staffName(submission.leaderId) }} · 队友
               {{ submission.teammateId ? staffName(submission.teammateId) : '无，独自完成' }}</p
             ><ElSpace wrap
@@ -787,13 +845,16 @@
                 value-format="YYYY-MM-DDTHH:mm:ssZ"
                 format="YYYY-MM-DD HH:mm"
                 class="!w-full" /></ElFormItem
-            ><ElFormItem v-if="!isXianyu" label="付款凭证" required
+            ><ElFormItem v-if="rules.requiresReceipt" label="付款凭证" required
               ><ElUpload
+                drag
+                class="payment-receipt-upload"
                 :auto-upload="false"
                 :show-file-list="false"
                 :on-change="uploadReceipt"
                 :disabled="uploading || saving"
                 accept="image/png,image/jpeg,image/webp"
+                ><p class="mb-3 text-sm text-g-500">拖动付款图片到这里，或点击上传</p
                 ><ElButton :loading="uploading">{{
                   fields.receipt ? '替换凭证' : '上传付款凭证'
                 }}</ElButton></ElUpload
@@ -806,7 +867,11 @@
                 class="ml-3"
                 >{{ fields.receipt.name }}</ElLink
               ></ElFormItem
-            ><ElAlert v-else title="闲鱼免传截图，请核对平台订单号。" type="info" :closable="false"
+            ><ElAlert
+              v-else
+              title="本来源免传截图，请核对实际收款和平台订单号。"
+              type="info"
+              :closable="false"
           /></template>
           <template v-if="dialog === 'dispatch'"
             ><ElFormItem label="派单方式"
@@ -861,10 +926,7 @@
                   ><ElInput v-model="fields.gameId" maxlength="100" /></ElFormItem></ElCol
               ><ElCol :xs="24" :sm="12"
                 ><ElFormItem label="地图"
-                  ><ElInput v-model="fields.map" maxlength="100" /></ElFormItem></ElCol
-              ><ElCol :xs="24" :sm="12"
-                ><ElFormItem label="沟通渠道"
-                  ><ElInput v-model="fields.channel" maxlength="100" /></ElFormItem></ElCol></ElRow
+                  ><ElInput v-model="fields.map" maxlength="100" /></ElFormItem></ElCol></ElRow
             ><ElFormItem label="打手可见备注"
               ><ElInput
                 v-model="fields.remark"
@@ -873,6 +935,40 @@
                 maxlength="2000"
                 show-word-limit /></ElFormItem
           ></template>
+          <template v-if="dialog === 'correct-status'">
+            <ElAlert
+              title="状态更正会校验履约材料与收款条件，并同步处理财务影响、保留更正原因。实际退款仍需另行登记。"
+              type="warning"
+              :closable="false"
+              class="mb-4"
+            />
+            <ElFormItem label="更正后状态" required
+              ><ElSelect v-model="fields.status" class="w-full"
+                ><ElOption
+                  v-for="(label, status) in statusLabels"
+                  :key="status"
+                  :value="status"
+                  :label="label" /></ElSelect
+            ></ElFormItem>
+            <ElFormItem
+              label="负责人"
+              :required="['active', 'review', 'completed'].includes(fields.status)"
+              ><ElSelect v-model="fields.leaderId" clearable filterable class="w-full"
+                ><ElOption
+                  v-for="item in correctionPlayers"
+                  :key="item.id"
+                  :value="item.id"
+                  :label="item.name + (item.status === 'disabled' ? '（已停用）' : '')" /></ElSelect
+            ></ElFormItem>
+            <ElFormItem label="队友（可选）"
+              ><ElSelect v-model="fields.teammateId" clearable filterable class="w-full"
+                ><ElOption
+                  v-for="item in correctionPlayers.filter((item) => item.id !== fields.leaderId)"
+                  :key="item.id"
+                  :value="item.id"
+                  :label="item.name + (item.status === 'disabled' ? '（已停用）' : '')" /></ElSelect
+            ></ElFormItem>
+          </template>
           <ElAlert
             v-if="dialog === 'adjust'"
             title="更正后同步更新原付款日的成本与利润，实际退款须另行登记。"
@@ -978,3 +1074,19 @@
     <ElEmpty v-else description="订单不存在或当前账号无权查看" />
   </div>
 </template>
+
+<style scoped>
+  .payment-receipt-upload {
+    width: 100%;
+  }
+
+  .payment-receipt-upload :deep(.el-upload),
+  .payment-receipt-upload :deep(.el-upload-dragger) {
+    width: 100%;
+  }
+
+  .payment-receipt-upload :deep(.el-upload-dragger) {
+    height: auto;
+    padding: 24px 16px;
+  }
+</style>

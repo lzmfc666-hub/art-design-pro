@@ -1,5 +1,6 @@
 import { ApiError, permissionsFor, shanghaiDate } from './studio.mjs'
 import { APPEARANCE_ICON_DEFAULTS } from './appearance.mjs'
+import { platformRules } from './platform-rules.mjs'
 
 const MAX_ROWS = 100000
 const roleNames = {
@@ -24,6 +25,8 @@ const statuses = {
   rejected: '已驳回',
   approved: '审核通过',
   scheduled: '排班待登记',
+  normal: '正常',
+  rest: '休息',
   present: '实际到岗',
   leave: '请假',
   absent: '缺勤',
@@ -49,7 +52,8 @@ const permissionNames = {
   'templates.manage': '订单模板',
   'settings.manage': '业务配置',
   'attendance.manage': '排班考勤',
-  'logs.view': '操作日志'
+  'logs.view': '操作日志',
+  'reports.export': '导出业务数据'
 }
 const permissionText = (keys) => keys.map((key) => permissionNames[key] || key).join('、')
 const field = (key, label, type = 'text', selected = true) => ({
@@ -80,10 +84,15 @@ const menuRows = [
   ['菜单权限', '/system/menu', ['users.manage']],
   ['操作日志', '/system/logs', ['logs.view']],
   ['个人中心', '/system/user-center', []],
-  ['自选导出', '/reports/export', []]
+  ['自选导出', '/reports/export', ['reports.export']]
 ]
 
 function modulesFor(snapshot) {
+  if (
+    ['support', 'support_lead'].includes(snapshot.user.role) ||
+    !snapshot.permissions.includes('reports.export')
+  )
+    throw new ApiError('客服账号不开放数据导出，或当前账号没有导出权限', 403)
   const can = (...keys) => keys.some((key) => snapshot.permissions.includes(key))
   const person = (id) => snapshot.users.find((row) => row.id === id)?.name || id || ''
   const platform = (id) => snapshot.platforms.find((row) => row.id === id)?.name || id || ''
@@ -109,30 +118,122 @@ function modulesFor(snapshot) {
   }
   const monetary = (keys) => keys.map(([key, label]) => [key, label + '（元）', 'number'])
   const report = snapshot.reports
+  const period = snapshot.exportPeriod
+  const periodText = period ? `${period.label} ${period.start} 至 ${period.end}` : report.month
+  add(
+    'playerAdjustments',
+    '打手扣款与补款',
+    '财务结算',
+    can('finance.withdrawals'),
+    [
+      ['name', '打手'],
+      ['kind', '调整类型'],
+      ['amount', '申请金额（元）', 'number'],
+      ['appliedAmount', '已入账金额（元）', 'number'],
+      ['manualAmount', '待人工差额（元）', 'number'],
+      ['status', '处理状态'],
+      ['orderNo', '关联订单号'],
+      ['reason', '原因'],
+      ['createdByName', '登记人'],
+      ['createdAt', '登记时间'],
+      ['resolution', '差额处理结果'],
+      ['resolutionReason', '处理说明']
+    ],
+    (snapshot.playerAdjustments || []).map((row) => ({
+      ...row,
+      name: person(row.userId),
+      kind: row.kind === 'deduction' ? '扣款' : '补款',
+      amount: yuan(row.amount),
+      appliedAmount: yuan(row.appliedAmount),
+      manualAmount: yuan(row.manualAmount),
+      status: { applied: '已入账', manual: '待人工处理', resolved: '已处理' }[row.status],
+      orderNo: orderIdentity(row.orderId).orderNo,
+      createdByName: person(row.createdBy),
+      createdAt: displayTime(row.createdAt),
+      resolution:
+        row.resolution === 'recovered'
+          ? '已线下追回'
+          : row.resolution === 'waived'
+            ? '免除差额'
+            : '',
+      _date: row.createdAt,
+      _status: row.status,
+      _people: [row.userId, row.createdBy]
+    })),
+    '独立扣补款流水；已付提现不重写，差额按财务登记的实际处理结果保存。',
+    '调整登记日期'
+  )
+  add(
+    'rewardReviews',
+    '旧报酬人工差额',
+    '财务结算',
+    can('finance.withdrawals'),
+    [
+      ['orderNo', '关联订单号'],
+      ['expectedReward', '整单应结报酬（元）', 'number'],
+      ['reason', '更正原因'],
+      ['createdAt', '登记时间'],
+      ['resolution', '人工处理说明'],
+      ['resolvedAt', '处理时间']
+    ],
+    (snapshot.rewardReviews || []).map((row) => ({
+      ...row,
+      orderNo: orderIdentity(row.orderId).orderNo,
+      expectedReward: yuan(row.expectedReward),
+      createdAt: displayTime(row.createdAt),
+      resolvedAt: displayTime(row.resolvedAt),
+      _date: row.createdAt
+    })),
+    '旧报酬更正的人工处理记录，不将未知差额伪造为单个打手扣款。',
+    '登记日期'
+  )
+  add(
+    'customerOrderReferences',
+    '客户平台订单号',
+    '客户与配置',
+    can('orders.create', 'users.manage', 'orders.view'),
+    [
+      ['customerName', '客户名称'],
+      ['platformName', '订单来源'],
+      ['shopName', '来源店铺'],
+      ['externalOrderNo', '平台订单编号']
+    ],
+    snapshot.customers.flatMap((row) =>
+      (row.orderReferences || []).map((reference) => ({
+        customerName: row.name,
+        platformName: platform(reference.platformId),
+        shopName: shop(reference.shopId),
+        externalOrderNo: reference.externalOrderNo,
+        _platforms: [reference.platformId]
+      }))
+    ),
+    '客户档案中的平台编号关联记录，不形成订单营收。日期范围不适用。'
+  )
   add(
     'overview',
-    '经营月度汇总',
+    period ? `${period.label}经营汇总` : '经营月度汇总',
     '经营报表',
     can('profit.view'),
     [
-      ['month', '核算月份'],
+      ['month', '统计区间'],
       ...monetary([
         ['received', '收款'],
         ['refunds', '退款'],
         ['net', '净收入'],
-        ['reward', '已确认打手成本'],
+        ['reward', '打手成本（含预计）'],
         ['estimatedReward', '预计打手成本'],
         ['supportCommission', '客服提成'],
         ['operationsCommission', '运营提成'],
         ['expenses', '费用'],
         ['monthlyBase', '月度底薪'],
-        ['monthlyProfit', '月度利润']
+        ['monthlyProfit', '完整月份利润（已扣底薪）'],
+        ['operatingProfit', '区间经营利润（未扣底薪）']
       ]),
       ['incomplete', '统计是否完整']
     ],
     [
       {
-        month: report.month,
+        month: periodText,
         ...Object.fromEntries(
           [
             'received',
@@ -143,14 +244,29 @@ function modulesFor(snapshot) {
             'supportCommission',
             'operationsCommission',
             'expenses'
-          ].map((key) => [key, yuan(report.days.reduce((sum, row) => sum + row[key], 0))])
+          ].map((key) => [
+            key,
+            ['supportCommission', 'operationsCommission'].includes(key) &&
+            report.days.some((row) => row.incomplete)
+              ? '待配置'
+              : yuan(report.days.reduce((sum, row) => sum + row[key], 0))
+          ])
         ),
         monthlyBase: yuan(report.monthlyBase),
         monthlyProfit: yuan(report.monthlyProfit),
-        incomplete: report.monthlyProfit == null ? '不完整 / 待配置' : '完整'
+        operatingProfit: report.days.some((row) => row.profit == null)
+          ? '待配置'
+          : yuan(report.days.reduce((sum, row) => sum + row.profit, 0)),
+        incomplete: report.days.some((row) => row.profit == null)
+          ? '不完整 / 待配置'
+          : report.monthlyBase == null && period && period.type !== 'monthly'
+            ? '区间经营口径完整；未计底薪（非整月或待配置）'
+            : report.monthlyProfit == null
+              ? '底薪待配置'
+              : '完整'
       }
     ],
-    '按所选核算月份汇总；订单收入和成本归属原付款日。此汇总不按明细筛选条件重新计算。'
+    '按所选报表区间汇总；收入和订单成本归属原付款日。日/周报不摊底薪，工资发放按实际发放日；追加的明细字段筛选不回改经营汇总。'
   )
   add(
     'days',
@@ -163,7 +279,7 @@ function modulesFor(snapshot) {
         ['received', '收款'],
         ['refunds', '退款'],
         ['net', '净收入'],
-        ['reward', '已确认打手成本'],
+        ['reward', '打手成本（含预计）'],
         ['estimatedReward', '预计打手成本'],
         ['supportCommission', '客服提成'],
         ['operationsCommission', '运营提成'],
@@ -185,12 +301,17 @@ function modulesFor(snapshot) {
           'operationsCommission',
           'expenses',
           'profit'
-        ].map((key) => [key, yuan(row[key])])
+        ].map((key) => [
+          key,
+          ['supportCommission', 'operationsCommission'].includes(key) && row.incomplete
+            ? '待配置'
+            : yuan(row[key])
+        ])
       ),
       incomplete: row.incomplete ? '配置未齐' : '完整',
       _date: row.date
     })),
-    '所选月份的日报；退款回到原付款日调整。',
+    '所选报表区间的每日经营明细；退款回到原付款日调整，日利润未扣月底薪。',
     '客户付款归属日'
   )
   add(
@@ -218,7 +339,7 @@ function modulesFor(snapshot) {
       shopName: shop(row.shopId),
       _platforms: [row.platformId]
     })),
-    '所选月份的渠道汇总，按平台筛选；日期范围不重算月度汇总。'
+    '按所选报表区间的原付款日汇总；平台与所属店铺不能重复相加，追加明细筛选不重算该汇总。'
   )
   add(
     'performance',
@@ -230,15 +351,15 @@ function modulesFor(snapshot) {
       ['orders', '计入业绩订单', 'number'],
       ['completed', '完成订单', 'number'],
       ['net', '业绩净收入（元）', 'number'],
-      ['month', '业绩月份']
+      ['month', '业绩统计区间']
     ],
     report.performance.map((row) => ({
       ...row,
       net: yuan(row.net),
-      month: report.month,
+      month: periodText,
       _people: [row.userId]
     })),
-    '按订单完成月份统计；只导出当前账号可见的本人或全员业绩，日期范围不重算月度汇总。'
+    '按所选报表区间的订单完成日期统计；仅当前账号可见的本人或全员业绩，追加明细筛选不重算该汇总。'
   )
   const orderColumns = [
     ['id', '记录 ID', 'text', false],
@@ -246,13 +367,12 @@ function modulesFor(snapshot) {
     ['title', '订单项目'],
     ['customerName', '客户'],
     ['platformName', '来源平台'],
-    ['shopName', '闲鱼店铺'],
+    ['shopName', '来源店铺'],
     ['externalOrderNo', '平台订单号'],
     ['status', '订单状态'],
     ['creatorName', '创建人'],
     ['leaderName', '负责人'],
     ['teammateName', '队友'],
-    ['channel', '沟通渠道'],
     ['roomCode', '房间码'],
     ['gameId', '客户游戏 ID'],
     ['map', '地图'],
@@ -505,19 +625,29 @@ function modulesFor(snapshot) {
   const payrollColumns = [
     ['name', '员工'],
     ['role', '角色'],
-    ['month', '核算月份'],
+    ['month', period && period.type !== 'monthly' ? '发放统计区间' : '核算月份'],
+    ['settlementState', '金额来源'],
     ...monetary([
       ['base', '底薪'],
       ['commission', '提成'],
       ['deduction', '退款扣回'],
-      ['total', '待结算合计']
+      ['total', period && period.type !== 'monthly' ? '实发金额合计' : '工资金额合计']
     ]),
     ['incomplete', '配置状态']
   ]
-  const payrollRow = (row) => ({
+  const monthPayroll = !period || period.type === 'monthly'
+  const paidLineCount = snapshot.payrolls
+    .filter((row) => row.month === report.month)
+    .reduce((sum, row) => sum + row.lines.length, 0)
+  const payrollRow = (row, index) => ({
     ...row,
     role: roleNames[row.role],
-    month: report.month,
+    month: monthPayroll ? report.month : periodText,
+    settlementState: monthPayroll
+      ? index < paidLineCount
+        ? '已发快照'
+        : '待结算 / 差额'
+      : '实际已发汇总',
     ...Object.fromEntries(
       ['base', 'commission', 'deduction', 'total'].map((key) => [key, yuan(row[key])])
     ),
@@ -526,12 +656,14 @@ function modulesFor(snapshot) {
   })
   add(
     'payroll',
-    '工资核算',
+    monthPayroll ? '工资核算' : '已发工资汇总',
     '工资与提成',
     ownOrSalary,
     payrollColumns,
     report.payroll.map(payrollRow),
-    '按所选月份核算；已发放月份显示待补结算差额，缺失金额保持待配置。日期范围不重算月度工资。'
+    monthPayroll
+      ? '按所选核算月份导出已发快照与待结算差额，金额来源分列，不将历史已发金额再次计为待发。追加明细筛选不重算该核算。'
+      : '按所选报表区间的实际发放日期汇总已发工资；不按天摊分月度工资，也不包含待结算金额。'
   )
   add(
     'payrollHistory',
@@ -539,26 +671,31 @@ function modulesFor(snapshot) {
     '工资与提成',
     ownOrSalary,
     [
-      ...payrollColumns.filter(([key]) => key !== 'total'),
+      ['month', '实际核算月份'],
+      ...payrollColumns.filter(([key]) => key !== 'total' && key !== 'month'),
       ['total', '本次发放金额（元）', 'number'],
       ['payrollId', '发放记录 ID', 'text', false],
       ['paidAt', '发放时间'],
       ['paidByName', '经办人']
     ],
     snapshot.payrolls
-      .filter((row) => row.month === report.month)
+      .filter((row) => !monthPayroll || row.month === report.month)
       .flatMap((payroll) =>
         payroll.lines.map((row) => ({
-          ...payrollRow(row),
+          ...payrollRow(row, 0),
+          settlementState: '已发快照',
           month: payroll.month,
           payrollId: payroll.id,
           paidAt: displayTime(payroll.paidAt),
           paidByName: person(payroll.paidBy),
           _date: payroll.paidAt,
+          _periodFilter: !monthPayroll,
           _people: [row.userId, payroll.paidBy]
         }))
       ),
-    '所选核算月份的原始发放快照及补结算，不改写历史金额。',
+    monthPayroll
+      ? '所选核算月份的原始发放快照与补结算，发放可能发生在次月；仅主动填写明细日期范围时按发放日进一步筛选。'
+      : '按实际发放日期筛选所选报表区间的发放快照，保留真实核算月份，不改写历史金额。',
     '实际发放日期'
   )
   add(
@@ -590,6 +727,7 @@ function modulesFor(snapshot) {
         .join('；'),
       hourlyEnabled: row.hourlyEnabled ? '是' : '否',
       _date: row.effectiveFrom,
+      _periodFilter: false,
       _people: [row.userId]
     })),
     '当前权限可见工资方案；按生效日期筛选，不将缺配置金额视为零。',
@@ -696,7 +834,7 @@ function modulesFor(snapshot) {
     '客户与配置',
     can('orders.create', 'users.manage', 'orders.view'),
     [
-      ['name', '客户称呼'],
+      ['name', '客户名称'],
       ['contact', '联系方式'],
       ['gameId', '客户游戏 ID'],
       ['remark', '客户备注']
@@ -736,11 +874,16 @@ function modulesFor(snapshot) {
     [
       ['id', '来源代码'],
       ['name', '来源名称'],
-      ['operatorCommission', '参与运营提成']
+      ['requiresShop', '下单需要店铺'],
+      ['requiresExternalOrderNo', '需要平台订单号'],
+      ['requiresReceipt', '收款需要付款凭证'],
+      ['allowPayOnArrival', '允许落地付']
     ],
     snapshot.platforms.map((row) => ({
       ...row,
-      operatorCommission: row.operatorCommission ? '是' : '否',
+      ...Object.fromEntries(
+        Object.entries(platformRules(row)).map(([key, value]) => [key, value ? '是' : '否'])
+      ),
       _platforms: [row.id]
     })),
     '当前来源平台配置，日期范围不适用。'
@@ -911,7 +1054,16 @@ function modulesFor(snapshot) {
 export function getExportCatalog(snapshot) {
   return {
     month: snapshot.reports.month,
-    modules: modulesFor(snapshot).map(({ rows, ...item }) => ({ ...item, rowCount: rows.length }))
+    period: snapshot.exportPeriod,
+    modules: modulesFor(snapshot).map(({ rows, ...item }) => ({
+      ...item,
+      rowCount:
+        item.id === 'customerOrderReferences' && snapshot.customerOrderReferenceCount != null
+          ? snapshot.customerOrderReferenceCount
+          : item.id === 'logs' && snapshot.auditLogCount != null
+            ? snapshot.auditLogCount
+            : rows.length
+    }))
   }
 }
 const invalid = (message, status = 400) => {
@@ -920,12 +1072,24 @@ const invalid = (message, status = 400) => {
 function filterOptions(filters) {
   if (filters == null) return {}
   if (typeof filters !== 'object' || Array.isArray(filters)) invalid('导出范围格式无效')
-  const allowed = ['dateRange', 'keyword', 'personId', 'platformId', 'status', 'orderDateKey']
+  const allowed = [
+    'dateRange',
+    'keyword',
+    'keywordField',
+    'archived',
+    'personId',
+    'platformId',
+    'status',
+    'orderDateKey'
+  ]
   if (Object.keys(filters).some((key) => !allowed.includes(key))) invalid('导出筛选项无效')
-  for (const key of ['keyword', 'personId', 'platformId', 'status']) {
+  for (const key of ['keyword', 'keywordField', 'personId', 'platformId', 'status']) {
     if (filters[key] != null && (typeof filters[key] !== 'string' || filters[key].length > 200))
       invalid('导出筛选项过长或格式无效')
   }
+  if (filters.keyword?.trim() && !filters.keywordField) invalid('请选择要查询的具体字段')
+  if (filters.archived != null && !['all', 'hot', 'archive'].includes(filters.archived))
+    invalid('日志归档范围无效')
   if (
     filters.orderDateKey &&
     !['createdAt', 'paidAt', 'completedAt'].includes(filters.orderDateKey)
@@ -959,8 +1123,21 @@ export function buildExportSheets(snapshot, request, { previewLimit } = {}) {
   )
     invalid('请选择 1 至 30 个导出模块')
   if (request.month && request.month !== snapshot.reports.month) invalid('核算月份与当前数据不一致')
-  const options = filterOptions(request.filters)
+  const options = { ...filterOptions(request.filters) }
+  const periodRange = snapshot.exportPeriod
+    ? [snapshot.exportPeriod.start, snapshot.exportPeriod.end]
+    : null
+  const requestedRange = options.dateRange
   const catalog = new Map(modulesFor(snapshot).map((item) => [item.id, item]))
+  if (
+    options.keyword?.trim() &&
+    !request.modules.some((selection) =>
+      catalog
+        .get(selection?.id)
+        ?.fields.some((field) => field.key === options.keywordField && field.type === 'text')
+    )
+  )
+    invalid('所选模块中没有此可查询字段')
   const used = new Set()
   let total = 0
   const sheets = request.modules.map((selection) => {
@@ -989,18 +1166,29 @@ export function buildExportSheets(snapshot, request, { previewLimit } = {}) {
       if (options.status && row._status && row._status !== options.status) return false
       if (
         options.keyword?.trim() &&
-        !JSON.stringify(
-          Object.fromEntries(item.fields.map((field) => [field.key, row[field.key] ?? '']))
+        !String(
+          item.fields.some((field) => field.key === options.keywordField)
+            ? (row[options.keywordField] ?? '')
+            : ''
         )
           .toLowerCase()
           .includes(options.keyword.trim().toLowerCase())
       )
         return false
-      if (options.dateRange && ('_date' in row || row._dates)) {
+      const dateRange =
+        row._periodFilter === false
+          ? requestedRange
+          : periodRange && requestedRange
+            ? [
+                periodRange[0] > requestedRange[0] ? periodRange[0] : requestedRange[0],
+                periodRange[1] < requestedRange[1] ? periodRange[1] : requestedRange[1]
+              ]
+            : requestedRange || periodRange
+      if (dateRange && ('_date' in row || row._dates)) {
         const value = row._dates ? row._dates[options.orderDateKey || 'createdAt'] : row._date
         if (!value) return false
         const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : shanghaiDate(value)
-        if (date < options.dateRange[0] || date > options.dateRange[1]) return false
+        if (date < dateRange[0] || date > dateRange[1]) return false
       }
       return true
     })
@@ -1011,5 +1199,10 @@ export function buildExportSheets(snapshot, request, { previewLimit } = {}) {
     )
     return { id: item.id, name: item.label, fields: selected, rows, rowCount: matching.length }
   })
-  return { month: snapshot.reports.month, sheets, generatedAt: new Date().toISOString() }
+  return {
+    month: snapshot.reports.month,
+    period: snapshot.exportPeriod,
+    sheets,
+    generatedAt: new Date().toISOString()
+  }
 }

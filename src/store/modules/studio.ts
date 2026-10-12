@@ -68,9 +68,14 @@ export const useStudioStore = defineStore('studio', () => {
     return result
   }
   async function login(username: string, password: string) {
-    const result = await request<{ user: Staff }>('login', { username, password }, 'POST')
+    const result = await request<{ user: Staff; maintenanceNotice?: string }>(
+      'login',
+      { username, password },
+      'POST'
+    )
     user.value = result.user
     await refresh()
+    return result
   }
   async function logout() {
     try {

@@ -31,11 +31,28 @@ export interface Customer {
   contact: string
   gameId: string
   remark: string
+  platformId?: string | null
+  orderReferences?: CustomerOrderReference[]
+  orderReferenceCount?: number
+}
+export interface CustomerOrderReference {
+  id: string
+  customerId: string
+  platformId: string
+  shopId: string | null
+  externalOrderNo: string
+}
+export interface PlatformRules {
+  requiresShop: boolean
+  requiresExternalOrderNo: boolean
+  requiresReceipt: boolean
+  allowPayOnArrival: boolean
 }
 export interface Platform {
   id: string
   name: string
-  operatorCommission: boolean
+  operatorCommission?: boolean
+  rules?: PlatformRules
 }
 export interface Shop {
   id: string
@@ -75,6 +92,10 @@ export interface Submission {
   reason?: string
   reviewedAt?: string
   reviewerId?: string
+  recheckBy?: string
+  recheckedAt?: string
+  recheckReason?: string
+  previousSubmissionId?: string
 }
 export interface Assignment {
   leaderId: string
@@ -165,8 +186,9 @@ export interface Attendance {
   date: string
   start: string
   end: string
-  status: 'scheduled' | 'present' | 'leave' | 'absent'
+  status: 'scheduled' | 'present' | 'normal' | 'rest' | 'leave' | 'absent'
   actualHours: number
+  hoursRegistered?: boolean
   remark: string
 }
 export interface SalaryPlan {
@@ -244,6 +266,35 @@ export interface Wallet {
   paid: number
   available: number
 }
+export interface PlayerAdjustment {
+  id: string
+  userId: string
+  orderId: string | null
+  kind: 'deduction' | 'supplement'
+  amount: number
+  appliedAmount: number
+  manualAmount: number
+  status: 'applied' | 'manual' | 'resolved'
+  createdAt: string
+  createdBy: string
+  reason: string
+  source?: 'manual' | 'status-correction'
+  resolution?: 'recovered' | 'waived'
+  resolvedAt?: string
+  resolvedBy?: string
+  resolutionReason?: string
+}
+export interface RewardReview {
+  id: string
+  orderId: string
+  expectedReward: number
+  reason: string
+  createdAt: string
+  actorId: string
+  resolvedAt?: string
+  resolvedBy?: string
+  resolution?: string
+}
 export interface StudioData {
   appearance?: AppearanceConfig
   user: Staff
@@ -273,5 +324,7 @@ export interface StudioData {
     monthlyProfit: number | null
   }
   wallets: Wallet[]
+  playerAdjustments?: PlayerAdjustment[]
+  rewardReviews?: RewardReview[]
   demo: boolean
 }

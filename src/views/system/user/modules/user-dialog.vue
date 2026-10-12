@@ -79,7 +79,9 @@
             :title="
               form.role === 'super_admin'
                 ? '超级管理员始终拥有全部权限，只能由超级管理员维护。'
-                : '默认继承角色权限；允许或禁止会覆盖此人员的角色默认值。'
+                : exportRestricted
+                  ? '客服岗位固定不可导出；其他权限默认继承角色，可按个人覆盖。'
+                  : '默认继承角色权限；允许或禁止会覆盖此人员的角色默认值。'
             "
             type="info"
             class="mb-4"
@@ -95,7 +97,10 @@
             >
             <ElTableColumn label="个人设置" width="160"
               ><template #default="{ row: permission }"
+                ><ElTag v-if="permission.key === 'reports.export' && exportRestricted" type="info">
+                  固定不可导出 </ElTag
                 ><ElSelect
+                  v-else
                   :model-value="overrideValue(permission.key)"
                   :disabled="form.role === 'super_admin'"
                   @update:model-value="setOverride(permission.key, $event)"
@@ -145,6 +150,7 @@
     password: '',
     permissionOverrides: {} as Record<string, boolean>
   })
+  const exportRestricted = computed(() => ['support', 'support_lead'].includes(form.role))
   const rules: FormRules = {
     name: [{ required: true, message: '请输入姓名或称呼', trigger: 'blur' }],
     username: [
@@ -204,6 +210,7 @@
         : 'deny'
   }
   function setOverride(key: string, value: string) {
+    if (key === 'reports.export' && exportRestricted.value) return
     if (value === 'default') delete form.permissionOverrides[key]
     else form.permissionOverrides[key] = value === 'allow'
   }
@@ -214,6 +221,9 @@
       if (!(await formRef.value?.validate().catch(() => false))) return
       await mutate('/users', {
         ...form,
+        permissionOverrides: exportRestricted.value
+          ? { ...form.permissionOverrides, 'reports.export': false }
+          : form.permissionOverrides,
         id: props.row?.id,
         levelId: form.levelId || undefined,
         password: form.password || undefined

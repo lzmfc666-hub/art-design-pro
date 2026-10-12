@@ -10,8 +10,9 @@ import { getPendingLoading, resetPendingLoading } from './beforeEach'
 export function setupAfterEachGuard(router: Router) {
   const { scrollToTop } = useCommon()
 
-  router.afterEach(() => {
-    scrollToTop()
+  router.afterEach((to, from, failure) => {
+    // 标签和筛选只更新查询参数，保留当前阅读位置。
+    if (!failure && to.path !== from.path) scrollToTop()
 
     // 关闭进度条
     const settingStore = useSettingStore()

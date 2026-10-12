@@ -4,7 +4,12 @@ import { createStudioServer } from '../server/index.mjs'
 
 const password = 'export-http-test-password-123'
 async function fixture(t) {
-  const server = createStudioServer({ dbPath: ':memory:', seed: true, password })
+  const server = createStudioServer({
+    dbPath: ':memory:',
+    seed: true,
+    password,
+    clock: () => new Date('2026-10-13T04:00:00Z')
+  })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise((resolve) => server.close(resolve)))
   const base = `http://127.0.0.1:${server.address().port}/api/studio`
@@ -91,23 +96,19 @@ test('下载时重新读取权限，旧目录不能导出已撤销的工资权�
 
 test('导出全量可见审计记录，页面列表上限不截断报表', async (t) => {
   const { server, login, request } = await fixture(t)
-  const row = server.service.db.prepare('SELECT json FROM studio_state').get()
-  const state = JSON.parse(row.json)
-  state.logs = Array.from({ length: 1005 }, (_, index) => ({
-    id: `export-log-${index}`,
-    actorId: 'admin',
-    actorName: '测试超管',
-    action: '修改本人称呼',
-    entity: 'profile',
-    entityId: 'admin',
-    before: { name: '旧名' },
-    after: { name: `新名${index}` },
-    createdAt: '2026-10-01T16:01:00.000Z'
-  }))
-  server.service.db.prepare('UPDATE studio_state SET json=?').run(JSON.stringify(state))
+  for (let index = 0; index < 1005; index++)
+    server.service.mutate('admin', '/profile', { name: `审计导出${index}` })
   const cookie = await login('admin')
-  assert.equal(server.service.bootstrap('admin', '2026-10').logs.length, 1000)
-  const body = { month: '2026-10', modules: [{ id: 'logs', fields: ['id', 'action'] }] }
+  const page = await request('/logs?current=1&size=20', cookie)
+  assert.equal(page.status, 200)
+  const pageResult = await page.json()
+  assert.equal(pageResult.records.length, 20)
+  assert.equal(pageResult.total, 1006)
+  const body = {
+    month: '2026-10',
+    period: { type: 'total' },
+    modules: [{ id: 'logs', fields: ['id', 'action'] }]
+  }
   const preview = await request('/exports/preview', cookie, body)
   assert.equal(preview.status, 200)
   const sheet = (await preview.json()).sheets[0]
@@ -116,4 +117,37 @@ test('导出全量可见审计记录，页面列表上限不截断报表', async
   const download = await request('/exports/download', cookie, body)
   assert.equal(download.status, 200)
   assert.equal((await download.json()).sheets[0].rows.length, 1006)
+  const timestampSearch = await request('/exports/download', cookie, {
+    ...body,
+    filters: { keywordField: 'createdAt', keyword: '2026-10-13 12:00:00' }
+  })
+  assert.equal(timestampSearch.status, 200)
+  assert.equal((await timestampSearch.json()).sheets[0].rowCount, 1006)
+})
+
+test('客服和客服主管真实登录后目录、预览、下载全部拒绝，个人授权覆盖无法绕过', async (t) => {
+  const { server, login, request } = await fixture(t)
+  for (const role of ['support', 'support_lead']) {
+    const actor = server.service.mutate('admin', '/users', {
+      username: `blocked-${role}`,
+      name: role,
+      role,
+      status: 'active',
+      maxActiveOrders: 1,
+      permissionOverrides: { 'reports.export': true },
+      password
+    })
+    const cookie = await login(actor.username)
+    assert.equal((await request('/exports/catalog?month=2026-10', cookie)).status, 403)
+    for (const path of ['/exports/preview', '/exports/download'])
+      assert.equal(
+        (
+          await request(path, cookie, {
+            month: '2026-10',
+            modules: [{ id: 'profile', fields: ['username'] }]
+          })
+        ).status,
+        403
+      )
+  }
 })

@@ -1,22 +1,25 @@
 <!-- 登录、注册、忘记密码左侧背景 -->
 <template>
-  <div class="login-left-view">
+  <div
+    class="login-left-view"
+    :class="{ 'login-left-custom': config.login.background.mode !== 'default' }"
+  >
     <div class="logo">
       <ArtLogo class="icon" size="46" />
-      <h1 class="title">{{ AppConfig.systemInfo.name }}</h1>
+      <h1 class="title">{{ config.studioName }}</h1>
     </div>
 
-    <div class="left-img">
+    <div v-if="config.login.background.mode === 'default'" class="left-img">
       <ThemeSvg :src="loginIcon" size="100%" />
     </div>
 
     <div class="text-wrap">
-      <h1> {{ $t('login.leftView.title') }} </h1>
-      <p> {{ $t('login.leftView.subTitle') }} </p>
+      <h1 class="whitespace-pre-line">{{ config.login.subtitle }}</h1>
+      <p class="whitespace-pre-line">{{ config.login.description }}</p>
     </div>
 
     <!-- 几何装饰元素 -->
-    <div class="geometric-decorations">
+    <div v-if="config.login.background.mode === 'default'" class="geometric-decorations">
       <!-- 基础几何形状 -->
       <div class="geo-element circle-outline animate-fade-in-up" style="animation-delay: 0s"></div>
       <div
@@ -71,9 +74,10 @@
 </template>
 
 <script setup lang="ts">
-  import AppConfig from '@/config'
+  import { useAppearance } from '@/hooks/business/useAppearance'
   import loginIcon from '@imgs/svg/login_icon.svg'
   import { themeAnimation } from '@/utils/ui/animation'
+  const { config } = useAppearance()
 
   // 定义 props
   defineProps<{
@@ -103,6 +107,10 @@
     overflow: hidden;
     background-color: $bg-mix-light-9;
 
+    &.login-left-custom {
+      background: transparent !important;
+    }
+
     .logo {
       position: relative;
       z-index: 100;
@@ -127,8 +135,10 @@
 
     .text-wrap {
       position: absolute;
+      right: 24px;
       bottom: 80px;
-      width: 100%;
+      left: 24px;
+      width: auto;
       text-align: center;
       animation: slideInLeft 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
 

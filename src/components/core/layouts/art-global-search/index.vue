@@ -9,9 +9,19 @@
       modal-class="search-modal"
       @close="closeSearchDialog"
     >
+      <ElTabs v-model="category" class="search-categories"
+        ><ElTabPane v-for="item in categories" :key="item.key" :name="item.key" :label="item.label"
+      /></ElTabs>
+      <ElSelect v-model="searchField" class="search-field" placeholder="选择搜索字段"
+        ><ElOption
+          v-for="item in fieldOptions"
+          :key="item.key"
+          :value="item.key"
+          :label="item.label"
+      /></ElSelect>
       <ElInput
         v-model.trim="searchVal"
-        placeholder="搜索菜单、订单号、客户或人员（Ctrl + K）"
+        :placeholder="`搜索${fieldOptions.find((item) => item.key === searchField)?.label || '当前字段'}（Ctrl + K）`"
         @input="search"
         @blur="searchBlur"
         ref="searchInput"
@@ -51,11 +61,14 @@
         </div>
         <ElEmpty
           v-if="searchVal && !searchResult.length"
-          description="未找到可访问的记录，试试订单号、客户名称或页面名称"
+          description="当前分类和字段没有匹配记录"
           :image-size="75"
         />
 
-        <div v-show="!searchVal && searchResult.length === 0 && historyResult.length > 0">
+        <div
+          class="history-result"
+          v-show="canUseHistory && searchResult.length === 0 && historyResult.length > 0"
+        >
           <p class="text-xs text-g-500">{{ $t('search.historyTitle') }}</p>
           <div class="mt-1.5 w-full">
             <div
@@ -127,6 +140,44 @@
   }
   const searchResult = ref<SearchRoute[]>([])
   const { data, can } = useStudio()
+  type SearchCategory = 'menu' | 'orders' | 'customers' | 'people'
+  const category = ref<SearchCategory>('menu')
+  const searchField = ref('title')
+  const categories = computed(() =>
+    [
+      { key: 'menu', label: '菜单', allowed: true },
+      { key: 'orders', label: '订单', allowed: can('orders.view') },
+      { key: 'customers', label: '客户', allowed: can('orders.create') || can('users.manage') },
+      { key: 'people', label: '人员', allowed: can('users.manage') }
+    ].filter((item) => item.allowed)
+  )
+  const fields: Record<SearchCategory, { key: string; label: string }[]> = {
+    menu: [
+      { key: 'title', label: '菜单名称' },
+      { key: 'path', label: '页面路径' }
+    ],
+    orders: [
+      ['orderNo', '工作室订单号'],
+      ['externalOrderNo', '平台订单号'],
+      ['title', '订单项目'],
+      ['customerName', '客户名称'],
+      ['contact', '客户联系方式'],
+      ['gameId', '客户游戏 ID'],
+      ['roomCode', '房间码']
+    ].map(([key, label]) => ({ key, label })),
+    customers: [
+      ['name', '客户名称'],
+      ['contact', '联系方式'],
+      ['gameId', '游戏 ID'],
+      ['remark', '备注']
+    ].map(([key, label]) => ({ key, label })),
+    people: [
+      { key: 'name', label: '人员名称' },
+      { key: 'username', label: '登录账号' }
+    ]
+  }
+  const fieldOptions = computed(() => fields[category.value])
+  const canUseHistory = computed(() => category.value === 'menu' && !searchVal.value)
   const historyMaxLength = 10
 
   const { searchHistory: historyResult } = storeToRefs(userStore)
@@ -161,6 +212,11 @@
 
     // 当搜索对话框打开时，处理方向键和回车键
     if (showSearchDialog.value) {
+      if (
+        ['ArrowUp', 'ArrowDown', 'Enter'].includes(event.key) &&
+        (event.target as HTMLElement | null)?.closest?.('.el-select, .el-tabs__nav')
+      )
+        return
       if (event.key === 'ArrowUp') {
         event.preventDefault()
         highlightPrevious()
@@ -187,10 +243,11 @@
   const search = (val: string) => {
     highlightedIndex.value = 0
     if (val) {
-      searchResult.value = [
-        ...flattenAndFilterMenuItems(menuList.value, val),
-        ...businessMatches(val)
-      ].slice(0, 30)
+      searchResult.value = (
+        category.value === 'menu'
+          ? flattenAndFilterMenuItems(menuList.value, val)
+          : businessMatches(val)
+      ).slice(0, 30)
     } else {
       searchResult.value = []
     }
@@ -198,55 +255,71 @@
   function businessMatches(value: string): SearchRoute[] {
     const q = value.toLowerCase()
     const result: SearchRoute[] = []
-    if (can('orders.view'))
+    if (category.value === 'orders' && can('orders.view'))
       for (const order of data.value?.orders || []) {
         const customer = data.value?.customers.find((item) => item.id === order.customerId)
-        if (
-          [
-            order.orderNo,
-            order.externalOrderNo,
-            order.title,
-            order.roomCode,
-            order.gameId,
-            customer?.name,
-            customer?.contact
-          ].some((text) => text?.toLowerCase().includes(q))
-        )
+        const values: Record<string, string | undefined> = {
+          orderNo: order.orderNo,
+          externalOrderNo: order.externalOrderNo,
+          title: order.title,
+          roomCode: order.roomCode,
+          gameId: order.gameId,
+          customerName: customer?.name,
+          contact: customer?.contact
+        }
+        if (values[searchField.value]?.toLowerCase().includes(q))
           result.push({
             path: `/orders/list?id=${encodeURIComponent(order.id)}`,
             meta: { title: `${order.orderNo} · ${order.title}` },
             businessRecord: true,
             description: `订单 · ${customer?.name || '客户'} · ${statusLabels[order.status]}`
           })
-        if (result.length >= 10) break
+        if (result.length >= 30) break
       }
-    if (can('users.manage'))
+    if (category.value === 'people' && can('users.manage'))
       for (const person of data.value?.users || []) {
-        if (`${person.name} ${person.username}`.toLowerCase().includes(q))
+        if (
+          (searchField.value === 'username' ? person.username : person.name)
+            .toLowerCase()
+            .includes(q)
+        )
           result.push({
-            path: `/system/user?role=${person.role}&keyword=${encodeURIComponent(person.username || person.name)}`,
+            path: `/system/user?role=${person.role}&${searchField.value}=${encodeURIComponent(searchField.value === 'username' ? person.username : person.name)}`,
             meta: { title: person.name },
             businessRecord: true,
             description: `人员 · ${roleLabels[person.role]} · ${person.status === 'active' ? '启用' : '停用'}`
           })
-        if (result.length >= 15) break
+        if (result.length >= 30) break
       }
-    if (can('users.manage') || can('orders.create'))
+    if (category.value === 'customers' && (can('users.manage') || can('orders.create')))
       for (const customer of data.value?.customers || []) {
-        if (`${customer.name} ${customer.contact} ${customer.gameId}`.toLowerCase().includes(q))
+        const values: Record<string, string> = {
+          name: customer.name,
+          contact: customer.contact,
+          gameId: customer.gameId,
+          remark: customer.remark
+        }
+        if (values[searchField.value]?.toLowerCase().includes(q))
           result.push({
-            path: `/orders/customers?keyword=${encodeURIComponent(customer.name)}`,
+            path: `/orders/customers?id=${encodeURIComponent(customer.id)}`,
             meta: { title: customer.name },
             businessRecord: true,
             description: `客户 · ${customer.gameId || '未填写游戏 ID'}`
           })
-        if (result.length >= 20) break
+        if (result.length >= 30) break
       }
     return result
   }
   watch([() => data.value?.permissions.join('|'), menuList], () => {
+    pruneHistory()
+    if (!categories.value.some((item) => item.key === category.value)) category.value = 'menu'
     if (searchVal.value) search(searchVal.value)
   })
+  watch(category, () => {
+    searchField.value = fieldOptions.value[0].key
+    search(searchVal.value)
+  })
+  watch(searchField, () => search(searchVal.value))
 
   const flattenAndFilterMenuItems = (items: AppRouteRecord[], val: string): AppRouteRecord[] => {
     const lowerVal = val.toLowerCase()
@@ -254,8 +327,11 @@
 
     const flattenAndMatch = (item: AppRouteRecord) => {
       if (item.meta?.isHide) return
+      if (item.meta.studioPermissions?.length && !item.meta.studioPermissions.some(can)) return
 
-      const lowerItemTitle = formatMenuTitle(item.meta.title).toLowerCase()
+      const lowerItemTitle = (
+        searchField.value === 'path' ? item.path : formatMenuTitle(item.meta.title)
+      ).toLowerCase()
 
       if (item.children && item.children.length > 0) {
         item.children.forEach(flattenAndMatch)
@@ -276,7 +352,12 @@
 
   // 高亮控制并实现滚动条跟随
   const highlightPrevious = () => {
-    if (searchVal.value ? !searchResult.value.length : !historyResult.value.length) return
+    if (
+      searchVal.value
+        ? !searchResult.value.length
+        : !canUseHistory.value || !historyResult.value.length
+    )
+      return
     isKeyboardNavigating.value = true
     if (searchVal.value) {
       highlightedIndex.value =
@@ -294,7 +375,12 @@
   }
 
   const highlightNext = () => {
-    if (searchVal.value ? !searchResult.value.length : !historyResult.value.length) return
+    if (
+      searchVal.value
+        ? !searchResult.value.length
+        : !canUseHistory.value || !historyResult.value.length
+    )
+      return
     isKeyboardNavigating.value = true
     if (searchVal.value) {
       highlightedIndex.value = (highlightedIndex.value + 1) % searchResult.value.length
@@ -361,7 +447,7 @@
   const selectHighlighted = () => {
     if (searchVal.value && searchResult.value.length) {
       searchGoPage(searchResult.value[highlightedIndex.value])
-    } else if (!searchVal.value && historyResult.value.length) {
+    } else if (canUseHistory.value && historyResult.value.length) {
       searchGoPage(historyResult.value[historyHIndex.value])
     }
   }
@@ -387,6 +473,22 @@
     if (Array.isArray(historyResult.value)) {
       userStore.setSearchHistory(historyResult.value)
     }
+  }
+  function pruneHistory() {
+    if (!menuList.value.length) return
+    const allowed = new Set<string>()
+    const visit = (items: AppRouteRecord[]) =>
+      items.forEach((item) => {
+        if (item.meta.isHide) return
+        if (item.meta.studioPermissions?.length && !item.meta.studioPermissions.some(can)) return
+        if (item.children?.length) visit(item.children)
+        else allowed.add(item.path || String(item.meta.link || ''))
+      })
+    visit(menuList.value)
+    const filtered = historyResult.value.filter((item: AppRouteRecord) =>
+      allowed.has(item.path || String(item.meta.link || ''))
+    )
+    if (filtered.length !== historyResult.value.length) userStore.setSearchHistory(filtered)
   }
 
   const addHistory = (item: AppRouteRecord) => {
@@ -416,6 +518,7 @@
 
   // 对话框控制
   const openSearchDialog = () => {
+    pruneHistory()
     showSearchDialog.value = true
     focusInput()
   }
@@ -435,13 +538,18 @@
   }
 
   const highlightOnHoverHistory = (index: number) => {
-    if (!isKeyboardNavigating.value && !searchVal.value) {
+    if (!isKeyboardNavigating.value && canUseHistory.value) {
       historyHIndex.value = index
     }
   }
 </script>
 <style lang="scss" scoped>
   .layout-search {
+    .search-field {
+      width: 100%;
+      margin-bottom: 12px;
+    }
+
     :deep(.search-modal) {
       background-color: rgb(0 0 0 / 20%);
     }

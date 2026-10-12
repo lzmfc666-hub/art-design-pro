@@ -26,6 +26,21 @@ export default ({ mode }: { mode: string }) => {
     base: VITE_BASE_URL,
     server: {
       port: Number(VITE_PORT),
+      fs: {
+        deny: [
+          '.env',
+          '.env.*',
+          '*.{crt,pem}',
+          '**/.git/**',
+          '**/.data/**',
+          '**/.qa/**',
+          '**/output/**',
+          '**/*.sqlite',
+          '**/*.sqlite-wal',
+          '**/*.sqlite-shm',
+          '**/bootstrap-password.txt'
+        ]
+      },
       proxy: {
         '/api': {
           target: VITE_API_PROXY_URL,

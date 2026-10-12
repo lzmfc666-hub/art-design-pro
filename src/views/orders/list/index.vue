@@ -128,7 +128,15 @@
   const route = useRoute()
   const router = useRouter()
   const initial = () => ({
-    keyword: '',
+    orderNo: '',
+    externalOrderNo: '',
+    title: '',
+    customerName: '',
+    contact: '',
+    gameId: '',
+    roomCode: '',
+    shopId: '',
+    leaderId: '',
     status: validStatus(route.query.status),
     platformId: '',
     creatorId: '',
@@ -203,12 +211,20 @@
         endPlaceholder: '结束日期'
       }
     },
-    {
-      key: 'keyword',
-      label: '搜索',
+    ...[
+      ['orderNo', '工作室订单号'],
+      ['externalOrderNo', '平台订单号'],
+      ['title', '订单项目'],
+      ['customerName', '客户名称'],
+      ['contact', '客户联系方式'],
+      ['gameId', '客户游戏 ID'],
+      ['roomCode', '房间码']
+    ].map(([key, label]) => ({
+      key,
+      label,
       type: 'input',
-      props: { placeholder: '订单号、客户、游戏 ID', clearable: true }
-    },
+      props: { clearable: true, placeholder: `按${label}搜索` }
+    })),
     {
       key: 'status',
       label: '订单状态',
@@ -225,6 +241,30 @@
       props: {
         clearable: true,
         options: (data.value?.platforms || []).map((p) => ({ label: p.name, value: p.id }))
+      }
+    },
+    {
+      key: 'shopId',
+      label: '来源店铺',
+      type: 'select',
+      props: {
+        clearable: true,
+        filterable: true,
+        options: (data.value?.shops || [])
+          .filter((item) => !search.value.platformId || item.platformId === search.value.platformId)
+          .map((item) => ({ label: item.name, value: item.id }))
+      }
+    },
+    {
+      key: 'leaderId',
+      label: '负责人',
+      type: 'select',
+      props: {
+        clearable: true,
+        filterable: true,
+        options: (data.value?.users || [])
+          .filter((item) => item.role === 'player')
+          .map((item) => ({ label: item.name, value: item.id }))
       }
     },
     {
@@ -254,20 +294,20 @@
   ])
   const filtered = computed(() => {
     const f = applied.value
-    const q = (f.keyword || '').trim().toLowerCase()
+    const matches = (value: string | undefined, filter: string | undefined) =>
+      !filter || (value || '').toLowerCase().includes(filter.trim().toLowerCase())
     return [...(data.value?.orders || [])]
       .filter(
         (o) =>
-          (!q ||
-            [
-              o.orderNo,
-              o.title,
-              o.externalOrderNo,
-              o.gameId,
-              o.roomCode,
-              customerName(o.customerId),
-              data.value?.customers.find((c) => c.id === o.customerId)?.contact
-            ].some((v) => v?.toLowerCase().includes(q))) &&
+          matches(o.orderNo, f.orderNo) &&
+          matches(o.externalOrderNo, f.externalOrderNo) &&
+          matches(o.title, f.title) &&
+          matches(customerName(o.customerId), f.customerName) &&
+          matches(data.value?.customers.find((c) => c.id === o.customerId)?.contact, f.contact) &&
+          matches(o.gameId, f.gameId) &&
+          matches(o.roomCode, f.roomCode) &&
+          (!f.shopId || o.shopId === f.shopId) &&
+          (!f.leaderId || o.leaderId === f.leaderId) &&
           (!f.status || o.status === f.status) &&
           (!f.platformId || o.platformId === f.platformId) &&
           (!f.creatorId || o.creatorId === f.creatorId) &&
@@ -281,6 +321,20 @@
   })
   const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =
     useBusinessTable(filtered)
+  watch(
+    () => search.value.platformId,
+    () => {
+      if (
+        search.value.shopId &&
+        !data.value?.shops.some(
+          (shop) =>
+            shop.id === search.value.shopId &&
+            (!search.value.platformId || shop.platformId === search.value.platformId)
+        )
+      )
+        search.value.shopId = ''
+    }
+  )
   const { columns, columnChecks } = useTableColumns<Order>(() => [
     { prop: 'title', label: '订单 / 项目', minWidth: 220, useSlot: true },
     { prop: 'customerId', label: '客户 / 来源', minWidth: 170, useSlot: true },

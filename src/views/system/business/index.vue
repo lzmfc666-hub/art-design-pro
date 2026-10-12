@@ -85,7 +85,7 @@
               v-ripple
               >新增来源平台</ElButton
             ><span class="ml-3 text-sm text-g-500"
-              >来源独立于成交渠道；运营提成比例由财务维护。</span
+              >各来源独立配置下单规则；运营提成比例由财务维护。</span
             ></template
           >
         </ArtTableHeader>
@@ -98,10 +98,16 @@
           @pagination:size-change="platformTable.handleSizeChange"
           @pagination:current-change="platformTable.handleCurrentChange"
         >
-          <template #operatorCommission="{ row }"
-            ><ElTag :type="row.operatorCommission ? 'success' : 'info'">{{
-              row.operatorCommission ? '参与运营提成' : '不参与'
-            }}</ElTag></template
+          <template #rules="{ row }"
+            ><ElSpace wrap
+              ><ElTag
+                v-for="rule in platformRuleLabels.filter((item) => rulesForPlatform(row)[item.key])"
+                :key="rule.key"
+                size="small"
+                type="info"
+                >{{ rule.label }}</ElTag
+              ></ElSpace
+            ></template
           >
           <template #operation="{ row }"
             ><ElButton
@@ -128,7 +134,7 @@
               :disabled="saving || !shopPlatforms.length"
               @click="editShop()"
               v-ripple
-              >新增闲鱼店铺</ElButton
+              >新增来源店铺</ElButton
             ></template
           >
         </ArtTableHeader>
@@ -257,21 +263,21 @@
           <ElFormItem label="来源平台名称" required
             ><ElInput v-model="platform.name" maxlength="60"
           /></ElFormItem>
-          <ElFormItem label="参与运营提成"
-            ><ElSwitch v-model="platform.operatorCommission" :disabled="isHall"
-          /></ElFormItem>
-          <ElAlert
-            :title="
-              isHall ? '游戏大厅不参与运营提成。' : '开启后需由财务配置运营对应平台的提成比例。'
-            "
+          <ElFormItem v-for="rule in platformRuleLabels" :key="rule.key" :label="rule.label"
+            ><ElSwitch v-model="platform.rules[rule.key]" /></ElFormItem
+          ><ElAlert
+            title="所有来源都可建立店铺；运营提成比例由财务在工资方案中维护，填 0 表示不计提。"
             type="info"
             :closable="false"
           />
         </template>
         <template v-else-if="open === 'shop'">
-          <ElFormItem label="闲鱼店铺名称" required
+          <ElFormItem label="店铺名称" required
             ><ElInput v-model="shop.name" maxlength="60"
           /></ElFormItem>
+          <p class="text-xs text-g-500 mb-4"
+            >店铺名称只需在同一来源内唯一，不同来源可使用同名店铺。</p
+          >
           <ElFormItem label="所属平台" required
             ><ElSelect v-model="shop.platformId" class="w-full"
               ><ElOption
@@ -312,17 +318,34 @@
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import BusinessAmount from '@/components/business/BusinessAmount.vue'
   import type { Level, OrderTemplate, Platform, Shop } from '@/types/studio'
+  import {
+    rulesForPlatform,
+    platformRuleLabels,
+    type PlatformRules
+  } from '@/utils/business/platform-rules'
 
   defineOptions({ name: 'BusinessConfig' })
   const { data, loading, can, mutate, refresh } = useStudio()
   const tab = ref('templates')
-  const search = ref({ query: '', active: '' })
+  const search = ref({ name: '', game: '', description: '', active: '' })
   const searchItems = [
     {
-      key: 'query',
-      label: '项目搜索',
+      key: 'name',
+      label: '项目名称',
       type: 'input',
-      props: { clearable: true, placeholder: '项目名称 / 游戏' }
+      props: { clearable: true, placeholder: '按项目名称搜索' }
+    },
+    {
+      key: 'game',
+      label: '游戏',
+      type: 'input',
+      props: { clearable: true, placeholder: '按游戏名称搜索' }
+    },
+    {
+      key: 'description',
+      label: '规格 / 目标',
+      type: 'input',
+      props: { clearable: true, placeholder: '按规格内容搜索' }
     },
     {
       key: 'active',
@@ -340,9 +363,11 @@
   const templates = computed(() =>
     (data.value?.templates || []).filter(
       (row) =>
-        `${row.name} ${row.game}`
+        row.name.toLowerCase().includes((search.value.name || '').trim().toLowerCase()) &&
+        row.game.toLowerCase().includes((search.value.game || '').trim().toLowerCase()) &&
+        row.description
           .toLowerCase()
-          .includes((search.value.query || '').trim().toLowerCase()) &&
+          .includes((search.value.description || '').trim().toLowerCase()) &&
         (!search.value.active || row.active === (search.value.active === 'active'))
     )
   )
@@ -351,9 +376,7 @@
   const levels = computed(() =>
     [...(data.value?.levels || [])].sort((a, b) => a.delaySeconds - b.delaySeconds)
   )
-  const shopPlatforms = computed(() =>
-    platforms.value.filter((row) => row.id === 'xianyu' || row.name === '闲鱼')
-  )
+  const shopPlatforms = platforms
   const templateTable = useBusinessTable(templates),
     platformTable = useBusinessTable(platforms),
     shopTable = useBusinessTable(shops),
@@ -370,11 +393,11 @@
   ])
   const platformColumns = useTableColumns<Platform>(() => [
     { prop: 'name', label: '来源平台', minWidth: 180 },
-    { prop: 'operatorCommission', label: '运营提成', minWidth: 220, useSlot: true },
+    { prop: 'rules', label: '下单规则', minWidth: 320, useSlot: true },
     { prop: 'operation', label: '操作', width: 110, fixed: 'right', useSlot: true }
   ])
   const shopColumns = useTableColumns<Shop>(() => [
-    { prop: 'name', label: '闲鱼店铺', minWidth: 180 },
+    { prop: 'name', label: '来源店铺', minWidth: 180 },
     { prop: 'platformId', label: '所属平台', minWidth: 180, useSlot: true },
     { prop: 'operation', label: '操作', width: 110, fixed: 'right', useSlot: true }
   ])
@@ -384,7 +407,7 @@
     { prop: 'operation', label: '操作', width: 110, fixed: 'right', useSlot: true }
   ])
   function resetSearch() {
-    search.value = { query: '', active: '' }
+    search.value = { name: '', game: '', description: '', active: '' }
     templateTable.resetPage()
   }
   const open = ref<'' | 'template' | 'platform' | 'shop' | 'level'>(''),
@@ -399,9 +422,9 @@
     remark: '',
     active: true
   })
-  const platform = reactive<{ id?: string; name: string; operatorCommission: boolean }>({
+  const platform = reactive<{ id?: string; name: string; rules: PlatformRules }>({
     name: '',
-    operatorCommission: false
+    rules: rulesForPlatform()
   })
   const shop = reactive<{ id?: string; name: string; platformId: string }>({
     name: '',
@@ -411,13 +434,12 @@
     name: '',
     delaySeconds: 0
   })
-  const isHall = computed(() => platform.id === 'hall' || platform.name.trim() === '游戏大厅')
   const dialogTitle = computed(
     () =>
       ({
         template: '订单项目配置',
         platform: '来源平台配置',
-        shop: '闲鱼店铺配置',
+        shop: '来源店铺配置',
         level: '打手等级配置'
       })[open.value || 'template']
   )
@@ -442,7 +464,7 @@
   }
   function editPlatform(row?: Platform) {
     if (!can('settings.manage') || saving.value) return
-    Object.assign(platform, { id: undefined, name: '', operatorCommission: false }, row || {})
+    Object.assign(platform, { id: row?.id, name: row?.name || '', rules: rulesForPlatform(row) })
     open.value = 'platform'
   }
   function editShop(row?: Shop) {
@@ -471,9 +493,7 @@
     if (!body.name.trim()) return void ElMessage.warning('请填写名称')
     if (open.value === 'template' && !template.game.trim())
       return void ElMessage.warning('请填写游戏名称')
-    if (open.value === 'shop' && !shop.platformId)
-      return void ElMessage.warning('请选择闲鱼来源平台')
-    if (open.value === 'platform' && isHall.value) platform.operatorCommission = false
+    if (open.value === 'shop' && !shop.platformId) return void ElMessage.warning('请选择来源平台')
     saving.value = true
     try {
       await mutate(

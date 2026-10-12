@@ -182,7 +182,14 @@ test('审计详情遵循业务权限，日志查看不暴露人员账号、个�
       data.logs.some((row) => row.entity === 'salary-plan' || row.entity === 'payroll'),
       false
     )
-    const exported = JSON.stringify(f.exportedLogs(actor))
+    const exported = data.permissions.includes('reports.export')
+      ? JSON.stringify(f.exportedLogs(actor))
+      : JSON.stringify(data.logs)
+    if (!data.permissions.includes('reports.export'))
+      assert.throws(
+        () => f.exportedLogs(actor),
+        (error) => error.status === 403
+      )
     assert.equal(exported.includes('private-expense-purpose'), false)
     assert.equal(exported.includes('财务私有凭证.png'), false)
     if (!data.permissions.includes('users.manage'))
@@ -241,6 +248,10 @@ test('审计使用字段白名单并保留历史旧值，导出不重新泄露�
   const state = JSON.parse(
     f.service.db.prepare('SELECT json FROM studio_state WHERE id=1').get().json
   )
+  state.logs = f.service.db
+    .prepare('SELECT payload FROM audit_logs')
+    .all()
+    .map((row) => JSON.parse(row.payload))
   const audit = state.logs.find(
     (row) => row.entityId === f.completed.id && row.after?.submissions?.length
   )
@@ -253,6 +264,11 @@ test('审计使用字段白名单并保留历史旧值，导出不重新泄露�
   }
   const userLog = state.logs.find((row) => row.entityId === f.users.support.id && row.after)
   userLog.after.passwordHash = 'private-extra-user'
+  for (const row of state.logs)
+    f.service.db
+      .prepare('UPDATE audit_logs SET payload=? WHERE id=?')
+      .run(JSON.stringify(row), row.id)
+  state.logs = []
   state.logs.push({
     id: 'unknown-audit',
     actorId: 'admin',
@@ -311,4 +327,112 @@ test('全员月结同时要求工资管理和全员查看，本人管理授权�
   assert.ok(paid.lines.length > 1)
   assert.ok(paid.lines.some((row) => row.userId === actor.id))
   assert.ok(paid.lines.some((row) => row.userId === f.users.finance.id))
+})
+
+test('新增业务审计保留平台规则、客户来源及更正信息，扣补款仍按财务和本人权限投影', (t) => {
+  const f = fixture(t)
+  const originalRules = {
+    requiresShop: true,
+    requiresExternalOrderNo: true,
+    requiresReceipt: false,
+    allowPayOnArrival: false
+  }
+  const changedRules = { ...originalRules, requiresReceipt: true, allowPayOnArrival: true }
+  const platform = f.mutate('/platforms', { name: '审计新来源', rules: originalRules })
+  f.mutate('/platforms', { ...platform, rules: changedRules })
+  const customer = f.mutate('/customers', { ...f.customer, platformId: platform.id })
+  const reference = f.mutate('/customer-order-references', {
+    customerId: customer.id,
+    platformId: 'xianyu',
+    shopId: 'jindun',
+    externalOrderNo: '000000-audit-reference'
+  })
+  f.mutate('/customer-order-references', {
+    customerId: customer.id,
+    id: reference.id,
+    action: 'remove'
+  })
+  f.mutate(
+    `/orders/${f.order.id}/action`,
+    {
+      action: 'correct-status',
+      status: 'active',
+      leaderId: f.users.player.id,
+      reason: '确认实际负责人接单状态'
+    },
+    f.users.finance.id
+  )
+  f.mutate(
+    `/orders/${f.completed.id}/action`,
+    { action: 'correct-status', status: 'active', reason: '财务退回已结算订单复核' },
+    f.users.finance.id
+  )
+  const adjustment = f.mutate(
+    '/player-adjustments',
+    {
+      userId: f.users.player.id,
+      kind: 'deduction',
+      amount: 1734,
+      reason: 'private-player-adjustment-reason'
+    },
+    f.users.finance.id
+  )
+  f.mutate(`/player-adjustments/${adjustment.id}/action`, {
+    action: 'resolve',
+    resolution: 'waived',
+    reason: 'private-player-adjustment-resolution'
+  })
+  const attendance = f.mutate('/attendance', {
+    userId: f.users.finance.id,
+    date: '2026-10-13',
+    start: '',
+    end: '',
+    status: 'normal',
+    actualHours: null,
+    remark: ''
+  })
+  const ownerLogs = f.snapshot(f.users.owner.id).logs
+  const platformLog = ownerLogs.find((row) => row.entityId === platform.id && row.before)
+  assert.deepEqual(platformLog.before.rules, originalRules)
+  assert.deepEqual(platformLog.after.rules, changedRules)
+  const customerLog = ownerLogs.find((row) => row.entityId === customer.id && row.before)
+  assert.equal(customerLog.before.platformId, null)
+  assert.equal(customerLog.after.platformId, platform.id)
+  assert.equal(customerLog.after.createdAt, customer.createdAt)
+  const referenceAdded = ownerLogs.find((row) => row.entityId === reference.id && row.after)
+  const referenceRemoved = ownerLogs.find((row) => row.entityId === reference.id && row.before)
+  assert.deepEqual(referenceAdded.after, reference)
+  assert.deepEqual(referenceRemoved.before, reference)
+  assert.equal(referenceRemoved.after, null)
+  const correction = ownerLogs.find(
+    (row) => row.entityId === f.order.id && row.action.startsWith('订单：correct-status')
+  )
+  assert.equal(correction.before.status, 'pending')
+  assert.equal(correction.after.status, 'active')
+  assert.equal(correction.after.assignments.at(-1).correctedBy, f.users.finance.id)
+  assert.ok(correction.action.includes('确认实际负责人接单状态'))
+  assert.equal(ownerLogs.find((row) => row.entityId === attendance.id).after.hoursRegistered, false)
+  for (const actor of [f.users.finance.id, f.users.player.id]) {
+    const logs = f.snapshot(actor).logs
+    const resolution = logs.find(
+      (row) => row.entityId === adjustment.id && row.after?.status === 'resolved'
+    )
+    assert.equal(resolution.before.amount, 1734)
+    assert.equal(resolution.before.manualAmount, 1734)
+    assert.equal(resolution.after.resolution, 'waived')
+    assert.equal(resolution.after.resolutionReason, 'private-player-adjustment-resolution')
+    assert.ok(
+      logs.some(
+        (row) => row.entity === 'player-adjustment' && row.after?.source === 'status-correction'
+      )
+    )
+  }
+  for (const actor of [f.users.hr.id, f.users.support.id, f.users.admin.id]) {
+    const logs = f.snapshot(actor).logs
+    const changes = logs.filter((row) => row.entity === 'player-adjustment')
+    assert.ok(changes.length > 0)
+    assert.ok(changes.every((row) => row.before === null && row.after === null))
+    assert.ok(changes.every((row) => row.actorName && row.createdAt))
+    assert.equal(JSON.stringify(logs).includes('private-player-adjustment-'), false)
+  }
 })

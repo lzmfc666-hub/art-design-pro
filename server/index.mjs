@@ -118,6 +118,18 @@ export function createStudioServer(options = {}) {
       }
       const path = url.pathname.slice(PREFIX.length)
       const token = cookieToken(req)
+      if (req.method === 'GET' && path === '/appearance/public')
+        return json(res, 200, service.publicAppearance())
+      const publicAssetMatch = path.match(/^\/public-assets\/([^/]+)$/)
+      if (req.method === 'GET' && publicAssetMatch) {
+        const attachment = service.publicAsset(publicAssetMatch[1])
+        res.writeHead(200, {
+          'Content-Type': attachment.mime,
+          'Content-Length': attachment.size,
+          'Cache-Control': 'no-store'
+        })
+        return res.end(attachment.data)
+      }
       if (req.method === 'GET' && path === '/session')
         return json(res, 200, { user: service.session(token) })
       if (req.method === 'POST') checkOrigin(req)
@@ -139,7 +151,10 @@ export function createStudioServer(options = {}) {
             'Set-Cookie',
             `${COOKIE_NAME}=${result.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200${secure}`
           )
-          return json(res, 200, { user: result.user })
+          return json(res, 200, {
+            user: result.user,
+            ...(result.maintenanceNotice ? { maintenanceNotice: result.maintenanceNotice } : {})
+          })
         } catch (error) {
           attempts.count++
           throw error
@@ -153,6 +168,88 @@ export function createStudioServer(options = {}) {
       const user = service.session(token)
       if (!user) throw new ApiError('请先登录', 401)
       if (req.method === 'GET') {
+        if (path === '/logs/archive-backup') {
+          const backup = service.prepareArchiveBackup(user.id, url.searchParams.get('beforeDate'))
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Content-Disposition': `attachment; filename="studio-audit-archive-before-${backup.beforeDate}.json"`,
+            'Cache-Control': 'private, no-store',
+            'X-Studio-Backup-Token': backup.backupToken,
+            'X-Studio-Backup-Count': String(backup.rowCount)
+          })
+          const write = async (chunk) => {
+            if (res.destroyed) throw new Error('备份下载连接已关闭')
+            if (!res.write(chunk))
+              await new Promise((resolve, reject) => {
+                const cleanup = () => {
+                  res.off('drain', drained)
+                  res.off('close', closed)
+                  res.off('error', failed)
+                }
+                const drained = () => {
+                  cleanup()
+                  resolve()
+                }
+                const closed = () => {
+                  cleanup()
+                  reject(new Error('备份下载连接已关闭'))
+                }
+                const failed = (error) => {
+                  cleanup()
+                  reject(error)
+                }
+                res.once('drain', drained)
+                res.once('close', closed)
+                res.once('error', failed)
+              })
+          }
+          try {
+            await write(
+              JSON.stringify({
+                format: 'studio-audit-archive-v1',
+                beforeDate: backup.beforeDate,
+                generatedAt: backup.generatedAt
+              }).slice(0, -1) + ',"records":[\n'
+            )
+            let first = true
+            for (const row of backup.records) {
+              await write((first ? '' : ',\n') + row.payload)
+              first = false
+            }
+            await write('\n]}')
+            // 下载响应已完整交给HTTP发送队列；清理仍须用户确认已保存文件。
+            res.once('finish', () => {
+              try {
+                service.completeArchiveBackup(user.id, backup.backupToken, backup.beforeDate)
+              } catch {
+                service.cancelArchiveBackup(backup.backupToken)
+              }
+            })
+            res.once('close', () => {
+              if (!res.writableFinished) service.cancelArchiveBackup(backup.backupToken)
+            })
+            return res.end()
+          } catch (error) {
+            service.cancelArchiveBackup(backup.backupToken)
+            throw error
+          }
+        }
+        if (path === '/logs/storage') return json(res, 200, service.logStorage(user.id))
+        if (path === '/logs')
+          return json(res, 200, service.logs(user.id, Object.fromEntries(url.searchParams)))
+        const logMatch = path.match(/^\/logs\/([^/]+)$/)
+        if (logMatch) return json(res, 200, service.logDetail(user.id, logMatch[1]))
+        const referenceMatch = path.match(/^\/customers\/([^/]+)\/order-references$/)
+        if (referenceMatch)
+          return json(
+            res,
+            200,
+            service.customerReferences(
+              user.id,
+              referenceMatch[1],
+              Object.fromEntries(url.searchParams)
+            )
+          )
         if (path === '/appearance') return json(res, 200, service.getAppearance(user.id))
         if (path === '/bootstrap')
           return json(res, 200, service.bootstrap(user.id, url.searchParams.get('month')))
@@ -170,7 +267,14 @@ export function createStudioServer(options = {}) {
             res,
             200,
             getExportCatalog(
-              service.bootstrap(user.id, url.searchParams.get('month'), { exportMode: true })
+              service.exportSnapshot(user.id, {
+                month: url.searchParams.get('month') || undefined,
+                period: {
+                  type: url.searchParams.get('periodType') || 'monthly',
+                  date: url.searchParams.get('periodDate') || undefined
+                },
+                filters: { archived: url.searchParams.get('archived') || 'all' }
+              })
             )
           )
         if (path === '/player/orders') return json(res, 200, service.playerOrders(user.id))
@@ -190,7 +294,7 @@ export function createStudioServer(options = {}) {
       if (req.method === 'POST') {
         const body = await parseBody(req)
         if (path === '/exports/preview' || path === '/exports/download') {
-          const snapshot = service.bootstrap(user.id, body.month, { exportMode: true })
+          const snapshot = service.exportSnapshot(user.id, body)
           return json(
             res,
             200,

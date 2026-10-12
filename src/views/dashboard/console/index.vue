@@ -73,7 +73,7 @@
             @click="choosePreset(preset.days)"
             >{{ preset.label }}</ElButton
           ></div
-        ><ElButton plain class="overview-export" @click="exportRange"
+        ><ElButton v-if="can('reports.export')" plain class="overview-export" @click="exportRange"
           ><ArtSvgIcon icon="ri:file-excel-2-line" class="mr-1" />导出明细</ElButton
         ><ElDatePicker
           v-model="pickedRange"
@@ -296,7 +296,7 @@
         icon: appearanceIcon('export', 'ri:file-excel-2-line'),
         path: '/reports/export',
         color: 'blue',
-        show: true
+        show: can('reports.export')
       }
     ]
       .filter((item) => item.show)
@@ -327,6 +327,7 @@
     if (overview.range.value?.length === 2) void overview.refresh()
   }
   function exportRange() {
+    if (!can('reports.export')) return
     const modules = [
       can('orders.view') ? 'orders' : '',
       can('profit.view') || can('finance.expenses') ? 'expenses' : '',

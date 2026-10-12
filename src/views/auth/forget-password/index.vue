@@ -1,5 +1,9 @@
 <template>
-  <div class="flex w-full h-screen">
+  <div
+    class="auth-page flex w-full min-h-screen"
+    :class="{ 'auth-custom-background': config.login.background.mode !== 'default' }"
+    :style="loginBackground"
+  >
     <LoginLeftView />
     <div class="relative flex-1">
       <AuthTopBar />
@@ -25,7 +29,11 @@
   </div>
 </template>
 <script setup lang="ts">
+  import { computed } from 'vue'
+  import { useAppearance, appearanceBackgroundStyle } from '@/hooks/business/useAppearance'
   defineOptions({ name: 'ForgetPassword' })
+  const { config } = useAppearance()
+  const loginBackground = computed(() => appearanceBackgroundStyle(config.value.login.background))
 </script>
 <style scoped>
   @import '../login/style.css';

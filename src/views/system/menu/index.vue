@@ -91,14 +91,20 @@
   }
   const { user, can } = useStudio()
   const { t, te } = useI18n()
-  const search = ref({ keyword: '', kind: '' })
-  const applied = ref({ keyword: '', kind: '' })
+  const search = ref({ title: '', path: '', kind: '' })
+  const applied = ref({ title: '', path: '', kind: '' })
   const searchItems = [
     {
-      key: 'keyword',
-      label: '菜单 / 路径',
+      key: 'title',
+      label: '菜单名称',
       type: 'input',
-      props: { clearable: true, placeholder: '搜索菜单名称或路由' }
+      props: { clearable: true, placeholder: '按菜单名称搜索' }
+    },
+    {
+      key: 'path',
+      label: '路由路径',
+      type: 'input',
+      props: { clearable: true, placeholder: '按路由路径搜索' }
     },
     {
       key: 'kind',
@@ -149,9 +155,10 @@
     return rows.flatMap((row) => {
       const children = row.children ? filterRows(row.children) : []
       const matches =
-        `${title(row.title)} ${row.path}`
+        title(row.title)
           .toLowerCase()
-          .includes((applied.value.keyword || '').toLowerCase()) &&
+          .includes((applied.value.title || '').trim().toLowerCase()) &&
+        row.path.toLowerCase().includes((applied.value.path || '').trim().toLowerCase()) &&
         (!applied.value.kind || row.business === (applied.value.kind === 'business'))
       return matches || children.length
         ? [{ ...row, children: children.length ? children : undefined }]
@@ -168,10 +175,14 @@
     { prop: 'component', label: '源码页面', minWidth: 200, checked: false }
   ])
   function applySearch() {
-    applied.value = { keyword: search.value.keyword || '', kind: search.value.kind || '' }
+    applied.value = {
+      title: search.value.title || '',
+      path: search.value.path || '',
+      kind: search.value.kind || ''
+    }
   }
   function resetSearch() {
-    search.value = { keyword: '', kind: '' }
+    search.value = { title: '', path: '', kind: '' }
     applySearch()
   }
   async function loadMenus() {

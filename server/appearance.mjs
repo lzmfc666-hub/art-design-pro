@@ -55,6 +55,13 @@ export function defaultAppearance() {
     logo: null,
     page: { mode: 'default', color: '#f5f8fc', image: null, overlay: 50 },
     hero: { mode: 'default', color: '#80b7ff', image: null, overlay: 35, showDecoration: true },
+    login: {
+      title: '欢迎使用电竞工作室后台',
+      subtitle: '统一管理订单、人员与财务',
+      description: '账号由工作室管理员分配，忘记密码请联系管理员。',
+      background: { mode: 'default', color: '#eef4ff', image: null, overlay: 50 }
+    },
+    glass: { enabled: false },
     icons: {},
     revision: 0
   }
@@ -85,6 +92,20 @@ const overlay = (value, max) => {
     throw new ApiError(`背景遮罩须为 0 至 ${max} 的整数`)
   return value
 }
+const plainText = (value, label, max, required = false) => {
+  if (
+    typeof value !== 'string' ||
+    value.trim().length > max ||
+    (required && !value.trim()) ||
+    /[<>]/.test(value) ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0)
+      return (code < 32 && ![9, 10, 13].includes(code)) || code === 127
+    })
+  )
+    throw new ApiError(`${label}须为${required ? '非空' : ''}纯文本，最多 ${max} 个字符`)
+  return value.trim()
+}
 
 export function validateAppearanceRevision(value, current) {
   if (!Number.isSafeInteger(value) || value < 0) throw new ApiError('外观配置版本无效')
@@ -99,6 +120,8 @@ export function normalizeAppearance(config, attachmentResolver) {
     'logo',
     'page',
     'hero',
+    'login',
+    'glass',
     'icons',
     'revision',
     'updatedAt',
@@ -117,6 +140,13 @@ export function normalizeAppearance(config, attachmentResolver) {
     throw new ApiError('工作室名称须为 1 至 40 个字符，不含 HTML 或控制字符')
   object(config.page, '页面背景', ['mode', 'color', 'image', 'overlay'])
   object(config.hero, '首页背景', ['mode', 'color', 'image', 'overlay', 'showDecoration'])
+  const defaults = defaultAppearance()
+  const loginConfig = config.login === undefined ? defaults.login : config.login
+  const glassConfig = config.glass === undefined ? defaults.glass : config.glass
+  object(loginConfig, '登录页', ['title', 'subtitle', 'description', 'background'])
+  object(loginConfig.background, '登录背景', ['mode', 'color', 'image', 'overlay'])
+  object(glassConfig, '毛玻璃', ['enabled'])
+  if (typeof glassConfig.enabled !== 'boolean') throw new ApiError('请选择是否启用毛玻璃效果')
   const image = (value) => {
     if (value == null) return null
     object(value, '图片附件', ['id', 'name', 'mime', 'size', 'url'])
@@ -137,8 +167,23 @@ export function normalizeAppearance(config, attachmentResolver) {
     overlay: overlay(config.hero.overlay, 70),
     showDecoration: config.hero.showDecoration
   }
+  const login = {
+    title: plainText(loginConfig.title, '登录标题', 80, true),
+    subtitle: plainText(loginConfig.subtitle, '登录副标题', 200),
+    description: plainText(loginConfig.description, '登录说明', 800),
+    background: {
+      mode: mode(loginConfig.background.mode),
+      color: color(loginConfig.background.color),
+      image: image(loginConfig.background.image),
+      overlay: overlay(loginConfig.background.overlay, 90)
+    }
+  }
   if (typeof hero.showDecoration !== 'boolean') throw new ApiError('请选择是否显示首页装饰图形')
-  if ((page.mode === 'image' && !page.image) || (hero.mode === 'image' && !hero.image))
+  if (
+    (page.mode === 'image' && !page.image) ||
+    (hero.mode === 'image' && !hero.image) ||
+    (login.background.mode === 'image' && !login.background.image)
+  )
     throw new ApiError('图片背景必须先上传图片')
   object(config.icons, '图标', Object.keys(APPEARANCE_ICON_DEFAULTS))
   const icons = {}
@@ -152,15 +197,58 @@ export function normalizeAppearance(config, attachmentResolver) {
       throw new ApiError('图标须为受支持的 ri: 图标名称')
     icons[key] = value
   }
-  return { studioName: config.studioName.trim(), logo: image(config.logo), page, hero, icons }
+  return {
+    studioName: config.studioName.trim(),
+    logo: image(config.logo),
+    page,
+    hero,
+    login,
+    glass: { enabled: glassConfig.enabled },
+    icons
+  }
 }
 
 export function appearanceAttachments(config, { activeOnly = false } = {}) {
   return [
     config?.logo,
     !activeOnly || config?.page?.mode === 'image' ? config?.page?.image : null,
-    !activeOnly || config?.hero?.mode === 'image' ? config?.hero?.image : null
+    !activeOnly || config?.hero?.mode === 'image' ? config?.hero?.image : null,
+    !activeOnly || config?.login?.background?.mode === 'image'
+      ? config?.login?.background?.image
+      : null
   ].filter(Boolean)
+}
+
+/** 匿名图片只允许当前保存的公开品牌与正在使用的登录背景。 */
+export function publicAppearanceAttachments(config) {
+  return [
+    config?.logo,
+    config?.login?.background?.mode === 'image' ? config.login.background.image : null
+  ].filter(Boolean)
+}
+
+/** 不携带后台页面、首页、菜单图标、版本或管理员信息。 */
+export function projectPublicAppearance(config) {
+  const normalized = projectAppearanceAudit(config) || defaultAppearance()
+  const publicImage = (attachment) =>
+    attachment ? { ...attachment, url: `/api/studio/public-assets/${attachment.id}` } : null
+  return {
+    studioName: normalized.studioName,
+    logo: publicImage(normalized.logo),
+    login: {
+      title: normalized.login.title,
+      subtitle: normalized.login.subtitle,
+      description: normalized.login.description,
+      background: {
+        ...normalized.login.background,
+        image:
+          normalized.login.background.mode === 'image'
+            ? publicImage(normalized.login.background.image)
+            : null
+      }
+    },
+    glass: { enabled: normalized.glass.enabled }
+  }
 }
 
 /** 对存储的外观审计记录白名单投影，不接受任意 CSS、HTML 或未知历史字段。 */

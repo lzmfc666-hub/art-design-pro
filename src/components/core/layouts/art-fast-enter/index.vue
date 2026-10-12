@@ -162,6 +162,7 @@
     {
       name: '数据报表',
       routeName: 'ReportExport',
+      permissions: ['reports.export'],
       description: '按权限自选字段导出',
       icon: 'ri:file-excel-2-line',
       iconColor: 'var(--el-color-success)'

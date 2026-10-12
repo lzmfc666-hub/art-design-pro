@@ -30,6 +30,7 @@
   const show = computed(
     () =>
       route.meta.business &&
+      can('reports.export') &&
       ![
         '/reports/export',
         '/finance/settlement',
@@ -40,6 +41,7 @@
       user.value?.role !== 'player'
   )
   function openExport() {
+    if (!can('reports.export')) return
     if (route.path === '/system/appearance' && !can('settings.manage')) return
     let module = modules[route.path] || 'profile'
     if (route.path === '/dashboard/console')

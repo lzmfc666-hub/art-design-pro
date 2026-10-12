@@ -16,6 +16,8 @@ import { useAppearanceStore } from './store/modules/appearance'
 import { setPageTitle } from './utils/router'
 
 document.addEventListener('touchstart', function () {}, { passive: false })
+// 默认不显示开发工具，不从浏览器缓存推断超管身份。
+document.documentElement.classList.remove('studio-super-admin')
 
 async function bootstrap() {
   const app = createApp(App)
@@ -40,15 +42,47 @@ async function bootstrap() {
     studio.error.value = cause instanceof Error ? cause.message : '后台连接失败，请稍后重试'
   }
 
+  watch(
+    () => studio.user.value?.role,
+    (role) => {
+      document.documentElement.classList.toggle('studio-super-admin', role === 'super_admin')
+    },
+    { immediate: true, flush: 'sync' }
+  )
+  watch(
+    () => appearance.effective.glass.enabled,
+    (enabled) => {
+      document.documentElement.classList.toggle('studio-glass', enabled)
+    },
+    { immediate: true, flush: 'sync' }
+  )
+  // 原主题初始化与切换会重设 html.class；业务标记由真实会话与配置恢复。
+  const syncAppearanceClasses = () => {
+    document.documentElement.classList.toggle(
+      'studio-super-admin',
+      studio.user.value?.role === 'super_admin'
+    )
+    document.documentElement.classList.toggle('studio-glass', appearance.effective.glass.enabled)
+  }
+  const appearanceClassObserver = new MutationObserver(syncAppearanceClasses)
+  appearanceClassObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['class']
+  })
+
   watch(studio.user, (user) => {
     if (user) {
       userStore.setUserInfo(toFrameworkUser(user))
-    } else if (userStore.isLogin) {
-      userStore.clearSession()
-      void router.replace({
-        name: 'Login',
-        query: { redirect: router.currentRoute.value.fullPath }
-      })
+    } else {
+      if (userStore.isLogin) {
+        userStore.clearSession()
+        void router.replace({
+          name: 'Login',
+          query: { redirect: router.currentRoute.value.fullPath }
+        })
+      }
+      appearance.clear()
+      void appearance.loadPublic().catch(() => {})
     }
   })
   watch(
@@ -59,6 +93,13 @@ async function bootstrap() {
     },
     { immediate: true }
   )
+  if (!studio.user.value) {
+    try {
+      await appearance.loadPublic()
+    } catch {
+      /* 无公开设置时使用安全默认外观。 */
+    }
+  }
   watch(
     () => studio.data.value?.permissions,
     (permissions) => {
@@ -77,7 +118,10 @@ async function bootstrap() {
         link.rel = 'icon'
         document.head.appendChild(link)
       }
-      link.href = url && /^\/api\/studio\/uploads\/[A-Za-z0-9_-]+$/.test(url) ? url : defaultFavicon
+      link.href =
+        url && /^\/api\/studio\/(?:uploads|public-assets)\/[A-Za-z0-9_-]+$/.test(url)
+          ? url
+          : defaultFavicon
       link.type = url ? appearance.effective.logo?.mime || 'image/png' : defaultIconType
     },
     { immediate: true }
