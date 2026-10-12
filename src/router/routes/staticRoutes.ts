@@ -11,6 +11,18 @@ import { AppRouteRecordRaw } from '@/utils/router'
  * 2、静态路由不管是否登录都可以访问
  */
 export const staticRoutes: AppRouteRecordRaw[] = [
+  {
+    path: '/dashboard/ecommerce',
+    redirect: '/template/ecommerce',
+    meta: { title: '电商仪表盘示例' }
+  },
+  { path: '/overview', redirect: '/dashboard/console', meta: { title: '工作台' } },
+  { path: '/dispatch', redirect: '/orders/create', meta: { title: '创建订单' } },
+  { path: '/catalog', redirect: '/system/business', meta: { title: '业务配置' } },
+  { path: '/people', redirect: '/system/user', meta: { title: '人员管理' } },
+  { path: '/attendance', redirect: '/personnel/attendance', meta: { title: '排班考勤' } },
+  { path: '/logs', redirect: '/system/logs', meta: { title: '操作日志' } },
+  { path: '/profile', redirect: '/system/user-center', meta: { title: '个人中心' } },
   // 不需要登录就能访问的路由示例
   // {
   //   path: '/welcome',

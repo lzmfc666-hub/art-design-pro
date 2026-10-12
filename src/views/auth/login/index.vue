@@ -96,7 +96,7 @@
   import { fetchLogin } from '@/api/auth'
   import { ElMessage, ElNotification, type FormInstance, type FormRules } from 'element-plus'
   import { useSettingStore } from '@/store/modules/setting'
-  import { useStudio } from '@/studio/useStudio'
+  import { useStudio } from '@/hooks/business/useStudio'
 
   defineOptions({ name: 'Login' })
 
@@ -170,7 +170,7 @@
       await router.push(
         redirect?.startsWith('/') && !redirect.startsWith('//') && !redirect.startsWith('/auth/')
           ? redirect
-          : '/overview'
+          : '/dashboard/console'
       )
     } catch (error) {
       if (error instanceof Error) ElMessage.error(error.message)

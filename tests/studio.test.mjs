@@ -12,6 +12,71 @@ const PNG =
 const rejects = (fn, status) =>
   assert.throws(fn, (error) => error instanceof ApiError && error.status === status)
 
+test('原系统角色页读取服务器默认权限，人员管理授权可读取并维护客户', (t) => {
+  const { service, mutate, customer } = fixture(t)
+  const hr = mutate('/users', {
+    username: 'customer-hr',
+    name: '客户档案人事',
+    role: 'hr',
+    status: 'active',
+    maxActiveOrders: 1,
+    permissionOverrides: { 'users.manage': true },
+    password: PASSWORD
+  })
+  const snapshot = service.bootstrap(hr.id)
+  assert.equal(snapshot.permissions.includes('orders.view'), false)
+  assert.equal(snapshot.permissions.includes('orders.create'), false)
+  assert.ok(snapshot.customers.some((row) => row.id === customer.id))
+  assert.ok(snapshot.roleDefaults.hr.includes('attendance.manage'))
+  assert.deepEqual(snapshot.roleDefaults.super_admin, ALL_PERMISSIONS)
+  snapshot.roleDefaults.hr.push('finance.review')
+  assert.equal(service.bootstrap(hr.id).roleDefaults.hr.includes('finance.review'), false)
+  const updated = mutate('/customers', { ...customer, name: '客户称呼已更新' }, hr.id)
+  assert.equal(updated.name, '客户称呼已更新')
+})
+
+test('本人资料与密码实际保存，校验旧密码并撤销全部会话且不记录密码', (t) => {
+  const { service, mutate, users } = fixture(t)
+  const actor = users.support
+  const first = service.login(actor.username, PASSWORD)
+  const second = service.login(actor.username, PASSWORD)
+  const before = service.bootstrap(actor.id).user
+  const profile = mutate(
+    '/profile',
+    { name: '新的本人称呼', id: 'admin', role: 'super_admin' },
+    actor.id
+  )
+  assert.equal(profile.id, actor.id)
+  assert.equal(profile.role, before.role)
+  assert.equal(service.bootstrap(actor.id).user.name, '新的本人称呼')
+  assert.notEqual(service.bootstrap('admin').user.name, '新的本人称呼')
+  rejects(
+    () =>
+      mutate(
+        '/profile/password',
+        { currentPassword: 'incorrect-password', newPassword: 'changed-only-password-168!' },
+        actor.id
+      ),
+    400
+  )
+  rejects(
+    () =>
+      mutate('/profile/password', { currentPassword: PASSWORD, newPassword: 'short' }, actor.id),
+    400
+  )
+  assert.ok(service.session(first.token))
+  const nextPassword = 'changed-only-password-168!'
+  mutate('/profile/password', { currentPassword: PASSWORD, newPassword: nextPassword }, actor.id)
+  assert.equal(service.session(first.token), null)
+  assert.equal(service.session(second.token), null)
+  rejects(() => service.login(actor.username, PASSWORD), 401)
+  assert.equal(service.login(actor.username, nextPassword).user.name, '新的本人称呼')
+  const log = service.bootstrap('admin').logs.find((row) => row.action === '修改本人密码')
+  assert.deepEqual(log.after, { sessionsRevoked: true })
+  assert.equal(JSON.stringify(log).includes(nextPassword), false)
+  assert.equal(JSON.stringify(log).includes(PASSWORD), false)
+})
+
 function fixture(t, { server = false, dbPath = ':memory:' } = {}) {
   let current = new Date('2026-10-12T04:00:00.000Z')
   const options = { dbPath, password: PASSWORD, seed: false, clock: () => current }

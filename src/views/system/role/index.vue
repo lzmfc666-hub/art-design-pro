@@ -1,240 +1,142 @@
-<!-- 角色管理页面 -->
 <template>
   <div class="art-full-height">
-    <RoleSearch
-      v-show="showSearchBar"
-      v-model="searchForm"
-      @search="handleSearch"
-      @reset="resetSearchParams"
-    ></RoleSearch>
-
-    <ElCard class="art-table-card" :style="{ 'margin-top': showSearchBar ? '12px' : '0' }">
-      <ArtTableHeader
-        v-model:columns="columnChecks"
-        v-model:showSearchBar="showSearchBar"
-        :loading="loading"
-        @refresh="refreshData"
-      >
-        <template #left>
-          <ElSpace wrap>
-            <ElButton @click="showDialog('add')" v-ripple>新增角色</ElButton>
-          </ElSpace>
-        </template>
+    <ArtSearchBar
+      v-model="search"
+      :items="searchItems"
+      @search="applySearch"
+      @reset="resetSearch"
+    />
+    <ElCard class="art-table-card">
+      <ArtTableHeader v-model:columns="columnChecks" :loading="loading" @refresh="refreshData">
+        <template #left
+          ><ElSpace
+            ><span class="font-medium">角色默认权限</span
+            ><ElTag type="info">来源：服务器权限定义</ElTag></ElSpace
+          ></template
+        >
       </ArtTableHeader>
-
-      <!-- 表格 -->
+      <ElAlert
+        class="mb-4"
+        type="info"
+        :closable="false"
+        title="岗位沿用业务固定角色。员工的额外授权或限制在“人员管理 → 编辑档案 → 个人权限”中设置；超级管理员始终拥有全部权限。"
+      />
       <ArtTable
-        :loading="loading"
-        :data="data"
+        :data="tableData"
         :columns="columns"
         :pagination="pagination"
+        :loading="loading"
         @pagination:size-change="handleSizeChange"
         @pagination:current-change="handleCurrentChange"
       >
+        <template #role="{ row }"
+          ><ElTag>{{ roleLabels[row.role as Role] }}</ElTag></template
+        >
+        <template #permissions="{ row }"
+          ><ElSpace wrap
+            ><ElTag
+              v-for="permission in row.permissions.slice(0, 3)"
+              :key="permission"
+              type="info"
+              >{{ permissionLabels[permission] || permission }}</ElTag
+            ><span v-if="row.permissions.length > 3" class="text-g-500"
+              >等 {{ row.permissions.length }} 项</span
+            ><span v-if="!row.permissions.length" class="text-g-500"
+              >无管理端业务权限</span
+            ></ElSpace
+          ></template
+        >
+        <template #operation="{ row }"
+          ><ElButton type="primary" link @click="showPermissions(row.role)">查看权限</ElButton
+          ><ElButton
+            type="primary"
+            link
+            @click="router.push({ path: '/system/user', query: { role: row.role } })"
+            >管理人员</ElButton
+          ></template
+        >
       </ArtTable>
     </ElCard>
-
-    <!-- 角色编辑弹窗 -->
-    <RoleEditDialog
-      v-model="dialogVisible"
-      :dialog-type="dialogType"
-      :role-data="currentRoleData"
-      @success="refreshData"
-    />
-
-    <!-- 菜单权限弹窗 -->
-    <RolePermissionDialog
-      v-model="permissionDialog"
-      :role-data="currentRoleData"
-      @success="refreshData"
-    />
+    <RolePermissionDialog v-model="permissionVisible" :role="selectedRole" />
   </div>
 </template>
 
 <script setup lang="ts">
-  import { ButtonMoreItem } from '@/components/core/forms/art-button-more/index.vue'
-  import { useTable } from '@/hooks/core/useTable'
-  import { fetchGetRoleList } from '@/api/system-manage'
-  import ArtButtonMore from '@/components/core/forms/art-button-more/index.vue'
-  import RoleSearch from './modules/role-search.vue'
-  import RoleEditDialog from './modules/role-edit-dialog.vue'
+  import { computed, reactive, ref } from 'vue'
+  import { useRouter } from 'vue-router'
+  import { ElMessage } from 'element-plus'
+  import { roleLabels, useStudio } from '@/hooks/business/useStudio'
+  import { useBusinessTable } from '@/hooks/business/useBusinessTable'
+  import { useTableColumns } from '@/hooks/core/useTableColumns'
+  import type { Role } from '@/types/studio'
+  import { permissionLabels } from '../user/modules/permissions'
   import RolePermissionDialog from './modules/role-permission-dialog.vue'
-  import { ElTag, ElMessageBox } from 'element-plus'
 
   defineOptions({ name: 'Role' })
-
-  type RoleListItem = Api.SystemManage.RoleListItem
-  type RoleSearchFormParams = Api.SystemManage.RoleSearchParams & {
-    daterange?: string[]
+  interface RoleRow {
+    role: Role
+    code: string
+    permissions: string[]
+    members: number
+    overrides: number
   }
-
-  // 搜索表单
-  const searchForm = ref<RoleSearchFormParams>({
-    roleName: undefined,
-    roleCode: undefined,
-    description: undefined,
-    enabled: undefined,
-    daterange: undefined
-  })
-
-  const showSearchBar = ref(false)
-
-  const dialogVisible = ref(false)
-  const permissionDialog = ref(false)
-  const currentRoleData = ref<RoleListItem | undefined>(undefined)
-
-  const {
-    columns,
-    columnChecks,
-    data,
-    loading,
-    pagination,
-    getData,
-    replaceSearchParams,
-    resetSearchParams,
-    handleSizeChange,
-    handleCurrentChange,
-    refreshData
-  } = useTable({
-    // 核心配置
-    core: {
-      apiFn: fetchGetRoleList,
-      apiParams: {
-        current: 1,
-        size: 20
-      },
-      // 排除 apiParams 中的属性
-      excludeParams: ['daterange'],
-      columnsFactory: () => [
-        {
-          prop: 'roleId',
-          label: '角色ID',
-          width: 100
-        },
-        {
-          prop: 'roleName',
-          label: '角色名称',
-          minWidth: 120
-        },
-        {
-          prop: 'roleCode',
-          label: '角色编码',
-          minWidth: 120
-        },
-        {
-          prop: 'description',
-          label: '角色描述',
-          minWidth: 150,
-          showOverflowTooltip: true
-        },
-        {
-          prop: 'enabled',
-          label: '角色状态',
-          width: 100,
-          formatter: (row) => {
-            const statusConfig = row.enabled
-              ? { type: 'success', text: '启用' }
-              : { type: 'warning', text: '禁用' }
-            return h(
-              ElTag,
-              { type: statusConfig.type as 'success' | 'warning' },
-              () => statusConfig.text
-            )
-          }
-        },
-        {
-          prop: 'createTime',
-          label: '创建日期',
-          width: 180,
-          sortable: true
-        },
-        {
-          prop: 'operation',
-          label: '操作',
-          width: 80,
-          fixed: 'right',
-          formatter: (row) =>
-            h('div', [
-              h(ArtButtonMore, {
-                list: [
-                  {
-                    key: 'permission',
-                    label: '菜单权限',
-                    icon: 'ri:user-3-line'
-                  },
-                  {
-                    key: 'edit',
-                    label: '编辑角色',
-                    icon: 'ri:edit-2-line'
-                  },
-                  {
-                    key: 'delete',
-                    label: '删除角色',
-                    icon: 'ri:delete-bin-4-line',
-                    color: '#f56c6c'
-                  }
-                ],
-                onClick: (item: ButtonMoreItem) => buttonMoreClick(item, row)
-              })
-            ])
+  const router = useRouter()
+  const { data, loading, refresh } = useStudio()
+  const search = ref({ keyword: '' })
+  const applied = reactive({ keyword: '' })
+  const searchItems = [
+    {
+      key: 'keyword',
+      type: 'input',
+      label: '角色名称 / 编码',
+      props: { placeholder: '搜索岗位角色', clearable: true }
+    }
+  ]
+  const rows = computed<RoleRow[]>(() =>
+    Object.entries(data.value?.roleDefaults || {})
+      .filter(([role]) =>
+        `${role} ${roleLabels[role as Role]}`.toLowerCase().includes(applied.keyword.toLowerCase())
+      )
+      .map(([role, permissions]) => {
+        const members = data.value?.users.filter((staff) => staff.role === role) || []
+        return {
+          role: role as Role,
+          code: role,
+          permissions,
+          members: members.length,
+          overrides: members.filter((staff) => Object.keys(staff.permissionOverrides).length).length
         }
-      ]
-    }
-  })
-
-  const dialogType = ref<'add' | 'edit'>('add')
-
-  const showDialog = (type: 'add' | 'edit', row?: RoleListItem) => {
-    dialogVisible.value = true
-    dialogType.value = type
-    currentRoleData.value = row
-  }
-
-  /**
-   * 搜索处理
-   * @param params 搜索参数
-   */
-  const handleSearch = (params: RoleSearchFormParams) => {
-    // 处理日期区间参数，把 daterange 转换为 startTime 和 endTime
-    const { daterange, ...filtersParams } = params
-    const [startTime, endTime] = Array.isArray(daterange) ? daterange : [null, null]
-
-    replaceSearchParams({ ...filtersParams, startTime, endTime })
-    getData()
-  }
-
-  const buttonMoreClick = (item: ButtonMoreItem, row: RoleListItem) => {
-    switch (item.key) {
-      case 'permission':
-        showPermissionDialog(row)
-        break
-      case 'edit':
-        showDialog('edit', row)
-        break
-      case 'delete':
-        deleteRole(row)
-        break
-    }
-  }
-
-  const showPermissionDialog = (row?: RoleListItem) => {
-    permissionDialog.value = true
-    currentRoleData.value = row
-  }
-
-  const deleteRole = (row: RoleListItem) => {
-    ElMessageBox.confirm(`确定删除角色"${row.roleName}"吗？此操作不可恢复！`, '删除确认', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-      .then(() => {
-        // TODO: 调用删除接口
-        ElMessage.success('删除成功')
-        refreshData()
       })
-      .catch(() => {
-        ElMessage.info('已取消删除')
-      })
+  )
+  const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =
+    useBusinessTable(rows)
+  const { columns, columnChecks } = useTableColumns<RoleRow>(() => [
+    { prop: 'role', label: '岗位角色', width: 140, useSlot: true },
+    { prop: 'code', label: '角色编码', minWidth: 140 },
+    { prop: 'permissions', label: '默认业务权限', minWidth: 320, useSlot: true },
+    { prop: 'members', label: '人员数量', width: 110 },
+    { prop: 'overrides', label: '个人权限覆盖人数', width: 155 },
+    { prop: 'operation', label: '操作', width: 190, fixed: 'right', useSlot: true }
+  ])
+  const permissionVisible = ref(false)
+  const selectedRole = ref<Role>('support')
+  function showPermissions(role: Role) {
+    selectedRole.value = role
+    permissionVisible.value = true
+  }
+  function applySearch() {
+    applied.keyword = search.value.keyword || ''
+    resetPage()
+  }
+  function resetSearch() {
+    search.value.keyword = ''
+    applySearch()
+  }
+  async function refreshData() {
+    try {
+      await refresh()
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : '刷新失败')
+    }
   }
 </script>

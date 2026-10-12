@@ -29,6 +29,11 @@ import { RouteRecordRaw } from 'vue-router'
 export interface RouteMeta extends Record<string | number | symbol, unknown> {
   /** 路由标题 */
   title: string
+  /** 真实业务模块；普通岗位按业务权限显示 */
+  business?: boolean
+  /** 保留的原模板示例，仅超级管理员可访问 */
+  templateExample?: boolean
+  studioPermissions?: string[]
   /** 路由图标 */
   icon?: string
   /** 是否显示徽章 */

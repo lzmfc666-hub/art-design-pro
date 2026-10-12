@@ -1,86 +1,79 @@
 <template>
-  <div class="art-card h-82 p-5 mb-5 overflow-hidden max-lg:h-auto max-sm:mb-4">
-    <div class="art-card-header pr-0">
-      <div class="title">
-        <h4>今日销售</h4>
-        <p>销售总结</p>
-      </div>
-      <div class="flex-cc h-7.5 min-w-17 border border-g-300 rounded-lg text-g-500 c-p">
-        <ArtSvgIcon icon="ri:arrow-up-line" class="text-base mr-1.5" />
-        <span class="text-xs">导出</span>
-      </div>
+  <div class="art-card p-5 mb-5">
+    <div class="art-card-header">
+      <div class="title"
+        ><h4>{{ data?.reports.month || selectedMonth }} 经营概览</h4
+        ><p>来自实际订单、退款及费用记录</p></div
+      >
+      <ElTag :type="data?.reports.monthlyProfit == null ? 'warning' : 'success'" effect="plain">{{
+        data?.reports.monthlyProfit == null ? '核算配置待补齐' : '核算配置完整'
+      }}</ElTag>
     </div>
-
-    <div class="mt-2">
-      <ElRow :gutter="20">
-        <ElCol :span="6" :xs="24" v-for="(item, index) in salesData" :key="index">
-          <div
-            class="flex px-5 flex-col justify-center h-55 border border-g-300/85 rounded-xl max-lg:mb-4 max-sm:flex-row max-sm:justify-between max-sm:items-center max-sm:h-40"
-          >
-            <div class="size-12 rounded-lg flex-cc bg-theme/10">
-              <ArtSvgIcon :icon="item.icon" class="text-xl text-theme" />
-            </div>
-
-            <div class="max-sm:ml-4 mt-3.5 max-sm:mt-0 max-sm:text-end">
-              <ArtCountTo class="text-2xl font-medium" :target="item.value" :duration="1500" />
-              <p class="mt-2 text-base text-g-600 max-sm:mt-1">{{ item.label }}</p>
-              <small class="text-g-500 mt-1 max-sm:mt-0.5">
-                较昨天
-                <span
-                  class="font-medium"
-                  :class="[item.change.indexOf('+') === -1 ? 'text-danger' : 'text-success']"
-                  >{{ item.change }}</span
-                >
-              </small>
-            </div>
-          </div>
-        </ElCol>
-      </ElRow>
-    </div>
+    <ElRow :gutter="20">
+      <ElCol v-for="item in metrics" :key="item.label" :lg="6" :sm="12" :xs="24">
+        <div class="border border-g-300/85 rounded-xl px-5 py-5 mb-4">
+          <div class="size-11 rounded-lg flex-cc bg-theme/10"
+            ><ArtSvgIcon :icon="item.icon" class="text-xl text-theme"
+          /></div>
+          <p class="text-g-500 mt-4">{{ item.label }}</p
+          ><p class="text-2xl font-medium mt-2 break-all">{{ item.value }}</p
+          ><p class="text-xs text-g-500 mt-2">{{ item.note }}</p>
+        </div>
+      </ElCol>
+    </ElRow>
+    <div class="flex flex-wrap gap-x-7 gap-y-2 text-sm text-g-500"
+      ><span>打手成本 {{ money(totals.reward) }}</span
+      ><span>其中预计成本 {{ money(totals.estimatedReward) }}</span
+      ><span>其他费用 {{ money(totals.expenses) }}</span
+      ><span>月度底薪 {{ money(data?.reports.monthlyBase) }}</span></div
+    >
   </div>
 </template>
 
 <script setup lang="ts">
-  interface SalesDataItem {
-    label: string
-    value: number
-    change: string
-    icon: string
-    class: string
-  }
-
-  /**
-   * 今日销售数据统计
-   * 包含销售额、订单量、产品销量和新客户数等关键指标
-   */
-  const salesData = ref<SalesDataItem[]>([
+  import { computed } from 'vue'
+  import { money, useStudio } from '@/hooks/business/useStudio'
+  const { data, selectedMonth } = useStudio()
+  const totals = computed(() =>
+    (data.value?.reports.days || []).reduce(
+      (sum, row) => ({
+        received: sum.received + row.received,
+        refunds: sum.refunds + row.refunds,
+        net: sum.net + row.net,
+        reward: sum.reward + row.reward,
+        estimatedReward: sum.estimatedReward + row.estimatedReward,
+        expenses: sum.expenses + row.expenses
+      }),
+      { received: 0, refunds: 0, net: 0, reward: 0, estimatedReward: 0, expenses: 0 }
+    )
+  )
+  const metrics = computed(() => [
     {
-      label: '总销售额',
-      value: 999,
-      change: '+10%',
-      icon: 'ri:bar-chart-box-ai-line',
-      class: 'bg-theme'
+      label: '客户收款',
+      value: money(totals.value.received),
+      note: '按原付款日归属',
+      icon: 'ri:wallet-3-line'
     },
     {
-      label: '总订单量',
-      value: 300,
-      change: '+15%',
-      icon: 'ri:bar-chart-grouped-line',
-      class: 'bg-warning'
+      label: '累计退款',
+      value: money(totals.value.refunds),
+      note: '含后续回改的实际退款',
+      icon: 'ri:refund-2-line'
     },
     {
-      label: '产品销售量',
-      value: 56,
-      change: '-5%',
-      icon: 'ri:bar-chart-2-line',
-      class: 'bg-error'
+      label: '净收入',
+      value: money(totals.value.net),
+      note: '客户收款减累计退款',
+      icon: 'ri:bar-chart-grouped-line'
     },
     {
-      label: '新客户数',
-      value: 68,
-      change: '+8%',
-      icon: 'ri:user-add-line',
-      class: 'bg-success'
+      label: '月度利润',
+      value:
+        data.value?.reports.monthlyProfit == null
+          ? '配置未齐'
+          : money(data.value.reports.monthlyProfit),
+      note: '已扣成本、提成、费用及底薪',
+      icon: 'ri:funds-line'
     }
   ])
 </script>

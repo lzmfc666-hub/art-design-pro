@@ -52,7 +52,7 @@ import { fetchGetUserInfo } from '@/api/auth'
 import { ApiStatus } from '@/utils/http/status'
 import { isHttpError } from '@/utils/http/error'
 import { RouteRegistry, MenuProcessor, IframeRouteManager, RoutePermissionValidator } from '../core'
-import { canAccessStudioPage } from '@/studio/route-access'
+import { canAccessStudioPage } from '@/utils/auth/studio-access'
 
 // 路由注册器实例
 let routeRegistry: RouteRegistry | null = null
@@ -157,7 +157,7 @@ async function handleRouteGuard(
     return
   }
   if (userStore.isLogin && to.name === 'Login') {
-    next({ path: '/overview', replace: true })
+    next({ path: '/dashboard/console', replace: true })
     return
   }
 

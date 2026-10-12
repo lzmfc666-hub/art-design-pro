@@ -1,43 +1,46 @@
 <template>
-  <div class="art-card h-105 p-5 mb-5 max-sm:mb-4">
-    <div class="art-card-header">
-      <div class="title">
-        <h4>访问量</h4>
-        <p>今年增长<span class="text-success">+15%</span></p>
-      </div>
-    </div>
+  <div class="art-card h-105 p-5 mb-5">
+    <div class="art-card-header"
+      ><div class="title"
+        ><h4>{{ can('profit.view') ? '每日净收入' : '个人完成订单' }}</h4
+        ><p
+          >{{ selectedMonth }} ·
+          {{ can('profit.view') ? '退款回到原付款日调整，金额单位：元' : '按本月完成日期统计' }}</p
+        ></div
+      ></div
+    >
     <ArtLineChart
-      height="calc(100% - 56px)"
-      :data="data"
-      :xAxisData="xAxisData"
+      height="270px"
+      :data="series"
+      :xAxisData="dates.map((d) => d.slice(8))"
       :showAreaColor="true"
       :showAxisLine="false"
     />
   </div>
 </template>
-
 <script setup lang="ts">
-  /**
-   * 全年访问量数据
-   * 记录每月的访问量统计
-   */
-  const data = [50, 25, 40, 20, 70, 35, 65, 30, 35, 20, 40, 44]
-
-  /**
-   * X 轴月份标签
-   */
-  const xAxisData = [
-    '1月',
-    '2月',
-    '3月',
-    '4月',
-    '5月',
-    '6月',
-    '7月',
-    '8月',
-    '9月',
-    '10月',
-    '11月',
-    '12月'
-  ]
+  import { useStudio } from '@/hooks/business/useStudio'
+  const { data, user, can, selectedMonth } = useStudio()
+  const dates = computed(() => {
+    const [year, month] = selectedMonth.value.split('-').map(Number)
+    const count = new Date(year!, month!, 0).getDate()
+    return Array.from(
+      { length: count },
+      (_, i) => selectedMonth.value + '-' + String(i + 1).padStart(2, '0')
+    )
+  })
+  const series = computed(() =>
+    dates.value.map((date) =>
+      can('profit.view')
+        ? (data.value?.reports.days.find((d) => d.date === date)?.net || 0) / 100
+        : (data.value?.orders || []).filter(
+            (o) =>
+              o.creatorId === user.value?.id &&
+              o.status === 'completed' &&
+              o.completedAt &&
+              new Date(o.completedAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }) ===
+                date
+          ).length
+    )
+  )
 </script>

@@ -1,47 +1,25 @@
 <template>
-  <div class="art-card h-105 p-4 box-border mb-5 max-sm:mb-4">
-    <ArtBarChart
-      class="box-border p-2"
-      barWidth="50%"
-      height="13.7rem"
-      :showAxisLine="false"
-      :data="chartData"
-      :xAxisData="xAxisLabels"
-    />
-    <div class="ml-1">
-      <h3 class="mt-5 text-lg font-medium">用户概述</h3>
-      <p class="mt-1 text-sm">比上周 <span class="text-success font-medium">+23%</span></p>
-      <p class="mt-1 text-sm">我们为您创建了多个选项，可将它们组合在一起并定制为像素完美的页面</p>
-    </div>
-    <div class="flex-b mt-2">
-      <div class="flex-1" v-for="(item, index) in list" :key="index">
-        <p class="text-2xl text-g-900">{{ item.num }}</p>
-        <p class="text-xs text-g-500">{{ item.name }}</p>
-      </div>
-    </div>
+  <div class="art-card h-105 p-5 mb-5">
+    <div class="art-card-header"
+      ><div class="title"><h4>订单进度</h4><p>当前可查看的全部订单</p></div></div
+    >
+    <ArtBarChart height="240px" :data="chartData" :xAxisData="labels" :showAxisLine="false" />
+    <div class="flex justify-between text-sm mt-3"
+      ><span class="text-g-500">已完成 {{ completed }} 笔</span
+      ><span class="text-theme">共 {{ data?.orders.length || 0 }} 笔</span></div
+    >
   </div>
 </template>
-
 <script setup lang="ts">
-  interface UserStatItem {
-    name: string
-    num: string
-  }
-
-  // 最近9个月
-  const xAxisLabels = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月']
-
-  // 每月活跃用户数
-  const chartData = [160, 100, 150, 80, 190, 100, 175, 120, 160]
-
-  /**
-   * 用户统计数据列表
-   * 包含总用户量、总访问量、日访问量和周同比等关键指标
-   */
-  const list: UserStatItem[] = [
-    { name: '总用户量', num: '32k' },
-    { name: '总访问量', num: '128k' },
-    { name: '日访问量', num: '1.2k' },
-    { name: '周同比', num: '+5%' }
-  ]
+  import { useStudio, statusLabels } from '@/hooks/business/useStudio'
+  import type { OrderStatus } from '@/types/studio'
+  const { data } = useStudio()
+  const statuses: OrderStatus[] = ['pending', 'active', 'review', 'completed', 'canceled']
+  const labels = statuses.map((s) => statusLabels[s])
+  const chartData = computed(() =>
+    statuses.map((s) => (data.value?.orders || []).filter((o) => o.status === s).length)
+  )
+  const completed = computed(
+    () => (data.value?.orders || []).filter((o) => o.status === 'completed').length
+  )
 </script>

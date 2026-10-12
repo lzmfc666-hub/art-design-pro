@@ -1,247 +1,250 @@
-<!-- 个人中心页面 -->
 <template>
-  <div class="w-full h-full p-0 bg-transparent border-none shadow-none">
-    <div class="relative flex-b mt-2.5 max-md:block max-md:mt-1">
-      <div class="w-112 mr-5 max-md:w-full max-md:mr-0">
-        <div class="art-card-sm relative p-9 pb-6 overflow-hidden text-center">
-          <img class="absolute top-0 left-0 w-full h-50 object-cover" src="@imgs/user/bg.webp" />
-          <img
-            class="relative z-10 w-20 h-20 mt-30 mx-auto object-cover border-2 border-white rounded-full"
-            src="@imgs/user/avatar.webp"
-          />
-          <h2 class="mt-5 text-xl font-normal">{{ userInfo.userName }}</h2>
-          <p class="mt-5 text-sm">专注于用户体验跟视觉设计</p>
-
-          <div class="w-75 mx-auto mt-7.5 text-left">
-            <div class="mt-2.5">
-              <ArtSvgIcon icon="ri:mail-line" class="text-g-700" />
-              <span class="ml-2 text-sm">jdkjjfnndf@mall.com</span>
-            </div>
-            <div class="mt-2.5">
-              <ArtSvgIcon icon="ri:user-3-line" class="text-g-700" />
-              <span class="ml-2 text-sm">交互专家</span>
-            </div>
-            <div class="mt-2.5">
-              <ArtSvgIcon icon="ri:map-pin-line" class="text-g-700" />
-              <span class="ml-2 text-sm">广东省深圳市</span>
-            </div>
-            <div class="mt-2.5">
-              <ArtSvgIcon icon="ri:dribbble-fill" class="text-g-700" />
-              <span class="ml-2 text-sm">字节跳动－某某平台部－UED</span>
-            </div>
-          </div>
-
-          <div class="mt-10">
-            <h3 class="text-sm font-medium">标签</h3>
-            <div class="flex flex-wrap justify-center mt-3.5">
-              <div
-                v-for="item in lableList"
-                :key="item"
-                class="py-1 px-1.5 mr-2.5 mb-2.5 text-xs border border-g-300 rounded"
+  <div class="w-full">
+    <ElRow :gutter="20">
+      <ElCol :xs="24" :lg="8">
+        <div class="art-card-sm relative overflow-hidden text-center mb-5">
+          <img class="h-40 w-full object-cover" src="@imgs/user/bg.webp" alt="" />
+          <div class="px-6 pb-6">
+            <ElAvatar
+              class="!-mt-10 !h-20 !w-20 relative !bg-theme !text-2xl !border-4 !border-white"
+              >{{ user?.name.slice(0, 1) }}</ElAvatar
+            >
+            <h2 class="mt-4 text-xl">{{ user?.name }}</h2>
+            <ElTag class="mt-3">{{ user ? roleLabels[user.role] : '—' }}</ElTag>
+            <ElDescriptions class="mt-6" :column="1" border>
+              <ElDescriptionsItem label="登录账号">{{ user?.username }}</ElDescriptionsItem>
+              <ElDescriptionsItem label="账号状态"
+                ><ElTag :type="user?.status === 'active' ? 'success' : 'info'">{{
+                  user?.status === 'active' ? '启用' : '停用'
+                }}</ElTag></ElDescriptionsItem
               >
-                {{ item }}
-              </div>
-            </div>
+              <ElDescriptionsItem label="业务权限"
+                >{{ data?.permissions.length || 0 }} 项</ElDescriptionsItem
+              >
+              <ElDescriptionsItem v-if="user?.role === 'player'" label="等级">{{
+                data?.levels.find((level) => level.id === user?.levelId)?.name || '未设置'
+              }}</ElDescriptionsItem>
+            </ElDescriptions>
           </div>
         </div>
-      </div>
-      <div class="flex-1 overflow-hidden max-md:w-full max-md:mt-3.5">
-        <div class="art-card-sm">
-          <h1 class="p-4 text-xl font-normal border-b border-g-300">基本设置</h1>
-
-          <ElForm
-            :model="form"
-            class="box-border p-5 [&>.el-row_.el-form-item]:w-[calc(50%-10px)] [&>.el-row_.el-input]:w-full [&>.el-row_.el-select]:w-full"
-            ref="ruleFormRef"
-            :rules="rules"
-            label-width="86px"
-            label-position="top"
+        <div class="art-card-sm p-5 mb-5">
+          <h3 class="font-medium mb-4">所选月份个人业绩</h3>
+          <ElDescriptions :column="1">
+            <ElDescriptionsItem label="完成订单"
+              >{{ performance?.completed ?? 0 }} 单</ElDescriptionsItem
+            >
+            <ElDescriptionsItem label="订单净业绩">{{
+              money(performance?.net ?? 0)
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="实到工时"
+              >{{ actualHours.toFixed(1) }} 小时</ElDescriptionsItem
+            >
+            <template v-if="can('salary.view') || can('salary.all')">
+              <ElDescriptionsItem label="月工资合计">{{ money(payrollTotal) }}</ElDescriptionsItem>
+              <ElDescriptionsItem label="已发工资">{{ money(paidSalary) }}</ElDescriptionsItem>
+              <ElDescriptionsItem label="待结算 / 差额">{{
+                money(pendingSalary)
+              }}</ElDescriptionsItem>
+            </template>
+          </ElDescriptions>
+          <p class="text-xs text-g-500 mt-3"
+            >{{ selectedMonth }} ·
+            业绩按完成月份归属，净业绩扣除已支付退款；运营按订单运营归属统计。</p
           >
-            <ElRow>
-              <ElFormItem label="姓名" prop="realName">
-                <ElInput v-model="form.realName" :disabled="!isEdit" />
-              </ElFormItem>
-              <ElFormItem label="性别" prop="sex" class="ml-5">
-                <ElSelect v-model="form.sex" placeholder="Select" :disabled="!isEdit">
-                  <ElOption
-                    v-for="item in options"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </ElSelect>
-              </ElFormItem>
-            </ElRow>
-
-            <ElRow>
-              <ElFormItem label="昵称" prop="nikeName">
-                <ElInput v-model="form.nikeName" :disabled="!isEdit" />
-              </ElFormItem>
-              <ElFormItem label="邮箱" prop="email" class="ml-5">
-                <ElInput v-model="form.email" :disabled="!isEdit" />
-              </ElFormItem>
-            </ElRow>
-
-            <ElRow>
-              <ElFormItem label="手机" prop="mobile">
-                <ElInput v-model="form.mobile" :disabled="!isEdit" />
-              </ElFormItem>
-              <ElFormItem label="地址" prop="address" class="ml-5">
-                <ElInput v-model="form.address" :disabled="!isEdit" />
-              </ElFormItem>
-            </ElRow>
-
-            <ElFormItem label="个人介绍" prop="des" class="h-32">
-              <ElInput type="textarea" :rows="4" v-model="form.des" :disabled="!isEdit" />
-            </ElFormItem>
-
-            <div class="flex-c justify-end [&_.el-button]:!w-27.5">
-              <ElButton type="primary" class="w-22.5" v-ripple @click="edit">
-                {{ isEdit ? '保存' : '编辑' }}
-              </ElButton>
-            </div>
+          <p v-if="can('salary.view') || can('salary.all')" class="text-xs text-g-500 mt-2"
+            >月工资合计包含已发工资和待结算差额；负差额表示待扣回提成。缺少工资配置时显示“待配置”。</p
+          >
+        </div>
+      </ElCol>
+      <ElCol :xs="24" :lg="16">
+        <div class="art-card-sm mb-5">
+          <h3 class="p-5 border-b border-g-300 font-medium">基本资料</h3>
+          <ElForm
+            ref="profileFormRef"
+            :model="profile"
+            :rules="profileRules"
+            class="p-5"
+            label-position="top"
+            @submit.prevent="saveProfile"
+          >
+            <ElFormItem label="姓名 / 称呼" prop="name"
+              ><ElInput v-model="profile.name" maxlength="100"
+            /></ElFormItem>
+            <p class="text-sm text-g-500 mb-5"
+              >登录账号和岗位角色由管理员维护。姓名修改会同步显示在工作室后台。</p
+            >
+            <ElButton type="primary" :loading="savingProfile" v-ripple @click="saveProfile"
+              >保存资料</ElButton
+            >
           </ElForm>
         </div>
-
-        <div class="art-card-sm my-5">
-          <h1 class="p-4 text-xl font-normal border-b border-g-300">更改密码</h1>
-
-          <ElForm :model="pwdForm" class="box-border p-5" label-width="86px" label-position="top">
-            <ElFormItem label="当前密码" prop="password">
-              <ElInput
-                v-model="pwdForm.password"
+        <div class="art-card-sm mb-5">
+          <h3 class="p-5 border-b border-g-300 font-medium">账户安全</h3>
+          <ElForm
+            ref="passwordFormRef"
+            :model="password"
+            :rules="passwordRules"
+            class="p-5"
+            label-position="top"
+            @submit.prevent="changePassword"
+          >
+            <ElFormItem label="当前密码" prop="currentPassword"
+              ><ElInput
+                v-model="password.currentPassword"
                 type="password"
-                :disabled="!isEditPwd"
                 show-password
-              />
-            </ElFormItem>
-
-            <ElFormItem label="新密码" prop="newPassword">
-              <ElInput
-                v-model="pwdForm.newPassword"
+                autocomplete="current-password"
+                maxlength="128"
+            /></ElFormItem>
+            <ElFormItem label="新密码" prop="newPassword"
+              ><ElInput
+                v-model="password.newPassword"
                 type="password"
-                :disabled="!isEditPwd"
                 show-password
-              />
-            </ElFormItem>
-
-            <ElFormItem label="确认新密码" prop="confirmPassword">
-              <ElInput
-                v-model="pwdForm.confirmPassword"
+                autocomplete="new-password"
+                maxlength="128"
+                placeholder="8 至 128 位"
+            /></ElFormItem>
+            <ElFormItem label="确认新密码" prop="confirmation"
+              ><ElInput
+                v-model="password.confirmation"
                 type="password"
-                :disabled="!isEditPwd"
                 show-password
-              />
-            </ElFormItem>
-
-            <div class="flex-c justify-end [&_.el-button]:!w-27.5">
-              <ElButton type="primary" class="w-22.5" v-ripple @click="editPwd">
-                {{ isEditPwd ? '保存' : '编辑' }}
-              </ElButton>
-            </div>
+                autocomplete="new-password"
+                maxlength="128"
+            /></ElFormItem>
+            <p class="text-sm text-g-500 mb-5"
+              >修改密码后，所有设备上的当前会话会退出，请使用新密码重新登录。</p
+            >
+            <ElButton type="primary" :loading="savingPassword" v-ripple @click="changePassword"
+              >修改密码并重新登录</ElButton
+            >
           </ElForm>
         </div>
-      </div>
-    </div>
+        <div class="art-card-sm p-5">
+          <h3 class="font-medium mb-4">我的近期操作</h3>
+          <ArtTable :data="myLogs" :columns="activityColumns" height="300">
+            <template #createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
+          </ArtTable>
+        </div>
+      </ElCol>
+    </ElRow>
   </div>
 </template>
 
 <script setup lang="ts">
-  import { useUserStore } from '@/store/modules/user'
-  import type { FormInstance, FormRules } from 'element-plus'
+  import { computed, reactive, ref, watch } from 'vue'
+  import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+  import { useStudio, roleLabels, money, formatTime } from '@/hooks/business/useStudio'
+  import { studioRequest } from '@/api/studio'
+  import { useTableColumns } from '@/hooks/core/useTableColumns'
 
   defineOptions({ name: 'UserCenter' })
-
-  const userStore = useUserStore()
-  const userInfo = computed(() => userStore.getUserInfo)
-
-  const isEdit = ref(false)
-  const isEditPwd = ref(false)
-  const date = ref('')
-  const ruleFormRef = ref<FormInstance>()
-
-  /**
-   * 用户信息表单
-   */
-  const form = reactive({
-    realName: 'John Snow',
-    nikeName: '皮卡丘',
-    email: '59301283@mall.com',
-    mobile: '18888888888',
-    address: '广东省深圳市宝安区西乡街道101栋201',
-    sex: '2',
-    des: 'Art Design Pro 是一款兼具设计美学与高效开发的后台系统.'
-  })
-
-  /**
-   * 密码修改表单
-   */
-  const pwdForm = reactive({
-    password: '123456',
-    newPassword: '123456',
-    confirmPassword: '123456'
-  })
-
-  /**
-   * 表单验证规则
-   */
-  const rules = reactive<FormRules>({
-    realName: [
-      { required: true, message: '请输入姓名', trigger: 'blur' },
-      { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
-    ],
-    nikeName: [
-      { required: true, message: '请输入昵称', trigger: 'blur' },
-      { min: 2, max: 50, message: '长度在 2 到 50 个字符', trigger: 'blur' }
-    ],
-    email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }],
-    mobile: [{ required: true, message: '请输入手机号码', trigger: 'blur' }],
-    address: [{ required: true, message: '请输入地址', trigger: 'blur' }],
-    sex: [{ required: true, message: '请选择性别', trigger: 'blur' }]
-  })
-
-  /**
-   * 性别选项
-   */
-  const options = [
-    { value: '1', label: '男' },
-    { value: '2', label: '女' }
-  ]
-
-  /**
-   * 用户标签列表
-   */
-  const lableList: Array<string> = ['专注设计', '很有想法', '辣~', '大长腿', '川妹子', '海纳百川']
-
-  onMounted(() => {
-    getDate()
-  })
-
-  /**
-   * 根据当前时间获取问候语
-   */
-  const getDate = () => {
-    const h = new Date().getHours()
-
-    if (h >= 6 && h < 9) date.value = '早上好'
-    else if (h >= 9 && h < 11) date.value = '上午好'
-    else if (h >= 11 && h < 13) date.value = '中午好'
-    else if (h >= 13 && h < 18) date.value = '下午好'
-    else if (h >= 18 && h < 24) date.value = '晚上好'
-    else date.value = '很晚了，早点睡'
+  const { data, user, selectedMonth, can, mutate, logout, clearSession } = useStudio()
+  const profileFormRef = ref<FormInstance>()
+  const passwordFormRef = ref<FormInstance>()
+  const profile = reactive({ name: '' })
+  const password = reactive({ currentPassword: '', newPassword: '', confirmation: '' })
+  const savingProfile = ref(false)
+  const savingPassword = ref(false)
+  const profileRules: FormRules = {
+    name: [{ required: true, message: '请输入姓名或称呼', trigger: 'blur' }]
   }
-
-  /**
-   * 切换用户信息编辑状态
-   */
-  const edit = () => {
-    isEdit.value = !isEdit.value
+  const passwordRules: FormRules = {
+    currentPassword: [{ required: true, message: '请输入当前密码', trigger: 'blur' }],
+    newPassword: [
+      { required: true, message: '请输入新密码', trigger: 'blur' },
+      { min: 8, max: 128, message: '密码长度应为 8 至 128 位', trigger: 'blur' }
+    ],
+    confirmation: [
+      {
+        validator: (_rule, value, callback) =>
+          callback(
+            value !== password.newPassword || !value
+              ? new Error('两次输入的新密码不一致')
+              : undefined
+          ),
+        trigger: 'blur'
+      }
+    ]
   }
-
-  /**
-   * 切换密码编辑状态
-   */
-  const editPwd = () => {
-    isEditPwd.value = !isEditPwd.value
+  watch(
+    () => user.value?.name,
+    (name) => {
+      profile.name = name || ''
+    },
+    { immediate: true }
+  )
+  const performance = computed(() =>
+    data.value?.reports.performance.find((row) => row.userId === user.value?.id)
+  )
+  const payrollLines = computed(() =>
+    (data.value?.reports.payroll || []).filter((row) => row.userId === user.value?.id)
+  )
+  const payrollTotal = computed(() =>
+    !payrollLines.value.length ||
+    payrollLines.value.some((row) => row.incomplete || row.total == null)
+      ? null
+      : payrollLines.value.reduce((sum, row) => sum + row.total!, 0)
+  )
+  const paidSalary = computed(() =>
+    (data.value?.payrolls || [])
+      .filter((payroll) => payroll.month === selectedMonth.value)
+      .flatMap((payroll) => payroll.lines)
+      .filter((row) => row.userId === user.value?.id)
+      .reduce((sum, row) => sum + (row.total || 0), 0)
+  )
+  const pendingSalary = computed(() =>
+    payrollTotal.value == null ? null : payrollTotal.value - paidSalary.value
+  )
+  const actualHours = computed(() =>
+    (data.value?.attendance || [])
+      .filter(
+        (row) =>
+          row.userId === user.value?.id &&
+          row.date.startsWith(selectedMonth.value) &&
+          row.status === 'present'
+      )
+      .reduce((sum, row) => sum + row.actualHours, 0)
+  )
+  const myLogs = computed(() =>
+    (data.value?.logs || []).filter((log) => log.actorId === user.value?.id).slice(0, 10)
+  )
+  const { columns: activityColumns } = useTableColumns(() => [
+    { prop: 'createdAt', label: '操作时间', minWidth: 180, useSlot: true },
+    { prop: 'action', label: '操作内容', minWidth: 200 }
+  ])
+  async function saveProfile() {
+    if (!(await profileFormRef.value?.validate().catch(() => false))) return
+    savingProfile.value = true
+    try {
+      await mutate('/profile', { name: profile.name })
+      ElMessage.success('个人资料已保存')
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : '保存失败')
+    } finally {
+      savingProfile.value = false
+    }
+  }
+  async function changePassword() {
+    if (!(await passwordFormRef.value?.validate().catch(() => false))) return
+    savingPassword.value = true
+    try {
+      await studioRequest(
+        '/profile/password',
+        { currentPassword: password.currentPassword, newPassword: password.newPassword },
+        'POST'
+      )
+      Object.assign(password, { currentPassword: '', newPassword: '', confirmation: '' })
+      // 密码已经保存且服务端已撤销所有会话，本地立即清除身份。
+      clearSession()
+      // 此请求只清理浏览器 cookie；网络失败不改变已完成的改密结果。
+      await logout().catch(() => undefined)
+      ElMessage.success('密码已修改，请重新登录')
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : '密码修改失败')
+    } finally {
+      savingPassword.value = false
+    }
   }
 </script>

@@ -10,6 +10,12 @@ export const templateRoutes: AppRouteRecord = {
   },
   children: [
     {
+      path: 'ecommerce',
+      name: 'Ecommerce',
+      component: '/dashboard/ecommerce',
+      meta: { title: '电商仪表盘示例', icon: 'ri:bar-chart-box-line', templateExample: true }
+    },
+    {
       path: 'cards',
       name: 'Cards',
       component: '/template/cards',

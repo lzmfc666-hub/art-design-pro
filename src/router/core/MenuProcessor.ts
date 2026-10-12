@@ -14,9 +14,9 @@ import { fetchGetMenuList } from '@/api/system-manage'
 import { asyncRoutes } from '../routes/asyncRoutes'
 import { RoutesAlias } from '../routesAlias'
 import { formatMenuTitle } from '@/utils'
-import { useStudio } from '@/studio/useStudio'
-import { isStudioSuperAdmin } from '@/studio/framework-auth'
-import { canAccessStudioPage } from '@/studio/route-access'
+import { useStudio } from '@/hooks/business/useStudio'
+import { isStudioSuperAdmin } from '@/utils/auth/studio-user'
+import { canAccessStudioPage } from '@/utils/auth/studio-access'
 
 export class MenuProcessor {
   /**
@@ -52,7 +52,7 @@ export class MenuProcessor {
 
     // 原模板页面保留给超管；日常员工只展示其被授权的工作室业务。
     if (!isStudioSuperAdmin(useStudio().user.value)) {
-      menuList = menuList.filter((route) => route.name === 'Studio')
+      menuList = menuList.filter((route) => route.meta.business === true)
     }
 
     // 根据角色过滤菜单
@@ -78,6 +78,7 @@ export class MenuProcessor {
     return menu.reduce((acc: AppRouteRecord[], item) => {
       const itemRoles = item.meta?.roles
       const hasPermission =
+        (!item.meta.templateExample || isStudioSuperAdmin(useStudio().user.value)) &&
         (!itemRoles || itemRoles.some((role) => roles?.includes(role))) &&
         canAccessStudioPage(item.meta.studioPermissions)
 
@@ -104,15 +105,19 @@ export class MenuProcessor {
           const filteredChildren = this.filterEmptyMenus(item.children)
           return {
             ...item,
+            meta: {
+              ...item.meta,
+              isHide: item.meta.isHide || filteredChildren.every((child) => child.meta.isHide)
+            },
             children: filteredChildren
           }
         }
         return item
       })
       .filter((item) => {
-        // 如果定义了 children 属性（即使是空数组），说明这是一个目录菜单，应该保留
+        // 权限过滤后不显示没有可访问子页面的目录。
         if ('children' in item) {
-          return true
+          return Boolean(item.children?.length)
         }
 
         // 如果有外链或 iframe，保留

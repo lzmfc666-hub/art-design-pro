@@ -1,74 +1,49 @@
 <template>
-  <ElRow :gutter="20" class="flex">
-    <ElCol v-for="(item, index) in dataList" :key="index" :sm="12" :md="6" :lg="6">
-      <div class="art-card relative flex flex-col justify-center h-35 px-5 mb-5 max-sm:mb-4">
-        <span class="text-g-700 text-sm">{{ item.des }}</span>
-        <ArtCountTo class="text-[26px] font-medium mt-2" :target="item.num" :duration="1300" />
-        <div class="flex-c mt-1">
-          <span class="text-xs text-g-600">较上周</span>
-          <span
-            class="ml-1 text-xs font-semibold"
-            :class="[item.change.indexOf('+') === -1 ? 'text-danger' : 'text-success']"
-          >
-            {{ item.change }}
-          </span>
-        </div>
-        <div
-          class="absolute top-0 bottom-0 right-5 m-auto size-12.5 rounded-xl flex-cc bg-theme/10"
-        >
-          <ArtSvgIcon :icon="item.icon" class="text-xl text-theme" />
-        </div>
+  <ElRow :gutter="20">
+    <ElCol v-for="item in cards" :key="item.label" :xs="12" :lg="6">
+      <div class="art-card relative flex flex-col justify-center h-35 px-5 mb-5">
+        <span class="text-sm text-g-600">{{ item.label }}</span
+        ><strong class="text-2xl font-semibold mt-2">{{ item.value }}</strong
+        ><span class="text-xs text-g-500 mt-2">{{ item.note }}</span>
+        <div class="absolute right-5 top-5 rounded-xl p-3 bg-theme/10 text-theme max-sm:hidden"
+          ><ArtSvgIcon :icon="item.icon" class="text-xl"
+        /></div>
       </div>
     </ElCol>
   </ElRow>
 </template>
-
 <script setup lang="ts">
-  interface CardDataItem {
-    des: string
-    icon: string
-    startVal: number
-    duration: number
-    num: number
-    change: string
-  }
-
-  /**
-   * 卡片统计数据列表
-   * 展示总访问次数、在线访客数、点击量和新用户等核心数据指标
-   */
-  const dataList = reactive<CardDataItem[]>([
-    {
-      des: '总访问次数',
-      icon: 'ri:pie-chart-line',
-      startVal: 0,
-      duration: 1000,
-      num: 9120,
-      change: '+20%'
-    },
-    {
-      des: '在线访客数',
-      icon: 'ri:group-line',
-      startVal: 0,
-      duration: 1000,
-      num: 182,
-      change: '+10%'
-    },
-    {
-      des: '点击量',
-      icon: 'ri:fire-line',
-      startVal: 0,
-      duration: 1000,
-      num: 9520,
-      change: '-12%'
-    },
-    {
-      des: '新用户',
-      icon: 'ri:progress-2-line',
-      startVal: 0,
-      duration: 1000,
-      num: 156,
-      change: '+30%'
-    }
-  ])
+  import { useStudio, money } from '@/hooks/business/useStudio'
+  const { data, user, can } = useStudio()
+  const cards = computed(() => {
+    const orders = data.value?.orders || []
+    const days = data.value?.reports.days || []
+    const mine = data.value?.reports.performance.find((row) => row.userId === user.value?.id)
+    return [
+      {
+        label: can('profit.view') ? '本月净收入' : '本月个人业绩',
+        value: money(can('profit.view') ? days.reduce((sum, d) => sum + d.net, 0) : mine?.net || 0),
+        note: can('profit.view') ? '按客户原付款日统计' : '完成订单扣除累计退款',
+        icon: 'ri:money-cny-circle-line'
+      },
+      {
+        label: '等待接单',
+        value: orders.filter((o) => o.status === 'pending').length,
+        note: '已发布，等待打手接单',
+        icon: 'ri:time-line'
+      },
+      {
+        label: '正在执行',
+        value: orders.filter((o) => o.status === 'active').length,
+        note: '由打手端提交完成材料',
+        icon: 'ri:gamepad-line'
+      },
+      {
+        label: '待财务验收',
+        value: orders.filter((o) => o.status === 'review').length,
+        note: '验收后计入可提现报酬',
+        icon: 'ri:checkbox-circle-line'
+      }
+    ]
+  })
 </script>

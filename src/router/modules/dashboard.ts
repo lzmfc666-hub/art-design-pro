@@ -5,9 +5,9 @@ export const dashboardRoutes: AppRouteRecord = {
   path: '/dashboard',
   component: '/index/index',
   meta: {
-    title: 'menus.dashboard.title',
+    title: '工作台',
     icon: 'ri:pie-chart-line',
-    roles: ['R_SUPER', 'R_ADMIN']
+    business: true
   },
   children: [
     {
@@ -15,7 +15,7 @@ export const dashboardRoutes: AppRouteRecord = {
       name: 'Console',
       component: '/dashboard/console',
       meta: {
-        title: 'menus.dashboard.console',
+        title: '业务总览',
         icon: 'ri:home-smile-2-line',
         keepAlive: false,
         fixedTab: true
@@ -26,19 +26,10 @@ export const dashboardRoutes: AppRouteRecord = {
       name: 'Analysis',
       component: '/dashboard/analysis',
       meta: {
-        title: 'menus.dashboard.analysis',
+        title: '经营报表',
         icon: 'ri:align-item-bottom-line',
-        keepAlive: false
-      }
-    },
-    {
-      path: 'ecommerce',
-      name: 'Ecommerce',
-      component: '/dashboard/ecommerce',
-      meta: {
-        title: 'menus.dashboard.ecommerce',
-        icon: 'ri:bar-chart-box-line',
-        keepAlive: false
+        keepAlive: false,
+        studioPermissions: ['profit.view']
       }
     }
   ]

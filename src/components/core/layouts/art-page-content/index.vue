@@ -5,14 +5,33 @@
       <!-- 节日滚动 -->
       <ArtFestivalTextScroll v-if="!isFullPage" />
       <ElAlert
-        v-if="!isFullPage && !String(route.name || '').startsWith('Studio')"
-        title="Art Design Pro 原模板示例"
-        description="此处保留原模板的演示页面。实际工作室业务、人员与权限请在“工作室管理”菜单中操作。"
+        v-if="!isFullPage && route.meta.business && businessData?.demo"
+        title="当前使用开发数据"
+        description="此数据库用于验证业务流程，正式启用时请建立正式账号和业务配置。"
         type="info"
         :closable="false"
         show-icon
         class="mb-4"
       />
+      <ElAlert
+        v-if="!isFullPage && route.meta.templateExample"
+        title="Art Design Pro 原模板示例"
+        description="保留的组件与页面示例，可用于后续界面调整。"
+        type="info"
+        :closable="false"
+        show-icon
+        class="mb-4"
+      />
+      <ElAlert
+        v-if="!isFullPage && route.meta.business && error"
+        :title="error"
+        type="error"
+        :closable="false"
+        show-icon
+        class="mb-4"
+      >
+        <ElButton size="small" @click="refreshBusiness().catch(() => {})">重新加载</ElButton>
+      </ElAlert>
 
       <!-- 路由信息调试 -->
       <div
@@ -62,10 +81,12 @@
   import { useAutoLayoutHeight } from '@/hooks/core/useLayoutHeight'
   import { useSettingStore } from '@/store/modules/setting'
   import { useWorktabStore } from '@/store/modules/worktab'
+  import { useStudio } from '@/hooks/business/useStudio'
 
   defineOptions({ name: 'ArtPageContent' })
 
   const route = useRoute()
+  const { data: businessData, error, refresh: refreshBusiness } = useStudio()
   const { containerMinHeight } = useAutoLayoutHeight()
   const { pageTransition, containerWidth, refresh } = storeToRefs(useSettingStore())
   const { keepAliveExclude } = storeToRefs(useWorktabStore())

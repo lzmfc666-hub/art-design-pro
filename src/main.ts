@@ -9,8 +9,8 @@ import '@utils/sys/console.ts'
 import { setupGlobDirectives } from './directives'
 import { setupErrorHandle } from './utils/sys/error-handle'
 import { useUserStore } from './store/modules/user'
-import { useStudio } from './studio/useStudio'
-import { toFrameworkUser } from './studio/framework-auth'
+import { useStudio } from './hooks/business/useStudio'
+import { toFrameworkUser } from './utils/auth/studio-user'
 import { resetRouterState } from './router/guards/beforeEach'
 
 document.addEventListener('touchstart', function () {}, { passive: false })
@@ -51,7 +51,12 @@ async function bootstrap() {
   watch(
     () => studio.data.value?.permissions.join('|'),
     (permissions, previous) => {
-      if (userStore.isLogin && permissions && previous && permissions !== previous) {
+      if (
+        userStore.isLogin &&
+        permissions !== undefined &&
+        previous !== undefined &&
+        permissions !== previous
+      ) {
         resetRouterState(0)
         const current = router.currentRoute.value
         void router.replace({

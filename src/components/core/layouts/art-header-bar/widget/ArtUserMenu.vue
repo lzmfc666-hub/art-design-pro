@@ -33,7 +33,7 @@
           </div>
         </div>
         <ul class="py-4 mt-3 border-t border-g-300/80">
-          <li class="btn-item" @click="goPage('/profile')">
+          <li class="btn-item" @click="goPage('/system/user-center')">
             <ArtSvgIcon icon="ri:user-3-line" />
             <span>{{ $t('topBar.user.userCenter') }}</span>
           </li>
@@ -66,8 +66,8 @@
   import { useUserStore } from '@/store/modules/user'
   import { WEB_LINKS } from '@/utils/constants'
   import { mittBus } from '@/utils/sys'
-  import { useStudio, roleLabels } from '@/studio/useStudio'
-  import { isStudioSuperAdmin } from '@/studio/framework-auth'
+  import { useStudio, roleLabels } from '@/hooks/business/useStudio'
+  import { isStudioSuperAdmin } from '@/utils/auth/studio-user'
 
   defineOptions({ name: 'ArtUserMenu' })
 

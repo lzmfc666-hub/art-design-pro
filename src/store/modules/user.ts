@@ -42,7 +42,7 @@ import { setPageTitle } from '@/utils/router'
 import { resetRouterState } from '@/router/guards/beforeEach'
 import { useMenuStore } from './menu'
 import { StorageConfig } from '@/utils/storage/storage-config'
-import { useStudio } from '@/studio/useStudio'
+import { useStudio } from '@/hooks/business/useStudio'
 
 /**
  * 用户状态管理

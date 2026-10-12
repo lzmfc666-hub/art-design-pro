@@ -1,71 +1,57 @@
 <template>
-  <div class="art-card h-128 p-5 mb-5 max-sm:mb-4">
-    <div class="art-card-header">
-      <div class="title">
-        <h4>代办事项</h4>
-        <p>待处理<span class="text-danger">3</span></p>
-      </div>
-    </div>
-
-    <div class="h-[calc(100%-40px)] overflow-auto">
-      <ElScrollbar>
-        <div
-          class="flex-cb h-17.5 border-b border-g-300 text-sm last:border-b-0"
-          v-for="(item, index) in list"
-          :key="index"
-        >
-          <div>
-            <p class="text-sm">{{ item.username }}</p>
-            <p class="text-g-500 mt-1">{{ item.date }}</p>
-          </div>
-          <ElCheckbox v-model="item.complate" />
-        </div>
-      </ElScrollbar>
-    </div>
+  <div class="art-card h-128 p-5 mb-5">
+    <div class="art-card-header"
+      ><div class="title"><h4>待办事项</h4><p>根据账号权限展示</p></div></div
+    >
+    <ElEmpty v-if="!items.length" description="当前暂无待办" :image-size="80" />
+    <div
+      v-for="item in items"
+      :key="item.label"
+      class="flex items-center justify-between py-4 border-b border-g-300"
+      ><ElButton link @click="$router.push(item.path)">{{ item.label }}</ElButton
+      ><ElTag :type="item.count ? 'warning' : 'info'">{{ item.count }}</ElTag></div
+    >
   </div>
 </template>
-
 <script setup lang="ts">
-  interface TodoItem {
-    username: string
-    date: string
-    complate: boolean
-  }
-
-  /**
-   * 待办事项列表
-   * 记录每日工作任务及完成状态
-   */
-  const list = reactive<TodoItem[]>([
-    {
-      username: '查看今天工作内容',
-      date: '上午 09:30',
-      complate: true
-    },
-    {
-      username: '回复邮件',
-      date: '上午 10:30',
-      complate: true
-    },
-    {
-      username: '工作汇报整理',
-      date: '上午 11:00',
-      complate: true
-    },
-    {
-      username: '产品需求会议',
-      date: '下午 02:00',
-      complate: false
-    },
-    {
-      username: '整理会议内容',
-      date: '下午 03:30',
-      complate: false
-    },
-    {
-      username: '明天工作计划',
-      date: '下午 06:30',
-      complate: false
-    }
-  ])
+  import { useStudio } from '@/hooks/business/useStudio'
+  const { data, can } = useStudio()
+  const items = computed(() =>
+    [
+      {
+        label: '待确认收款',
+        count: (data.value?.orders || []).filter(
+          (o) => !o.receivedAmount && o.status !== 'canceled'
+        ).length,
+        path: '/orders/list?payment=unpaid',
+        show: can('orders.edit')
+      },
+      {
+        label: '待验收订单',
+        count: (data.value?.orders || []).filter((o) => o.status === 'review').length,
+        path: '/finance/settlement?tab=review',
+        show: can('finance.review')
+      },
+      {
+        label: '待审核退款',
+        count: (data.value?.refunds || []).filter((r) => r.status === 'pending').length,
+        path: '/finance/settlement?tab=refunds',
+        show: can('finance.refunds')
+      },
+      {
+        label: '待处理提现',
+        count: (data.value?.withdrawals || []).filter((w) =>
+          ['pending', 'approved'].includes(w.status)
+        ).length,
+        path: '/finance/settlement?tab=withdrawals',
+        show: can('finance.withdrawals')
+      },
+      {
+        label: '取消报酬待确认',
+        count: (data.value?.orders || []).filter((o) => o.compensationPending).length,
+        path: '/finance/settlement?tab=review',
+        show: can('finance.review')
+      }
+    ].filter((i) => i.show)
+  )
 </script>

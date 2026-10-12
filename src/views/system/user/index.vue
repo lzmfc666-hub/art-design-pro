@@ -1,259 +1,143 @@
-<!-- 用户管理页面 -->
-<!-- art-full-height 自动计算出页面剩余高度 -->
-<!-- art-table-card 一个符合系统样式的 class，同时自动撑满剩余高度 -->
-<!-- 更多 useTable 使用示例请移步至 功能示例 下面的高级表格示例或者查看官方文档 -->
-<!-- useTable 文档：https://www.artd.pro/docs/zh/guide/hooks/use-table.html -->
 <template>
   <div class="user-page art-full-height">
-    <!-- 搜索栏 -->
-    <UserSearch v-model="searchForm" @search="handleSearch" @reset="resetSearchParams"></UserSearch>
-
+    <UserSearch v-model="search" @search="applySearch" @reset="resetSearch" />
     <ElCard class="art-table-card">
-      <!-- 表格头部 -->
+      <ElTabs v-model="tab" @tab-change="resetPage"
+        ><ElTabPane label="员工档案" name="staff" /><ElTabPane label="打手档案" name="players"
+      /></ElTabs>
       <ArtTableHeader v-model:columns="columnChecks" :loading="loading" @refresh="refreshData">
-        <template #left>
-          <ElSpace wrap>
-            <ElButton @click="showDialog('add')" v-ripple>新增用户</ElButton>
-          </ElSpace>
-        </template>
+        <template #left
+          ><ElSpace wrap
+            ><ElButton
+              v-if="isAdmin && can('users.manage')"
+              type="primary"
+              v-ripple
+              @click="edit()"
+              >{{ tab === 'players' ? '新增打手账号' : '新增员工账号' }}</ElButton
+            ><span class="text-sm text-g-500"
+              >共 {{ filteredRows.length }} 人 · 账号创建与密码重置由管理员操作</span
+            ></ElSpace
+          ></template
+        >
       </ArtTableHeader>
-
-      <!-- 表格 -->
       <ArtTable
+        :data="tableData"
         :loading="loading"
-        :data="data"
         :columns="columns"
         :pagination="pagination"
-        @selection-change="handleSelectionChange"
         @pagination:size-change="handleSizeChange"
         @pagination:current-change="handleCurrentChange"
       >
+        <template #role="{ row }"
+          ><ElTag>{{ roleLabels[row.role as Role] }}</ElTag></template
+        >
+        <template #levelId="{ row }">{{
+          row.role === 'player'
+            ? data?.levels.find((level) => level.id === row.levelId)?.name || '未设置'
+            : '—'
+        }}</template>
+        <template #maxActiveOrders="{ row }">{{
+          row.role === 'player' ? `${row.activeOrders ?? 0} / ${row.maxActiveOrders}` : '—'
+        }}</template>
+        <template #status="{ row }"
+          ><ElTag :type="row.status === 'active' ? 'success' : 'info'">{{
+            row.status === 'active' ? '启用' : '停用'
+          }}</ElTag></template
+        >
+        <template #permissionOverrides="{ row }">{{
+          row.role === 'super_admin'
+            ? '全部权限'
+            : `${Object.keys(row.permissionOverrides || {}).length} 项覆盖`
+        }}</template>
+        <template #operation="{ row }"
+          ><ElButton
+            v-if="
+              can('users.manage') && (row.role !== 'super_admin' || user?.role === 'super_admin')
+            "
+            link
+            type="primary"
+            @click="edit(row)"
+            >编辑档案</ElButton
+          ></template
+        >
       </ArtTable>
-
-      <!-- 用户弹窗 -->
-      <UserDialog
-        v-model:visible="dialogVisible"
-        :type="dialogType"
-        :user-data="currentUserData"
-        @submit="handleDialogSubmit"
-      />
     </ElCard>
+    <UserDialog
+      v-model:visible="dialogVisible"
+      :row="currentRow"
+      :default-role="tab === 'players' ? 'player' : 'support'"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-  import ArtButtonTable from '@/components/core/forms/art-button-table/index.vue'
-  import { ACCOUNT_TABLE_DATA } from '@/mock/temp/formData'
-  import { useTable } from '@/hooks/core/useTable'
-  import { fetchGetUserList } from '@/api/system-manage'
-  import UserSearch from './modules/user-search.vue'
+  import { computed, reactive, ref, watch } from 'vue'
+  import { useRoute } from 'vue-router'
+  import { ElMessage } from 'element-plus'
+  import { useStudio, roleLabels } from '@/hooks/business/useStudio'
+  import { useBusinessTable } from '@/hooks/business/useBusinessTable'
+  import { useTableColumns } from '@/hooks/core/useTableColumns'
+  import type { Role, Staff } from '@/types/studio'
+  import UserSearch, { type UserSearch as SearchParams } from './modules/user-search.vue'
   import UserDialog from './modules/user-dialog.vue'
-  import { ElTag, ElMessageBox, ElImage } from 'element-plus'
-  import { DialogType } from '@/types'
 
   defineOptions({ name: 'User' })
-
-  type UserListItem = Api.SystemManage.UserListItem
-
-  // 弹窗相关
-  const dialogType = ref<DialogType>('add')
-  const dialogVisible = ref(false)
-  const currentUserData = ref<Partial<UserListItem>>({})
-
-  // 选中行
-  const selectedRows = ref<UserListItem[]>([])
-
-  // 搜索表单
-  const searchForm = ref({
-    userName: undefined,
-    userGender: undefined,
-    userPhone: undefined,
-    userEmail: undefined,
-    status: '1'
-  })
-
-  // 用户状态配置
-  const USER_STATUS_CONFIG = {
-    '1': { type: 'success' as const, text: '在线' },
-    '2': { type: 'info' as const, text: '离线' },
-    '3': { type: 'warning' as const, text: '异常' },
-    '4': { type: 'danger' as const, text: '注销' }
-  } as const
-
-  /**
-   * 获取用户状态配置
-   */
-  const getUserStatusConfig = (status: string) => {
-    return (
-      USER_STATUS_CONFIG[status as keyof typeof USER_STATUS_CONFIG] || {
-        type: 'info' as const,
-        text: '未知'
-      }
-    )
-  }
-
-  const {
-    columns,
-    columnChecks,
-    data,
-    loading,
-    pagination,
-    getData,
-    replaceSearchParams,
-    resetSearchParams,
-    handleSizeChange,
-    handleCurrentChange,
-    refreshData
-  } = useTable({
-    // 核心配置
-    core: {
-      apiFn: fetchGetUserList,
-      apiParams: {
-        current: 1,
-        size: 20,
-        ...searchForm.value
-      },
-      // 自定义分页字段映射，未设置时将使用全局配置 tableConfig.ts 中的 paginationKey
-      // paginationKey: {
-      //   current: 'pageNum',
-      //   size: 'pageSize'
-      // },
-      columnsFactory: () => [
-        { type: 'selection' }, // 勾选列
-        { type: 'index', width: 60, label: '序号' }, // 序号
-        {
-          prop: 'userInfo',
-          label: '用户名',
-          width: 280,
-          // visible: false, // 默认是否显示列
-          formatter: (row) => {
-            return h('div', { class: 'user flex-c' }, [
-              h(ElImage, {
-                class: 'size-9.5 rounded-md',
-                src: row.avatar,
-                previewSrcList: [row.avatar],
-                // 图片预览是否插入至 body 元素上，用于解决表格内部图片预览样式异常
-                previewTeleported: true
-              }),
-              h('div', { class: 'ml-2' }, [
-                h('p', { class: 'user-name' }, row.userName),
-                h('p', { class: 'email' }, row.userEmail)
-              ])
-            ])
-          }
-        },
-        {
-          prop: 'userGender',
-          label: '性别',
-          sortable: true,
-          formatter: (row) => row.userGender
-        },
-        { prop: 'userPhone', label: '手机号' },
-        {
-          prop: 'status',
-          label: '状态',
-          formatter: (row) => {
-            const statusConfig = getUserStatusConfig(row.status)
-            return h(ElTag, { type: statusConfig.type }, () => statusConfig.text)
-          }
-        },
-        {
-          prop: 'createTime',
-          label: '创建日期',
-          sortable: true
-        },
-        {
-          prop: 'operation',
-          label: '操作',
-          width: 120,
-          fixed: 'right', // 固定列
-          formatter: (row) =>
-            h('div', [
-              h(ArtButtonTable, {
-                type: 'edit',
-                onClick: () => showDialog('edit', row)
-              }),
-              h(ArtButtonTable, {
-                type: 'delete',
-                onClick: () => deleteUser(row)
-              })
-            ])
-        }
-      ]
+  const { data, user, loading, can, refresh } = useStudio()
+  const isAdmin = computed(() => ['super_admin', 'admin'].includes(user.value?.role || ''))
+  const tab = ref('staff')
+  const search = ref<SearchParams>({ keyword: '', role: '', status: '' })
+  const applied = reactive<SearchParams>({ keyword: '', role: '', status: '' })
+  const route = useRoute()
+  watch(
+    () => route.query.role,
+    (value) => {
+      const role = typeof value === 'string' && value in roleLabels ? value : ''
+      search.value.role = role
+      applied.role = role
+      tab.value = role === 'player' ? 'players' : 'staff'
     },
-    // 数据处理
-    transform: {
-      // 数据转换器 - 替换头像
-      dataTransformer: (records) => {
-        // 类型守卫检查
-        if (!Array.isArray(records)) {
-          console.warn('数据转换器: 期望数组类型，实际收到:', typeof records)
-          return []
-        }
-
-        // 使用本地头像替换接口返回的头像
-        return records.map((item, index: number) => {
-          return {
-            ...item,
-            avatar: ACCOUNT_TABLE_DATA[index % ACCOUNT_TABLE_DATA.length].avatar
-          }
-        })
-      }
-    }
-  })
-
-  /**
-   * 搜索处理
-   * @param params 参数
-   */
-  const handleSearch = (params: Api.SystemManage.UserSearchParams) => {
-    replaceSearchParams(params)
-    getData()
+    { immediate: true }
+  )
+  const filteredRows = computed(() =>
+    (data.value?.users || []).filter(
+      (row) =>
+        (tab.value === 'players' ? row.role === 'player' : row.role !== 'player') &&
+        `${row.name} ${row.username}`.toLowerCase().includes(applied.keyword.toLowerCase()) &&
+        (!applied.role || row.role === applied.role) &&
+        (!applied.status || row.status === applied.status)
+    )
+  )
+  const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =
+    useBusinessTable(filteredRows)
+  const { columns, columnChecks } = useTableColumns<Staff>(() => [
+    { prop: 'name', label: '姓名 / 称呼', minWidth: 130 },
+    { prop: 'username', label: '登录账号', minWidth: 150 },
+    { prop: 'role', label: '角色', width: 130, useSlot: true },
+    { prop: 'levelId', label: '打手等级', minWidth: 120, useSlot: true },
+    { prop: 'maxActiveOrders', label: '接单数量 / 上限', width: 150, useSlot: true },
+    { prop: 'status', label: '状态', width: 100, useSlot: true },
+    { prop: 'permissionOverrides', label: '个人权限', width: 120, useSlot: true },
+    { prop: 'operation', label: '操作', width: 110, fixed: 'right', useSlot: true }
+  ])
+  const dialogVisible = ref(false)
+  const currentRow = ref<Staff>()
+  function edit(row?: Staff) {
+    currentRow.value = row
+    dialogVisible.value = true
   }
-
-  /**
-   * 显示用户弹窗
-   */
-  const showDialog = (type: DialogType, row?: UserListItem): void => {
-    console.log('打开弹窗:', { type, row })
-    dialogType.value = type
-    currentUserData.value = row || {}
-    nextTick(() => {
-      dialogVisible.value = true
-    })
+  function applySearch() {
+    Object.assign(applied, search.value)
+    resetPage()
   }
-
-  /**
-   * 删除用户
-   */
-  const deleteUser = (row: UserListItem): void => {
-    console.log('删除用户:', row)
-    ElMessageBox.confirm(`确定要注销该用户吗？`, '注销用户', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'error'
-    }).then(() => {
-      ElMessage.success('注销成功')
-    })
+  function resetSearch() {
+    search.value = { keyword: '', role: '', status: '' }
+    applySearch()
   }
-
-  /**
-   * 处理弹窗提交事件
-   */
-  const handleDialogSubmit = async () => {
+  async function refreshData() {
     try {
-      dialogVisible.value = false
-      currentUserData.value = {}
+      await refresh()
     } catch (error) {
-      console.error('提交失败:', error)
+      ElMessage.error(error instanceof Error ? error.message : '刷新失败')
     }
-  }
-
-  /**
-   * 处理表格行选择变化
-   */
-  const handleSelectionChange = (selection: UserListItem[]): void => {
-    selectedRows.value = selection
-    console.log('选中行数据:', selectedRows.value)
   }
 </script>

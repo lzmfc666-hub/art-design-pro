@@ -1,43 +1,34 @@
 <template>
-  <div class="art-card h-82 p-5 mb-5 max-sm:mb-4">
-    <div class="art-card-header">
-      <div class="title">
-        <h4>访客洞察</h4>
-      </div>
-    </div>
+  <div class="art-card p-5 mb-5">
+    <div class="art-card-header"
+      ><div class="title"><h4>每日收款与净收入</h4><p>原付款日归属 · 单位：元</p></div></div
+    >
     <ArtLineChart
-      height="calc(100% - 30px)"
+      v-if="days.length"
+      height="290px"
+      :loading="loading"
       :data="chartData"
-      :xAxisData="xAxisData"
-      :showLegend="true"
-      :showAxisLabel="true"
-      :showAxisLine="false"
-      :showSplitLine="true"
+      :x-axis-data="xAxisData"
+      :show-legend="true"
+      :show-axis-label="true"
+      :show-axis-line="false"
+      :show-split-line="true"
+      :smooth="false"
     />
+    <ElEmpty v-else description="当前月份没有经营记录" :image-size="100" class="h-72" />
   </div>
 </template>
 
 <script setup lang="ts">
+  import { computed } from 'vue'
+  import { useStudio } from '@/hooks/business/useStudio'
   import type { LineDataItem } from '@/types/component/chart'
-
-  /**
-   * X 轴数据配置
-   * 表示一年的月份（1-12月）
-   */
-  const xAxisData = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
-
-  /**
-   * 访客洞察图表数据
-   * 对比老客户和新客户的全年访问趋势
-   */
+  const { data, loading } = useStudio()
+  const days = computed(() => data.value?.reports.days || [])
+  const xAxisData = computed(() => days.value.map((row) => row.date.slice(5)))
   const chartData = computed<LineDataItem[]>(() => [
-    {
-      name: '老客户',
-      data: [280, 350, 300, 250, 230, 210, 240, 280, 320, 350, 300, 200]
-    },
-    {
-      name: '新客户',
-      data: [260, 200, 150, 130, 180, 270, 340, 380, 300, 220, 170, 130]
-    }
+    { name: '客户收款', data: days.value.map((row) => row.received / 100) },
+    { name: '累计退款', data: days.value.map((row) => row.refunds / 100) },
+    { name: '净收入', data: days.value.map((row) => row.net / 100) }
   ])
 </script>

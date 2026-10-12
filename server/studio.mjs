@@ -836,11 +836,12 @@ export function createStudioService({
     const rows = {
       user: publicStaff(state, user),
       permissions: permissionsFor(user),
+      roleDefaults: DEFAULT_PERMISSIONS,
       users: visibleUsers,
       customers:
         user.role === 'player' && !can(user, 'orders.view')
           ? []
-          : can(user, 'orders.view') || can(user, 'orders.create')
+          : can(user, 'orders.view') || can(user, 'orders.create') || can(user, 'users.manage')
             ? state.customers
             : [],
       platforms: state.platforms,
@@ -1235,6 +1236,23 @@ export function createStudioService({
     if (body == null || typeof body !== 'object' || Array.isArray(body))
       fail('请求内容必须为JSON对象')
     return transact(userId, (state, user) => {
+      if (path === '/profile') {
+        const before = clone(user)
+        user.name = text(body.name, '姓名', { required: true, max: 100 })
+        audit(state, user, '更新个人资料', 'user', user.id, before, user)
+        return publicStaff(state, user)
+      }
+      if (path === '/profile/password') {
+        if (!verifyPassword(body.currentPassword, state.passwords[user.id]))
+          fail('当前密码不正确', 400)
+        if (body.newPassword === body.currentPassword) fail('新密码不能与当前密码相同')
+        state.passwords[user.id] = hashPassword(body.newPassword)
+        db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id)
+        audit(state, user, '修改本人密码', 'account-security', user.id, null, {
+          sessionsRevoked: true
+        })
+        return { ok: true }
+      }
       if (path === '/orders') return createOrder(state, user, body)
       const orderMatch = path.match(/^\/orders\/([^/]+)\/action$/)
       if (orderMatch) return orderAction(state, user, orderMatch[1], body)

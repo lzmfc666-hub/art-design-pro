@@ -5,7 +5,8 @@
 所有接口前缀 `/api/studio`，JSON成功直接返回对象，错误 `{message}`。认证使用 HttpOnly SameSite cookie，前端 fetch credentials same-origin。
 
 - GET `/session` -> `{user: Staff|null}`；POST `/login` `{username,password}` -> `{user}`；POST `/logout`。
-- GET `/bootstrap?month=2026-10` -> StudioData。后端必须按权限过滤工资、利润、日志、用户数据。
+- GET `/bootstrap?month=2026-10` -> StudioData，包含服务器 `roleDefaults`。后端必须按权限过滤工资、利润、日志、用户数据。
+- POST `/profile` `{name}` 修改本人称呼；POST `/profile/password` `{currentPassword,newPassword}` 验证旧密码后修改并撤销全部会话。工作室账号由管理员创建，忘记密码由管理员重置。
 - POST `/uploads` `{name,mime,data: base64}` -> Attachment，GET `/uploads/:id` 需认证与关联记录可见性校验。
 - POST `/orders` 创建。请求含 templateId customerId platformId shopId externalOrderNo channel roomCode gameId map amount reward remark dispatchMode assignedTo receivedAmount paidAt receipt。校验普通单先收款、非闲鱼付款凭证、闲鱼店铺及平台单号、房间/游戏ID至少一项；仅大厅可落地付（body.payOnArrival=true）。
 - POST `/orders/:id/action` action 值：edit（roomCode gameId map channel remark amount reward reason，待接单/接单中/待验收可用）、confirm-payment（receivedAmount paidAt receipt）、dispatch（dispatchMode assignedTo）、release（reason）、remark（remark）、cancel（reason）、review-pass、review-return（reason）、adjust（amount reward reason）、cancel-settle（reward teammateId reason）。打手完成上报只走 player 接口，后台无代上报按钮。
@@ -19,6 +20,6 @@
 
 权限名称统一：`orders.view`, `orders.create`, `orders.edit`, `finance.review`, `finance.refunds`, `finance.withdrawals`, `finance.expenses`, `salary.view`, `salary.all`, `salary.manage`, `profit.view`, `users.manage`, `templates.manage`, `settings.manage`, `attendance.manage`, `logs.view`。老板和店长默认有经营数据查看，财务有财务操作，admin维护账号配置，客服不开放工资。角色默认+个人覆盖。
 
-前端共享 `src/studio/useStudio.ts`：`useStudio()` 返回 refs `data: Ref<StudioData|null>`, `user: Ref<Staff|null>`, `loading`, `error`，函数 `can(permission)`, `refresh(month?)`, `mutate(path, body, method?)`（相对前缀，成功自动 refresh）, `upload(file)`, `login`, `logout`。另外导出 `money(cents|null)`、`formatTime`、`statusLabels`、`roleLabels`。页面均自行导入 Vue API 与 ElMessage 等。
+前端共用原框架 Pinia：`src/store/modules/studio.ts` 保存服务器数据，`src/api/studio.ts` 封装真实接口，`src/hooks/business/useStudio.ts` 返回 refs `data`, `user`, `loading`, `error`, `selectedMonth` 和 `can`, `refresh(month?)`, `mutate(path, body, method?)`（成功后自动 refresh）, `upload`, `login`, `logout`。金额、状态与角色格式化函数也从该 hook 导出。业务数据不写入浏览器持久化存储。
 
-组件风格：沿用 Art Design Pro 原布局、主题、菜单及多标签页。业务页面通过 `src/views/studio` 包装组件进入原动态路由，在 `StudioPageHost` 中呈现。`studio-framework.css` 样式仅作用于 `.studio-content` / `.studio-dialog`，颜色使用主题变量。通用类有 `.page-heading`、`.panel`、`.panel-heading`、`.muted`、`.toolbar`、`.metric-grid`、`.metric-card`、`.split-grid`、`.empty-state`。
+组件风格：直接改造 `src/views/dashboard/console`、`dashboard/analysis` 及 `system/user`、`role`、`menu`、`user-center` 原页面。订单、财务、配置和考勤按原结构放在 `src/views` 各业务目录；表格复用 `ArtTable`、`ArtTableHeader`、`ArtSearchBar`、`useTableColumns`，图表复用 `ArtLineChart` / `ArtBarChart`，布局采用 `art-card`、`ElCard` 与原响应式栅格。禁止恢复独立应用、页面包装器和另一套全局样式。原模板组件及示例继续保留，真实业务菜单按角色默认权限与个人覆盖过滤。

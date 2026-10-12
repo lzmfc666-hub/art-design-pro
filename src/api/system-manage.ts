@@ -1,7 +1,7 @@
-import { ACCOUNT_TABLE_DATA } from '@/mock/temp/formData'
 import { routeModules } from '@/router/modules'
+import { useStudioStore } from '@/store/modules/studio'
+import { roleLabels } from '@/hooks/business/useStudio'
 
-/** 原模板的示例数据，与工作室真实人员及权限独立。 */
 function paginate<T>(
   records: T[],
   params: Partial<Api.Common.CommonSearchParams>
@@ -16,77 +16,60 @@ function paginate<T>(
   }
 }
 
-// 获取用户列表
+/** 兼容原框架 useTable 的接口形状，数据取自当前服务器人员快照。 */
 export async function fetchGetUserList(params: Api.SystemManage.UserSearchParams) {
-  const records: Api.SystemManage.UserListItem[] = ACCOUNT_TABLE_DATA.map((row) => ({
-    id: row.id,
-    avatar: row.avatar,
+  const studio = useStudioStore()
+  if (!studio.data) await studio.refresh()
+  const records: Api.SystemManage.UserListItem[] = (studio.data?.users || []).map((row, index) => ({
+    id: index + 1,
+    avatar: '',
     status: row.status,
     userName: row.username,
-    userGender: row.gender ? '男' : '女',
-    nickName: row.username,
-    userPhone: row.mobile,
-    userEmail: row.email,
-    userRoles: ['R_USER'],
-    createBy: '模板示例',
-    createTime: row.create_time,
-    updateBy: '模板示例',
-    updateTime: row.create_time
+    userGender: '',
+    nickName: row.name,
+    userPhone: '',
+    userEmail: '',
+    userRoles: [row.role],
+    createBy: '',
+    createTime: '',
+    updateBy: '',
+    updateTime: ''
   }))
-  const filtered = records.filter((row) =>
-    ['userName', 'userGender', 'userPhone', 'userEmail', 'status'].every((key) => {
-      const value = params[key as keyof typeof params]
-      return (
-        value == null ||
-        value === '' ||
-        String(row[key as keyof typeof row]).includes(String(value))
-      )
-    })
-  )
-  return paginate(filtered, params)
-}
-
-// 获取角色列表
-export async function fetchGetRoleList(params: Api.SystemManage.RoleSearchParams) {
-  const records: Api.SystemManage.RoleListItem[] = [
-    {
-      roleId: 1,
-      roleName: '超级管理员',
-      roleCode: 'R_SUPER',
-      description: '原模板最高权限示例',
-      enabled: true,
-      createTime: '2025-01-01'
-    },
-    {
-      roleId: 2,
-      roleName: '管理员',
-      roleCode: 'R_ADMIN',
-      description: '原模板管理权限示例',
-      enabled: true,
-      createTime: '2025-01-01'
-    },
-    {
-      roleId: 3,
-      roleName: '普通用户',
-      roleCode: 'R_USER',
-      description: '原模板普通权限示例',
-      enabled: true,
-      createTime: '2025-01-01'
-    }
-  ]
   return paginate(
     records.filter(
       (row) =>
-        (!params.roleName || row.roleName.includes(params.roleName)) &&
-        (!params.roleCode || row.roleCode.includes(params.roleCode)) &&
-        (!params.description || row.description.includes(params.description)) &&
-        (params.enabled == null || row.enabled === params.enabled)
+        (!params.userName || row.userName.includes(params.userName)) &&
+        (!params.status || row.status === params.status)
     ),
     params
   )
 }
 
-// 获取菜单列表
+/** 角色权限由服务器统一定义，列表同步真实角色和授权数量。 */
+export async function fetchGetRoleList(params: Api.SystemManage.RoleSearchParams) {
+  const studio = useStudioStore()
+  if (!studio.data) await studio.refresh()
+  const records: Api.SystemManage.RoleListItem[] = Object.entries(
+    studio.data?.roleDefaults || {}
+  ).map(([role, permissions], index) => ({
+    roleId: index + 1,
+    roleName: roleLabels[role as keyof typeof roleLabels],
+    roleCode: role,
+    description: `${permissions.length} 项默认业务权限`,
+    enabled: true,
+    createTime: ''
+  }))
+  return paginate(
+    records.filter(
+      (row) =>
+        (!params.roleName || row.roleName.includes(params.roleName)) &&
+        (!params.roleCode || row.roleCode.includes(params.roleCode))
+    ),
+    params
+  )
+}
+
+/** 与路由注册使用同一份源码配置；不再返回伪造可保存菜单。 */
 export async function fetchGetMenuList() {
   return structuredClone(routeModules)
 }

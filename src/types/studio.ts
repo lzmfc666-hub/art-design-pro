@@ -243,6 +243,7 @@ export interface Wallet {
 export interface StudioData {
   user: Staff
   permissions: string[]
+  roleDefaults: Record<Role, string[]>
   users: Staff[]
   customers: Customer[]
   platforms: Platform[]
