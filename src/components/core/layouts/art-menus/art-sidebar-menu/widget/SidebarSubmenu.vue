@@ -4,7 +4,7 @@
       <template #title>
         <div class="menu-icon flex-cc">
           <ArtSvgIcon
-            :icon="item.meta.icon"
+            :icon="menuIcon(item)"
             :color="theme?.iconColor"
             :style="{ color: theme.iconColor }"
           />
@@ -32,7 +32,7 @@
     >
       <div class="menu-icon flex-cc">
         <ArtSvgIcon
-          :icon="item.meta.icon"
+          :icon="menuIcon(item)"
           :color="theme?.iconColor"
           :style="{ color: theme.iconColor }"
         />
@@ -58,6 +58,9 @@
 
 <script setup lang="ts">
   import { computed } from 'vue'
+  import { useRoute } from 'vue-router'
+  import { useAppearance } from '@/hooks/business/useAppearance'
+  import { appearanceIconForRoute } from '@/utils/ui/appearance-icon'
   import type { AppRouteRecord } from '@/types/router'
   import { formatMenuTitle } from '@/utils/router'
   import { handleMenuJump } from '@/utils/navigation'
@@ -96,6 +99,12 @@
   const emit = defineEmits<Emits>()
 
   const settingStore = useSettingStore()
+  const route = useRoute()
+  const { icon } = useAppearance()
+  const menuIcon = (item: AppRouteRecord) => {
+    const key = appearanceIconForRoute(item.path)
+    return route.meta.business && key ? icon(key, item.meta.icon || '') : item.meta.icon
+  }
 
   const { menuOpen } = storeToRefs(settingStore)
 

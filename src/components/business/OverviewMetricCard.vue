@@ -492,7 +492,7 @@
     height: 34px;
   }
 
-  :global(.dark) .overview-metric-card {
+  :global(.dark .overview-metric-card) {
     border-color: rgb(117 159 225 / 16%);
     box-shadow: 0 4px 18px rgb(0 0 0 / 10%);
   }

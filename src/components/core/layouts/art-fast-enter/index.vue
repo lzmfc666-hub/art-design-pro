@@ -32,7 +32,7 @@
             <div class="app-icon size-12 flex-cc rounded-lg bg-g-200/80 dark:bg-g-300/30">
               <ArtSvgIcon
                 class="text-xl"
-                :icon="application.icon"
+                :icon="applicationIcon(application)"
                 :style="{ color: application.iconColor }"
               />
             </div>
@@ -65,12 +65,15 @@
   import { computed, ref } from 'vue'
   import { useRouter } from 'vue-router'
   import { useStudio } from '@/hooks/business/useStudio'
+  import { useAppearance } from '@/hooks/business/useAppearance'
+  import { appearanceIconForRoute } from '@/utils/ui/appearance-icon'
 
   defineOptions({ name: 'ArtFastEnter' })
 
   const router = useRouter()
   const popoverRef = ref()
   const { user, can } = useStudio()
+  const { icon } = useAppearance()
 
   interface StudioQuickLink {
     name: string
@@ -182,6 +185,12 @@
     )
   const enabledApplications = computed(() => applications.filter(isAccessible))
   const enabledQuickLinks = computed(() => quickLinks.filter(isAccessible))
+  const applicationIcon = (application: StudioApplication) => {
+    if (!router.hasRoute(application.routeName)) return application.icon
+    const path = router.resolve({ name: application.routeName }).path
+    const key = appearanceIconForRoute(path)
+    return key ? icon(key, application.icon) : application.icon
+  }
 
   const handleNavigate = (item: StudioQuickLink): void => {
     if (!isAccessible(item) || !router.hasRoute(item.routeName)) return

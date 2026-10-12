@@ -33,6 +33,17 @@ export const systemRoutes: AppRouteRecord = {
       }
     },
     {
+      path: 'appearance',
+      name: 'AppearanceSettings',
+      component: '/system/appearance',
+      meta: {
+        title: '界面外观',
+        icon: 'ri:palette-line',
+        studioPermissions: ['settings.manage'],
+        keepAlive: false
+      }
+    },
+    {
       path: 'menu',
       name: 'Menus',
       component: '/system/menu',

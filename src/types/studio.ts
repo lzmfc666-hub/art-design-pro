@@ -1,3 +1,5 @@
+import type { AppearanceConfig } from './appearance'
+
 export type Role =
   | 'owner'
   | 'manager'
@@ -243,6 +245,7 @@ export interface Wallet {
   available: number
 }
 export interface StudioData {
+  appearance?: AppearanceConfig
   user: Staff
   permissions: string[]
   roleDefaults: Record<Role, string[]>

@@ -23,6 +23,7 @@
     '/system/role': 'roles',
     '/system/menu': 'menus',
     '/system/business': 'templates',
+    '/system/appearance': 'appearance',
     '/system/logs': 'logs',
     '/system/user-center': 'profile'
   }
@@ -35,9 +36,11 @@
         '/finance/salary',
         '/dashboard/analysis'
       ].includes(route.path) &&
+      (route.path !== '/system/appearance' || can('settings.manage')) &&
       user.value?.role !== 'player'
   )
   function openExport() {
+    if (route.path === '/system/appearance' && !can('settings.manage')) return
     let module = modules[route.path] || 'profile'
     if (route.path === '/dashboard/console')
       module = can('profit.view') ? 'overview' : 'performance'

@@ -12,6 +12,8 @@ import { useUserStore } from './store/modules/user'
 import { useStudio } from './hooks/business/useStudio'
 import { toFrameworkUser } from './utils/auth/studio-user'
 import { resetRouterState } from './router/guards/beforeEach'
+import { useAppearanceStore } from './store/modules/appearance'
+import { setPageTitle } from './utils/router'
 
 document.addEventListener('touchstart', function () {}, { passive: false })
 
@@ -20,6 +22,7 @@ async function bootstrap() {
   initStore(app)
   const userStore = useUserStore()
   const studio = useStudio()
+  const appearance = useAppearanceStore()
 
   // 界面偏好可以恢复，登录状态必须由服务器会话确认。
   userStore.setLoginStatus(false)
@@ -48,6 +51,41 @@ async function bootstrap() {
       })
     }
   })
+  watch(
+    () => studio.data.value?.appearance,
+    (config) => {
+      if (config) appearance.acceptServer(config)
+      else if (!studio.user.value) appearance.clear()
+    },
+    { immediate: true }
+  )
+  watch(
+    () => studio.data.value?.permissions,
+    (permissions) => {
+      if (!permissions?.includes('settings.manage')) appearance.stopPreview()
+    }
+  )
+  const initialIcon = document.querySelector<HTMLLinkElement>('link[rel~="icon"]')
+  const defaultFavicon = initialIcon?.href || '/favicon.ico'
+  const defaultIconType = initialIcon?.type || 'image/x-icon'
+  watch(
+    () => appearance.effective.logo?.url,
+    (url) => {
+      let link = document.querySelector<HTMLLinkElement>('link[rel~="icon"]')
+      if (!link) {
+        link = document.createElement('link')
+        link.rel = 'icon'
+        document.head.appendChild(link)
+      }
+      link.href = url && /^\/api\/studio\/uploads\/[A-Za-z0-9_-]+$/.test(url) ? url : defaultFavicon
+      link.type = url ? appearance.effective.logo?.mime || 'image/png' : defaultIconType
+    },
+    { immediate: true }
+  )
+  watch(
+    () => appearance.effective.studioName,
+    () => setPageTitle(router.currentRoute.value)
+  )
   watch(
     () => studio.data.value?.permissions.join('|'),
     (permissions, previous) => {

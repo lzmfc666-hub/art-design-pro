@@ -168,3 +168,70 @@ test('批量覆盖业务模块，空配置保持待配置而非零，静态配�
     )
   )
 })
+
+test('界面外观导出只投影所选配置和站内图片地址，普通账号无法导出', (t) => {
+  const f = fixture(t)
+  const png =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
+  const image = (name) => f.service.upload('admin', { name, mime: 'image/png', data: png })
+  const logo = image('导出标志.png')
+  const page = image('页面背景.png')
+  const hero = image('欢迎横幅.png')
+  const previous = f.snapshot().appearance
+  f.service.mutate('admin', '/appearance', {
+    revision: previous.revision,
+    config: {
+      ...previous,
+      studioName: '外观导出工作室',
+      logo,
+      page: { mode: 'image', color: '#aabbcc', image: page, overlay: 65 },
+      hero: { mode: 'image', color: '#80b7ff', image: hero, overlay: 40, showDecoration: false },
+      icons: { dashboard: 'ri:gamepad-line', export: 'ri:download-2-line' }
+    }
+  })
+  const adminData = f.snapshot()
+  const module = getExportCatalog(adminData).modules.find((item) => item.id === 'appearance')
+  assert.ok(module)
+  assert.equal(module.rowCount, 1)
+  const keys = module.fields.map((field) => field.key)
+  const sheet = f.exportSheet(adminData, 'appearance', keys, {
+    dateRange: ['1900-01-01', '1900-01-01']
+  })
+  assert.equal(sheet.rowCount, 1)
+  assert.deepEqual(Object.keys(sheet.rows[0]), keys)
+  const row = sheet.rows[0]
+  assert.equal(row.studioName, '外观导出工作室')
+  assert.equal(row.logoName, logo.name)
+  assert.equal(row.logoUrl, `/api/studio/uploads/${logo.id}`)
+  assert.equal(row.pageImageName, page.name)
+  assert.equal(row.pageImageUrl, `/api/studio/uploads/${page.id}`)
+  assert.equal(row.heroImageName, hero.name)
+  assert.equal(row.heroImageUrl, `/api/studio/uploads/${hero.id}`)
+  assert.equal(row.pageMode, '图片')
+  assert.equal(row.pageColor, '#aabbcc')
+  assert.equal(row.pageOverlay, 65)
+  assert.equal(row.heroOverlay, 40)
+  assert.equal(row.showDecoration, '否')
+  assert.equal(row.revision, 1)
+  assert.match(row.updatedAt, /^\d{4}-\d{2}-\d{2} /)
+  assert.ok(row.icons.includes('工作台：ri:gamepad-line'))
+  assert.ok(row.icons.includes('财务管理：ri:wallet-3-line'))
+  assert.ok(!JSON.stringify(sheet).includes(png))
+  assert.ok(!JSON.stringify(sheet).includes('base64'))
+  assert.ok(!keys.includes('data') && !keys.includes('logo') && !keys.includes('updatedBy'))
+  assert.deepEqual(f.exportSheet(adminData, 'appearance', ['studioName', 'logoUrl']).rows, [
+    { studioName: '外观导出工作室', logoUrl: `/api/studio/uploads/${logo.id}` }
+  ])
+  assert.throws(
+    () => f.exportSheet(adminData, 'appearance', ['data']),
+    (error) => error instanceof ApiError && error.status === 400
+  )
+  const support = f.staff('support')
+  const supportData = f.snapshot(support.id)
+  assert.equal(supportData.appearance.studioName, '外观导出工作室')
+  assert.ok(!getExportCatalog(supportData).modules.some((item) => item.id === 'appearance'))
+  assert.throws(
+    () => f.exportSheet(supportData, 'appearance', ['studioName', 'logoUrl']),
+    (error) => error instanceof ApiError && error.status === 403
+  )
+})

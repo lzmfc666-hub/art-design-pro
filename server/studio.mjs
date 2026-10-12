@@ -3,6 +3,13 @@ import { mkdirSync, writeFileSync, chmodSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto'
 import { buildOverviewReport, normalizeOverviewRange, overviewMonths } from './overview-report.mjs'
+import {
+  defaultAppearance,
+  normalizeAppearance,
+  validateAppearanceRevision,
+  appearanceAttachments,
+  projectAppearanceAudit
+} from './appearance.mjs'
 
 export const ALL_PERMISSIONS = [
   'orders.view',
@@ -206,6 +213,7 @@ function emptyState() {
     commissionPaid: {},
     commissionAdjustments: [],
     rewardReviews: [],
+    appearance: defaultAppearance(),
     demo: false,
     schemaVersion: 2
   }
@@ -740,6 +748,8 @@ export function createStudioService({
           return can(user, 'users.manage') || log.entityId === user.id
             ? pick(value, ['sessionsRevoked'])
             : null
+        case 'appearance':
+          return can(user, 'settings.manage') ? projectAppearanceAudit(value) : null
         default:
           return null
       }
@@ -1101,6 +1111,7 @@ export function createStudioService({
       user: publicStaff(state, user),
       permissions: permissionsFor(user),
       roleDefaults: DEFAULT_PERMISSIONS,
+      appearance: state.appearance || defaultAppearance(),
       users: visibleUsers,
       customers:
         user.role === 'player' && !can(user, 'orders.view')
@@ -1487,6 +1498,69 @@ export function createStudioService({
     if (body == null || typeof body !== 'object' || Array.isArray(body))
       fail('请求内容必须为JSON对象')
     return transact(userId, (state, user) => {
+      if (path === '/appearance' || path === '/appearance/reset') {
+        requirePermission(user, 'settings.manage')
+        const before = state.appearance || defaultAppearance()
+        validateAppearanceRevision(body.revision, before.revision)
+        const resolveImage = (value) => {
+          const record = db
+            .prepare('SELECT id,owner_id,name,mime,size,data FROM uploads WHERE id=?')
+            .get(value.id)
+          if (!record) fail('图片附件不存在，请重新上传')
+          if (
+            record.owner_id !== user.id &&
+            !appearanceAttachments(before).some((image) => image.id === record.id)
+          )
+            fail('外观图片必须由当前账号上传，不能借用其他人的业务凭证', 403)
+          const image = metadata(record)
+          if (
+            (value.url != null && value.url !== image.url) ||
+            (value.mime != null && value.mime !== image.mime) ||
+            (value.size != null && value.size !== image.size) ||
+            (value.name != null && value.name !== image.name)
+          )
+            fail('图片附件信息无效，请使用原上传记录')
+          const data = Buffer.from(record.data)
+          const signature =
+            record.mime === 'image/png'
+              ? data.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+              : record.mime === 'image/jpeg'
+                ? data.length > 3 && data[0] === 255 && data[1] === 216 && data[2] === 255
+                : record.mime === 'image/webp' &&
+                  data.length >= 12 &&
+                  data.toString('ascii', 0, 4) === 'RIFF' &&
+                  data.toString('ascii', 8, 12) === 'WEBP'
+          if (
+            !signature ||
+            record.size <= 0 ||
+            record.size > 8 * 1024 * 1024 ||
+            record.size !== data.length
+          )
+            fail('外观图片仅支持不超过 8MB 的真实 PNG、JPG 或 WebP 图片')
+          return image
+        }
+        const config =
+          path === '/appearance/reset'
+            ? defaultAppearance()
+            : normalizeAppearance(body.config, resolveImage)
+        const result = {
+          ...config,
+          revision: before.revision + 1,
+          updatedAt: now(),
+          updatedBy: user.id
+        }
+        state.appearance = result
+        audit(
+          state,
+          user,
+          path === '/appearance/reset' ? '恢复默认界面外观' : '更新界面外观',
+          'appearance',
+          'appearance',
+          before,
+          result
+        )
+        return clone(result)
+      }
       if (path === '/profile') {
         const before = clone(user)
         user.name = text(body.name, '姓名', { required: true, max: 100 })
@@ -1969,6 +2043,12 @@ export function createStudioService({
     db,
     close: () => db.close(),
     bootstrap,
+    getAppearance(userId) {
+      const state = read(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      return clone(state.appearance || defaultAppearance())
+    },
     overview(userId, input = {}) {
       const dates = normalizeOverviewRange(input, shanghaiDate(now()))
       const snapshots = overviewMonths(dates).map((month) => bootstrap(userId, month))
@@ -2078,7 +2158,17 @@ export function createStudioService({
         user = find(state, 'users', userId, '账号'),
         row = db.prepare('SELECT * FROM uploads WHERE id=?').get(attachmentId)
       if (!row) fail('附件不存在', 404)
-      if (row.owner_id !== user.id && !linkedAttachment(state, user, attachmentId))
+      // 共享品牌图只允许读取；不能借此取得将他人图片用作业务付款凭证的权限。
+      const appearanceReadable =
+        user.status === 'active' &&
+        appearanceAttachments(state.appearance, { activeOnly: !can(user, 'settings.manage') }).some(
+          (image) => image.id === attachmentId
+        )
+      if (
+        row.owner_id !== user.id &&
+        !linkedAttachment(state, user, attachmentId) &&
+        !appearanceReadable
+      )
         fail('无权查看此附件', 403)
       return { ...metadata(row), data: Buffer.from(row.data) }
     }

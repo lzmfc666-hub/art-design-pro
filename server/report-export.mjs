@@ -1,4 +1,5 @@
 import { ApiError, permissionsFor, shanghaiDate } from './studio.mjs'
+import { APPEARANCE_ICON_DEFAULTS } from './appearance.mjs'
 
 const MAX_ROWS = 100000
 const roleNames = {
@@ -75,6 +76,7 @@ const menuRows = [
   ['人员管理', '/system/user', ['users.manage']],
   ['角色与权限', '/system/role', ['users.manage']],
   ['业务配置', '/system/business', ['templates.manage', 'settings.manage']],
+  ['界面外观', '/system/appearance', ['settings.manage']],
   ['菜单权限', '/system/menu', ['users.manage']],
   ['操作日志', '/system/logs', ['logs.view']],
   ['个人中心', '/system/user-center', []],
@@ -772,6 +774,86 @@ function modulesFor(snapshot) {
     ],
     snapshot.levels.map((row) => ({ ...row })),
     '当前打手等级配置，日期范围不适用。'
+  )
+  add(
+    'appearance',
+    '界面外观配置',
+    '客户与配置',
+    can('settings.manage'),
+    [
+      ['studioName', '工作室名称'],
+      ['logoName', 'Logo 图片名称'],
+      ['logoUrl', 'Logo 站内地址'],
+      ['pageMode', '页面背景类型'],
+      ['pageColor', '页面背景颜色'],
+      ['pageImageName', '页面背景图片名称'],
+      ['pageImageUrl', '页面背景图片站内地址'],
+      ['pageOverlay', '页面图片遮罩（%）', 'number'],
+      ['heroMode', '主页横幅背景类型'],
+      ['heroColor', '主页横幅背景颜色'],
+      ['heroImageName', '横幅背景图片名称'],
+      ['heroImageUrl', '横幅背景图片站内地址'],
+      ['heroOverlay', '横幅图片遮罩（%）', 'number'],
+      ['showDecoration', '展示原玻璃装饰图'],
+      ['icons', '菜单与快捷入口预设图标'],
+      ['revision', '配置版本', 'number'],
+      ['updatedAt', '保存时间']
+    ],
+    snapshot.appearance
+      ? [
+          (() => {
+            const config = snapshot.appearance
+            const modeLabels = { default: '原默认背景', color: '纯色', image: '图片' }
+            const imageUrl = (image) =>
+              typeof image?.url === 'string' &&
+              /^\/api\/studio\/uploads\/[A-Za-z0-9_-]+$/.test(image.url)
+                ? image.url
+                : ''
+            const iconLabels = {
+              dashboard: '工作台',
+              orders: '订单业务',
+              finance: '财务管理',
+              personnel: '排班考勤',
+              system: '系统管理',
+              reports: '数据报表',
+              createOrder: '创建与派单',
+              orderList: '订单管理',
+              customers: '客户档案',
+              users: '人员管理',
+              roles: '角色与权限',
+              business: '业务配置',
+              appearance: '界面外观',
+              logs: '操作日志',
+              attendance: '排班与到岗',
+              salary: '工资与提成',
+              export: '自选导出',
+              profile: '个人中心'
+            }
+            return {
+              studioName: config.studioName,
+              logoName: config.logo?.name || '',
+              logoUrl: imageUrl(config.logo),
+              pageMode: modeLabels[config.page.mode],
+              pageColor: config.page.color,
+              pageImageName: config.page.image?.name || '',
+              pageImageUrl: imageUrl(config.page.image),
+              pageOverlay: config.page.overlay,
+              heroMode: modeLabels[config.hero.mode],
+              heroColor: config.hero.color,
+              heroImageName: config.hero.image?.name || '',
+              heroImageUrl: imageUrl(config.hero.image),
+              heroOverlay: config.hero.overlay,
+              showDecoration: config.hero.showDecoration ? '是' : '否',
+              icons: Object.entries(APPEARANCE_ICON_DEFAULTS)
+                .map(([key, original]) => `${iconLabels[key]}：${config.icons[key] || original}`)
+                .join('；'),
+              revision: config.revision,
+              updatedAt: displayTime(config.updatedAt)
+            }
+          })()
+        ]
+      : [],
+    '当前已保存的共享外观配置；图片仅导出名称与站内地址，地址需登录并按附件权限访问，不包含图片文件内容。日期范围不适用。'
   )
   add(
     'logs',

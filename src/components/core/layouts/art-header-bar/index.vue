@@ -22,7 +22,9 @@
         <!-- 系统信息  -->
         <div class="flex-c c-p" @click="toHome" v-if="isTopMenu">
           <ArtLogo class="pl-4.5" />
-          <p v-if="width >= 1400" class="my-0 mx-2 ml-2 text-lg">{{ AppConfig.systemInfo.name }}</p>
+          <p v-if="width >= 1400" class="my-0 mx-2 ml-2 max-w-60 truncate text-lg">{{
+            appearance.studioName
+          }}</p>
         </div>
 
         <ArtLogo
@@ -187,7 +189,7 @@
   import { useSettingStore } from '@/store/modules/setting'
   import { useUserStore } from '@/store/modules/user'
   import { useMenuStore } from '@/store/modules/menu'
-  import AppConfig from '@/config'
+  import { useAppearance } from '@/hooks/business/useAppearance'
   import { languageOptions } from '@/locales'
   import { mittBus } from '@/utils/sys'
   import { themeAnimation } from '@/utils/ui/animation'
@@ -204,6 +206,7 @@
 
   const router = useRouter()
   const route = useRoute()
+  const { config: appearance } = useAppearance()
   const { locale } = useI18n()
   const { width } = useWindowSize()
 

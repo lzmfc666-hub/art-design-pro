@@ -1,7 +1,7 @@
 <template>
   <ElSubMenu v-if="hasChildren" :index="item.path || item.meta.title" class="!p-0">
     <template #title>
-      <ArtSvgIcon :icon="item.meta.icon" :color="theme?.iconColor" class="mr-1 text-lg" />
+      <ArtSvgIcon :icon="menuIcon(item)" :color="theme?.iconColor" class="mr-1 text-lg" />
       <span class="text-md">{{ formatMenuTitle(item.meta.title) }}</span>
       <div v-if="item.meta.showBadge" class="art-badge art-badge-horizontal" />
       <div v-if="item.meta.showTextBadge" class="art-text-badge">
@@ -27,7 +27,7 @@
     @click="goPage(item)"
   >
     <ArtSvgIcon
-      :icon="item.meta.icon"
+      :icon="menuIcon(item)"
       :color="theme?.iconColor"
       class="mr-1 text-lg"
       :style="{ color: theme.iconColor }"
@@ -46,6 +46,9 @@
 
 <script lang="ts" setup>
   import { computed, type PropType } from 'vue'
+  import { useRoute } from 'vue-router'
+  import { useAppearance } from '@/hooks/business/useAppearance'
+  import { appearanceIconForRoute } from '@/utils/ui/appearance-icon'
   import { AppRouteRecord } from '@/types/router'
   import { handleMenuJump } from '@/utils/navigation'
   import { formatMenuTitle } from '@/utils/router'
@@ -67,6 +70,12 @@
   })
 
   const emit = defineEmits(['close'])
+  const route = useRoute()
+  const { icon } = useAppearance()
+  const menuIcon = (item: AppRouteRecord) => {
+    const key = appearanceIconForRoute(item.path)
+    return route.meta.business && key ? icon(key, item.meta.icon || '') : item.meta.icon
+  }
 
   // 过滤后的子菜单项（不包含隐藏的）
   const filteredChildren = computed(() => {

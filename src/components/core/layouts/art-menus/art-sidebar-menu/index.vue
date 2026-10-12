@@ -37,7 +37,7 @@
               >
                 <ArtSvgIcon
                   class="menu-icon text-g-700 dark:text-g-800"
-                  :icon="menu.meta.icon"
+                  :icon="menuIcon(menu)"
                   :style="{
                     marginBottom: dualMenuShowText ? '5px' : '0'
                   }"
@@ -86,7 +86,7 @@
             opacity: !menuOpen ? 0 : 1
           }"
         >
-          <span class="system-name">{{ AppConfig.systemInfo.name }}</span>
+          <span class="system-name">{{ appearance.studioName }}</span>
           <span v-if="route.meta.business && menuOpen" class="studio-subtitle">工作室运营后台</span>
         </p>
       </div>
@@ -133,7 +133,9 @@
 </template>
 
 <script setup lang="ts">
-  import AppConfig from '@/config'
+  import { useAppearance } from '@/hooks/business/useAppearance'
+  import { appearanceIconForRoute } from '@/utils/ui/appearance-icon'
+  import type { AppRouteRecord } from '@/types/router'
   import { useSettingStore } from '@/store/modules/setting'
   import { MenuTypeEnum, MenuWidth } from '@/enums/appEnum'
   import { useMenuStore } from '@/store/modules/menu'
@@ -150,6 +152,11 @@
   const MENU_CLOSE_WIDTH = MenuWidth.CLOSE
 
   const route = useRoute()
+  const { config: appearance, icon } = useAppearance()
+  const menuIcon = (item: AppRouteRecord) => {
+    const key = appearanceIconForRoute(item.path)
+    return route.meta.business && key ? icon(key, item.meta.icon || '') : item.meta.icon
+  }
   const router = useRouter()
   const settingStore = useSettingStore()
 

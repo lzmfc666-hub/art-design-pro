@@ -153,6 +153,7 @@ export function createStudioServer(options = {}) {
       const user = service.session(token)
       if (!user) throw new ApiError('请先登录', 401)
       if (req.method === 'GET') {
+        if (path === '/appearance') return json(res, 200, service.getAppearance(user.id))
         if (path === '/bootstrap')
           return json(res, 200, service.bootstrap(user.id, url.searchParams.get('month')))
         if (path === '/overview')

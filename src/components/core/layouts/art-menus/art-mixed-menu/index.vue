@@ -27,7 +27,7 @@
             @click="handleMenuJump(item, true)"
           >
             <ArtSvgIcon
-              :icon="item.meta.icon"
+              :icon="menuIcon(item)"
               class="text-lg text-g-700 dark:text-g-800 mr-1"
               :class="item.isActive && '!text-theme'"
             />
@@ -56,6 +56,8 @@
   import { ref, computed, onMounted, nextTick } from 'vue'
   import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
   import { useThrottleFn } from '@vueuse/core'
+  import { useAppearance } from '@/hooks/business/useAppearance'
+  import { appearanceIconForRoute } from '@/utils/ui/appearance-icon'
   import { formatMenuTitle } from '@/utils/router'
   import { handleMenuJump } from '@/utils/navigation'
   import type { AppRouteRecord } from '@/types/router'
@@ -75,6 +77,11 @@
   type ScrollDirection = 'left' | 'right'
 
   const route = useRoute()
+  const { icon } = useAppearance()
+  const menuIcon = (item: AppRouteRecord) => {
+    const key = appearanceIconForRoute(item.path)
+    return route.meta.business && key ? icon(key, item.meta.icon || '') : item.meta.icon
+  }
 
   const props = withDefaults(defineProps<Props>(), {
     list: () => []

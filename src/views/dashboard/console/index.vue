@@ -1,7 +1,17 @@
 <template>
   <div class="overview-page">
-    <section class="overview-hero">
-      <img :src="glassArt" class="hero-art" alt="" aria-hidden="true" />
+    <section
+      class="overview-hero"
+      :class="{ 'is-custom-hero': appearance.hero.mode !== 'default' }"
+      :style="heroStyle"
+    >
+      <img
+        v-if="appearance.hero.showDecoration"
+        :src="glassArt"
+        class="hero-art"
+        alt=""
+        aria-hidden="true"
+      />
       <div class="hero-topline">
         <div class="hero-greeting"
           ><h2>{{ greeting }}，{{ roleName }} <span class="wave">👋</span></h2
@@ -144,6 +154,7 @@
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
+  import { useAppearance } from '@/hooks/business/useAppearance'
   import { useStudio, roleLabels } from '@/hooks/business/useStudio'
   import { useOverviewReport, dateInShanghai, shiftDate } from '@/hooks/business/useOverviewReport'
   import glassArt from '@imgs/dashboard/overview-glass.svg'
@@ -170,6 +181,32 @@
     }
   })
   const router = useRouter()
+  const { config: appearance, icon: appearanceIcon } = useAppearance()
+  const heroStyle = computed(() => {
+    const hero = appearance.value.hero
+    if (hero.mode === 'default') return {}
+    if (hero.mode === 'color') {
+      const red = parseInt(hero.color.slice(1, 3), 16),
+        green = parseInt(hero.color.slice(3, 5), 16),
+        blue = parseInt(hero.color.slice(5, 7), 16)
+      const light = red * 0.299 + green * 0.587 + blue * 0.114 > 175
+      return {
+        background: hero.color,
+        '--hero-text': light ? '#183654' : '#ffffff',
+        '--hero-muted': light ? '#355978' : '#e7f0ff'
+      }
+    }
+    const url = hero.image?.url
+    if (!url || !/^\/api\/studio\/uploads\/[A-Za-z0-9_-]+$/.test(url)) return {}
+    const shade = `rgba(8,31,69,${Math.max(0, Math.min(70, hero.overlay)) / 100})`
+    return {
+      backgroundImage: `linear-gradient(${shade},${shade}),url("${url}")`,
+      backgroundSize: 'cover',
+      backgroundPosition: 'center',
+      '--hero-text': '#ffffff',
+      '--hero-muted': '#e7f0ff'
+    }
+  })
   const now = ref(new Date())
   let clockTimer: ReturnType<typeof setInterval> | undefined
   let alive = true
@@ -206,7 +243,7 @@
       {
         label: '快速下单',
         description: '选择项目，创建订单',
-        icon: 'ri:add-box-line',
+        icon: appearanceIcon('createOrder', 'ri:add-box-line'),
         path: '/orders/create',
         color: 'blue',
         show: can('orders.create')
@@ -214,7 +251,7 @@
       {
         label: '派单管理',
         description: '查看订单与接单情况',
-        icon: 'ri:user-settings-line',
+        icon: appearanceIcon('orderList', 'ri:user-settings-line'),
         path: '/orders/list',
         color: 'purple',
         show: can('orders.view')
@@ -222,7 +259,7 @@
       {
         label: '用户管理',
         description: '管理员工与打手账号',
-        icon: 'ri:group-line',
+        icon: appearanceIcon('users', 'ri:group-line'),
         path: '/system/user',
         color: 'green',
         show: can('users.manage')
@@ -230,7 +267,7 @@
       {
         label: '财务结算',
         description: '查看经营收支与结算',
-        icon: 'ri:money-cny-box-line',
+        icon: appearanceIcon('finance', 'ri:money-cny-box-line'),
         path: '/finance/settlement',
         color: 'orange',
         show: ['finance.review', 'finance.refunds', 'finance.withdrawals', 'finance.expenses'].some(
@@ -240,7 +277,7 @@
       {
         label: '工资核算',
         description: '查看工资、提成与发放',
-        icon: 'ri:wallet-3-line',
+        icon: appearanceIcon('salary', 'ri:wallet-3-line'),
         path: '/finance/salary',
         color: 'orange',
         show: ['salary.view', 'salary.all', 'salary.manage'].some(can)
@@ -248,7 +285,7 @@
       {
         label: '排班考勤',
         description: '登记班次与实际工时',
-        icon: 'ri:calendar-check-line',
+        icon: appearanceIcon('attendance', 'ri:calendar-check-line'),
         path: '/personnel/attendance',
         color: 'green',
         show: can('attendance.manage')
@@ -256,7 +293,7 @@
       {
         label: '数据导出',
         description: '自选模块与报表字段',
-        icon: 'ri:file-excel-2-line',
+        icon: appearanceIcon('export', 'ri:file-excel-2-line'),
         path: '/reports/export',
         color: 'blue',
         show: true
@@ -340,6 +377,22 @@
 </script>
 
 <style lang="scss" scoped>
+  .overview-hero.is-custom-hero {
+    color: var(--hero-text);
+  }
+
+  .overview-hero.is-custom-hero::before {
+    display: none;
+  }
+
+  .is-custom-hero .hero-greeting p {
+    color: var(--hero-muted);
+  }
+
+  .is-custom-hero .hero-status {
+    color: var(--hero-muted);
+  }
+
   .overview-hero {
     position: relative;
     min-height: 276px;

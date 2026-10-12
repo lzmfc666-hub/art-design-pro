@@ -7,6 +7,7 @@
  */
 import { RouteLocationNormalized, RouteRecordRaw } from 'vue-router'
 import AppConfig from '@/config'
+import { useAppearanceStore } from '@/store/modules/appearance'
 import NProgress from 'nprogress'
 import 'nprogress/nprogress.css'
 import i18n, { $t } from '@/locales'
@@ -34,7 +35,7 @@ export const setPageTitle = (to: RouteLocationNormalized): void => {
   const { title } = to.meta
   if (title) {
     setTimeout(() => {
-      document.title = `${formatMenuTitle(String(title))} - ${AppConfig.systemInfo.name}`
+      document.title = `${formatMenuTitle(String(title))} - ${useAppearanceStore().effective.studioName || AppConfig.systemInfo.name}`
     }, 150)
   }
 }
