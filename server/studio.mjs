@@ -805,7 +805,7 @@ export function createStudioService({
     return { days, channels, performance, payroll, month, monthlyBase, monthlyProfit }
   }
 
-  function bootstrap(userId, month) {
+  function bootstrap(userId, month, { exportMode = false } = {}) {
     const state = read(),
       user = find(state, 'users', userId, '账号')
     if (user.status !== 'active') fail('账号已停用', 403)
@@ -870,7 +870,7 @@ export function createStudioService({
         : [],
       logs: can(user, 'logs.view')
         ? state.logs
-            .slice(-1000)
+            .slice(exportMode ? 0 : -1000)
             .reverse()
             .map((log) => {
               if (allSalary && viewProfit) return log
@@ -886,7 +886,7 @@ export function createStudioService({
             .filter(Boolean)
         : state.logs
             .filter((log) => log.entity === 'order' && orderIds.has(log.entityId))
-            .slice(-500)
+            .slice(exportMode ? 0 : -500)
             .reverse()
             .map((log) => ({
               ...log,

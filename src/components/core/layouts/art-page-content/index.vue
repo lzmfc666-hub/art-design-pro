@@ -4,6 +4,7 @@
     <div id="app-content-header">
       <!-- 节日滚动 -->
       <ArtFestivalTextScroll v-if="!isFullPage" />
+      <BusinessExportEntry v-if="!isFullPage" />
       <ElAlert
         v-if="!isFullPage && route.meta.business && businessData?.demo"
         title="当前使用开发数据"
@@ -82,6 +83,7 @@
   import { useSettingStore } from '@/store/modules/setting'
   import { useWorktabStore } from '@/store/modules/worktab'
   import { useStudio } from '@/hooks/business/useStudio'
+  import BusinessExportEntry from '@/components/business/BusinessExportEntry.vue'
 
   defineOptions({ name: 'ArtPageContent' })
 

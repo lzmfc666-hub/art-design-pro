@@ -12,6 +12,7 @@ import { helpRoutes } from './help'
 import { ordersRoutes } from './orders'
 import { financeRoutes } from './finance'
 import { personnelRoutes } from './personnel'
+import { reportsRoutes } from './reports'
 
 /**
  * 导出所有模块化路由
@@ -22,6 +23,7 @@ export const routeModules: AppRouteRecord[] = [
   financeRoutes,
   personnelRoutes,
   systemRoutes,
+  reportsRoutes,
   templateRoutes,
   widgetsRoutes,
   examplesRoutes,

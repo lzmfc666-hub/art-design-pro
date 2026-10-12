@@ -3,6 +3,7 @@ import { existsSync, statSync, createReadStream } from 'node:fs'
 import { resolve, extname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createStudioService, ApiError } from './studio.mjs'
+import { getExportCatalog, buildExportSheets } from './report-export.mjs'
 
 const PREFIX = '/api/studio'
 const COOKIE_NAME = 'studio_session'
@@ -154,6 +155,14 @@ export function createStudioServer(options = {}) {
       if (req.method === 'GET') {
         if (path === '/bootstrap')
           return json(res, 200, service.bootstrap(user.id, url.searchParams.get('month')))
+        if (path === '/exports/catalog')
+          return json(
+            res,
+            200,
+            getExportCatalog(
+              service.bootstrap(user.id, url.searchParams.get('month'), { exportMode: true })
+            )
+          )
         if (path === '/player/orders') return json(res, 200, service.playerOrders(user.id))
         if (path === '/player/wallet') return json(res, 200, service.playerWallet(user.id))
         const uploadMatch = path.match(/^\/uploads\/([^/]+)$/)
@@ -170,6 +179,18 @@ export function createStudioServer(options = {}) {
       }
       if (req.method === 'POST') {
         const body = await parseBody(req)
+        if (path === '/exports/preview' || path === '/exports/download') {
+          const snapshot = service.bootstrap(user.id, body.month, { exportMode: true })
+          return json(
+            res,
+            200,
+            buildExportSheets(
+              snapshot,
+              body,
+              path === '/exports/preview' ? { previewLimit: 20 } : {}
+            )
+          )
+        }
         return json(
           res,
           200,

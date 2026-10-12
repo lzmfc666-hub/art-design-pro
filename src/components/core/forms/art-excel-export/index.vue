@@ -4,7 +4,7 @@
     :type="type"
     :size="size"
     :loading="isExporting"
-    :disabled="disabled || !hasData"
+    :disabled="disabled || isExporting || !hasData"
     v-ripple
     @click="handleExport"
   >
@@ -21,76 +21,63 @@
 <script setup lang="ts">
   import * as XLSX from 'xlsx'
   import FileSaver from 'file-saver'
-  import { ref, computed, nextTick } from 'vue'
+  import { ref, computed, nextTick, readonly } from 'vue'
   import { Loading } from '@element-plus/icons-vue'
   import type { ButtonType } from 'element-plus'
-  import { useThrottleFn } from '@vueuse/core'
+  import {
+    buildReportWorkbook,
+    ReportWorkbookError,
+    type ReportSheet,
+    type ReportValue
+  } from '@/utils/excel/report-workbook'
 
   defineOptions({ name: 'ArtExcelExport' })
 
-  /** 导出数据类型 */
+  /** 保留原单表导出数据格式。 */
   type ExportValue = string | number | boolean | null | undefined | Date
 
   interface ExportData {
     [key: string]: ExportValue
   }
 
-  /** 列配置 */
   interface ColumnConfig {
-    /** 列标题 */
     title: string
-    /** 列宽度 */
     width?: number
-    /** 数据格式化函数 */
     formatter?: (value: ExportValue, row: ExportData, index: number) => string
   }
 
-  /** 导出配置选项 */
   interface ExportOptions {
-    /** 数据源 */
-    data: ExportData[]
-    /** 文件名（不含扩展名） */
+    /** 原单表数据源，与 headers、columns 一起继续受支持。 */
+    data?: ExportData[]
+    /** 每张工作表仅导出 fields 中明确选择的字段。 */
+    sheets?: ReportSheet[]
+    /** 点击时获取最新且已按权限过滤的数据；失败时终止下载。 */
+    prepareExport?: () => Promise<ReportSheet[]>
     filename?: string
-    /** 工作表名称 */
     sheetName?: string
-    /** 按钮类型 */
     type?: ButtonType
-    /** 按钮尺寸 */
     size?: 'large' | 'default' | 'small'
-    /** 是否禁用 */
     disabled?: boolean
-    /** 按钮文本 */
     buttonText?: string
-    /** 加载中文本 */
     loadingText?: string
-    /** 是否自动添加序号列 */
     autoIndex?: boolean
-    /** 序号列标题 */
     indexColumnTitle?: string
-    /** 列配置映射 */
     columns?: Record<string, ColumnConfig>
-    /** 表头映射（简化版本，向后兼容） */
     headers?: Record<string, string>
-    /** 最大导出行数 */
+    /** 所有工作表合计的最大数据行数。 */
     maxRows?: number
-    /** 是否显示成功消息 */
     showSuccessMessage?: boolean
-    /** 是否显示错误消息 */
     showErrorMessage?: boolean
-    /** 工作簿配置 */
     workbookOptions?: {
-      /** 创建者 */
       creator?: string
-      /** 最后修改者 */
       lastModifiedBy?: string
-      /** 创建时间 */
       created?: Date
-      /** 修改时间 */
       modified?: Date
     }
   }
 
   const props = withDefaults(defineProps<ExportOptions>(), {
+    data: () => [],
     filename: () => `export_${new Date().toISOString().slice(0, 10)}`,
     sheetName: 'Sheet1',
     type: 'primary',
@@ -115,256 +102,163 @@
     'export-progress': [progress: number]
   }>()
 
-  /** 导出错误类型 */
-  class ExportError extends Error {
-    constructor(
-      message: string,
-      public code: string,
-      public details?: any
-    ) {
-      super(message)
+  class ExportError extends ReportWorkbookError {
+    constructor(message: string, code: string, details?: unknown) {
+      super(message, code, details)
       this.name = 'ExportError'
     }
   }
 
   const isExporting = ref(false)
 
-  /** 是否有数据可导出 */
-  const hasData = computed(() => Array.isArray(props.data) && props.data.length > 0)
+  /** 预处理导出允许初始数据为空；显式工作表允许仅导出表头。 */
+  const hasData = computed(
+    () =>
+      Boolean(props.prepareExport) ||
+      (props.sheets !== undefined
+        ? Array.isArray(props.sheets) && props.sheets.length > 0
+        : Array.isArray(props.data) && props.data.length > 0)
+  )
 
-  /** 验证导出数据 */
-  const validateData = (data: ExportData[]): void => {
-    if (!Array.isArray(data)) {
-      throw new ExportError('数据必须是数组格式', 'INVALID_DATA_TYPE')
-    }
-
-    if (data.length === 0) {
-      throw new ExportError('没有可导出的数据', 'NO_DATA')
-    }
-
-    if (data.length > props.maxRows) {
-      throw new ExportError(`数据行数超过限制（${props.maxRows}行）`, 'EXCEED_MAX_ROWS', {
-        currentRows: data.length,
-        maxRows: props.maxRows
-      })
-    }
-  }
-
-  /** 格式化单元格值 */
-  const formatCellValue = (
+  const formatLegacyValue = (
     value: ExportValue,
     key: string,
     row: ExportData,
     index: number
-  ): string => {
-    // 使用列配置的格式化函数
+  ): ReportValue => {
     const column = props.columns[key]
-    if (column?.formatter) {
-      return column.formatter(value, row, index)
-    }
-
-    // 处理特殊值
-    if (value === null || value === undefined) {
-      return ''
-    }
-
-    if (value instanceof Date) {
-      return value.toLocaleDateString('zh-CN')
-    }
-
-    if (typeof value === 'boolean') {
-      return value ? '是' : '否'
-    }
-
-    return String(value)
+    if (column?.formatter) return column.formatter(value, row, index)
+    if (value === null || value === undefined) return ''
+    if (value instanceof Date) return value.toLocaleDateString('zh-CN')
+    if (typeof value === 'boolean') return value ? '是' : '否'
+    return value
   }
 
-  /** 处理数据 */
-  const processData = (data: ExportData[]): Record<string, string>[] => {
-    const processedData = data.map((item, index) => {
-      const processedItem: Record<string, string> = {}
+  /** 将原 API 转成单张报表，同时保留标题、格式化函数和数值类型。 */
+  const createLegacySheets = (data: ExportData[]): ReportSheet[] => {
+    if (!Array.isArray(data)) {
+      throw new ExportError('数据必须是数组格式', 'INVALID_DATA_TYPE')
+    }
+    if (data.length === 0) throw new ExportError('没有可导出的数据', 'NO_DATA')
+    if (data.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) {
+      throw new ExportError('数据行必须是对象格式', 'INVALID_ROW')
+    }
 
-      // 添加序号列
-      if (props.autoIndex) {
-        processedItem[props.indexColumnTitle] = String(index + 1)
+    const keys = [...new Set(data.flatMap((row) => Object.keys(row)))]
+    const fields: ReportSheet['fields'] = keys.map((key) => {
+      const values = data.map((row) => row[key]).filter((value) => value != null)
+      return {
+        key,
+        label: props.columns[key]?.title || props.headers[key] || key,
+        type:
+          !props.columns[key]?.formatter &&
+          values.length > 0 &&
+          values.every((value) => typeof value === 'number')
+            ? 'number'
+            : 'text'
       }
-
-      // 处理数据列
-      Object.entries(item).forEach(([key, value]) => {
-        // 获取列标题
-        let columnTitle = key
-        if (props.columns[key]?.title) {
-          columnTitle = props.columns[key].title
-        } else if (props.headers[key]) {
-          columnTitle = props.headers[key]
-        }
-
-        // 格式化值
-        processedItem[columnTitle] = formatCellValue(value, key, item, index)
-      })
-
-      return processedItem
     })
 
-    return processedData
+    return [
+      {
+        name: props.sheetName,
+        fields,
+        rows: data.map((row, index) =>
+          Object.fromEntries(keys.map((key) => [key, formatLegacyValue(row[key], key, row, index)]))
+        )
+      }
+    ]
   }
 
-  /** 计算列宽度 */
-  const calculateColumnWidths = (data: Record<string, string>[]): XLSX.ColInfo[] => {
-    if (data.length === 0) return []
-
-    const sampleSize = Math.min(data.length, 100) // 只取前100行计算列宽
-    const columns = Object.keys(data[0])
-
-    return columns.map((column) => {
-      // 使用配置的列宽度
-      const configWidth = Object.values(props.columns).find((col) => col.title === column)?.width
-
-      if (configWidth) {
-        return { wch: configWidth }
-      }
-
-      // 自动计算列宽度
-      const maxLength = Math.max(
-        column.length, // 标题长度
-        ...data.slice(0, sampleSize).map((row) => String(row[column] || '').length)
-      )
-
-      // 限制最小和最大宽度
-      const width = Math.min(Math.max(maxLength + 2, 8), 50)
-      return { wch: width }
-    })
-  }
-
-  /** 导出到 Excel */
-  const exportToExcel = async (
-    data: ExportData[],
-    filename: string,
-    sheetName: string
-  ): Promise<void> => {
-    try {
-      emit('export-progress', 10)
-
-      // 处理数据
-      const processedData = processData(data)
-      emit('export-progress', 30)
-
-      // 创建工作簿
-      const workbook = XLSX.utils.book_new()
-
-      // 设置工作簿属性
-      if (props.workbookOptions) {
-        workbook.Props = {
-          Title: filename,
-          Subject: '数据导出',
-          Author: props.workbookOptions.creator || 'Art Design Pro',
-          Manager: props.workbookOptions.lastModifiedBy || '',
-          Company: '系统导出',
-          Category: '数据',
-          Keywords: 'excel,export,data',
-          Comments: '由系统自动生成',
-          CreatedDate: props.workbookOptions.created || new Date(),
-          ModifiedDate: props.workbookOptions.modified || new Date()
-        }
-      }
-
-      emit('export-progress', 50)
-
-      // 创建工作表
-      const worksheet = XLSX.utils.json_to_sheet(processedData)
-
-      // 设置列宽度
-      worksheet['!cols'] = calculateColumnWidths(processedData)
-
-      emit('export-progress', 70)
-
-      // 添加工作表到工作簿
-      XLSX.utils.book_append_sheet(workbook, worksheet, sheetName)
-
-      emit('export-progress', 85)
-
-      // 生成 Excel 文件
-      const excelBuffer = XLSX.write(workbook, {
-        bookType: 'xlsx',
-        type: 'array',
-        compression: true
-      })
-
-      // 创建 Blob 并下载
-      const blob = new Blob([excelBuffer], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      })
-
-      emit('export-progress', 95)
-
-      // 使用时间戳确保文件名唯一
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const finalFilename = `${filename}_${timestamp}.xlsx`
-
-      FileSaver.saveAs(blob, finalFilename)
-
-      emit('export-progress', 100)
-
-      // 等待下载开始
-      await nextTick()
-
-      return Promise.resolve()
-    } catch (error) {
-      throw new ExportError(`Excel 导出失败: ${(error as Error).message}`, 'EXPORT_FAILED', error)
+  const downloadWorkbook = async (workbook: XLSX.WorkBook): Promise<void> => {
+    workbook.Props = {
+      Title: props.filename,
+      Subject: '数据导出',
+      Author: props.workbookOptions.creator || 'Art Design Pro',
+      Manager: props.workbookOptions.lastModifiedBy || '',
+      Company: '系统导出',
+      Category: '数据',
+      Keywords: 'excel,export,data',
+      Comments: '由系统自动生成',
+      CreatedDate: props.workbookOptions.created || new Date(),
+      ModifiedDate: props.workbookOptions.modified || new Date()
     }
+
+    emit('export-progress', 70)
+    const excelBuffer = XLSX.write(workbook, {
+      bookType: 'xlsx',
+      type: 'array',
+      compression: true
+    })
+    const blob = new Blob([excelBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    })
+    emit('export-progress', 95)
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    FileSaver.saveAs(blob, `${props.filename}_${timestamp}.xlsx`)
+    emit('export-progress', 100)
+    await nextTick()
   }
 
-  /** 处理导出 */
-  const handleExport = useThrottleFn(async () => {
-    if (isExporting.value) return
-
+  const handleExport = async (): Promise<void> => {
+    if (isExporting.value || props.disabled) return
     isExporting.value = true
 
     try {
-      // 验证数据
-      validateData(props.data)
-
-      // 触发导出前事件
+      // 先通知父组件，再读取新鲜数据；预处理失败时不会使用旧数据下载。
       emit('before-export', props.data)
+      emit('export-progress', 10)
+      const sheets = props.prepareExport
+        ? await props.prepareExport()
+        : (props.sheets ?? createLegacySheets(props.data))
+      emit('export-progress', 30)
 
-      // 执行导出
-      await exportToExcel(props.data, props.filename, props.sheetName)
+      const workbook = buildReportWorkbook(sheets, {
+        maxRows: props.maxRows,
+        autoIndex: props.autoIndex,
+        indexColumnTitle: props.indexColumnTitle
+      })
 
-      // 触发成功事件
-      emit('export-success', props.filename, props.data.length)
-
-      // 显示成功消息
-      if (props.showSuccessMessage) {
-        ElMessage.success({
-          message: `成功导出 ${props.data.length} 条数据`,
-          duration: 3000
+      if (!props.prepareExport && props.sheets === undefined) {
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]]
+        sheets[0].fields.forEach((field, index) => {
+          const width = props.columns[field.key]?.width
+          if (width && worksheet['!cols']) {
+            worksheet['!cols'][index + (props.autoIndex ? 1 : 0)] = { wch: width }
+          }
         })
+      }
+
+      emit('export-progress', 50)
+      const rowCount = sheets.reduce((count, sheet) => count + sheet.rows.length, 0)
+      await downloadWorkbook(workbook)
+      emit('export-success', props.filename, rowCount)
+
+      if (props.showSuccessMessage) {
+        ElMessage.success({ message: `成功导出 ${rowCount} 条数据`, duration: 3000 })
       }
     } catch (error) {
       const exportError =
-        error instanceof ExportError
-          ? error
-          : new ExportError(`导出失败: ${(error as Error).message}`, 'UNKNOWN_ERROR', error)
-
-      // 触发错误事件
+        error instanceof ReportWorkbookError
+          ? new ExportError(error.message, error.code, error.details)
+          : new ExportError(
+              `导出失败: ${error instanceof Error ? error.message : String(error)}`,
+              'EXPORT_FAILED',
+              error
+            )
       emit('export-error', exportError)
 
-      // 显示错误消息
       if (props.showErrorMessage) {
-        ElMessage.error({
-          message: exportError.message,
-          duration: 5000
-        })
+        ElMessage.error({ message: exportError.message, duration: 5000 })
       }
-
       console.error('Excel 导出错误:', exportError)
     } finally {
       isExporting.value = false
       emit('export-progress', 0)
     }
-  }, 1000)
+  }
 
-  // 暴露方法供父组件调用
   defineExpose({
     exportData: handleExport,
     isExporting: readonly(isExporting),

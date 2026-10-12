@@ -6,6 +6,7 @@
 
 - GET `/session` -> `{user: Staff|null}`；POST `/login` `{username,password}` -> `{user}`；POST `/logout`。
 - GET `/bootstrap?month=2026-10` -> StudioData，包含服务器 `roleDefaults`。后端必须按权限过滤工资、利润、日志、用户数据。
+- GET `/exports/catalog?month=2026-10` -> `{month,modules}`，返回当前权限可用的导出模块、字段与未筛选记录数。POST `/exports/preview`、`/exports/download` 请求 `{month,modules:[{id,fields:string[]}],filters:{dateRange?,keyword?,personId?,platformId?,status?,orderDateKey?}}`；响应 `{month,generatedAt,sheets:[{id,name,fields,rows,rowCount}]}`。预览每表前 20 行，下载全量所选记录，总量上限 100,000；服务端逐次读取权限、校验模块与字段、过滤后再投影。导出日志不受页面列表上限限制。
 - POST `/profile` `{name}` 修改本人称呼；POST `/profile/password` `{currentPassword,newPassword}` 验证旧密码后修改并撤销全部会话。工作室账号由管理员创建，忘记密码由管理员重置。
 - POST `/uploads` `{name,mime,data: base64}` -> Attachment，GET `/uploads/:id` 需认证与关联记录可见性校验。
 - POST `/orders` 创建。请求含 templateId customerId platformId shopId externalOrderNo channel roomCode gameId map amount reward remark dispatchMode assignedTo receivedAmount paidAt receipt。校验普通单先收款、非闲鱼付款凭证、闲鱼店铺及平台单号、房间/游戏ID至少一项；仅大厅可落地付（body.payOnArrival=true）。
