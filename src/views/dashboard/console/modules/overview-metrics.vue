@@ -222,7 +222,7 @@
         chart: 'bar',
         href:
           permission('orders.create') || permission('users.manage')
-            ? '/orders/customers'
+            ? '/personnel/customers'
             : ordersHref,
         details: [
           { label: '付费客户', value: countText(m.payingCustomers) },
@@ -260,12 +260,14 @@
         points: seriesPoints('profit'),
         href: '/dashboard/analysis',
         details: [
+          { label: '其他收入', value: amountText(m.otherIncome) },
           { label: '打手成本', value: amountText(m.reward) },
           { label: '预计成本', value: amountText(m.estimatedReward) },
           { label: '月度底薪', value: fullMonths ? amountText(m.monthlyBase) : '本区间未扣' }
         ],
         notes: [
-          '区间经营利润按原付款日归属，扣除打手成本、客服 / 运营提成及费用；普通日期区间不扣员工底薪。',
+          '区间经营利润为订单净收入加其他收入，再扣打手成本、客服 / 运营提成及费用；订单归属原付款日，其他收入按实际登记日统计。普通日期区间不扣员工底薪。',
+          '其他收入仅含非订单客户扣款及离店 / 跑路押金没收。充值、押金缴纳与退还不计收入，订单余额支付只计一次订单收入。',
           '仅月初至月末覆盖完整月份时显示扣底薪后的利润。缺少工资配置或取消补偿未确认时，利润不按零处理。',
           '每日迷你图为未扣底薪的日利润；底部打手成本已包含未验收预计报酬，预计成本是其中一部分，不能重复扣除。',
           '提现发放不会再次扣减经营利润。'
@@ -285,7 +287,7 @@
         color: 'blue',
         trend: m.newStaff === null || m.newPlayers === null ? null : undefined,
         href: permission('users.manage')
-          ? '/system/user'
+          ? '/personnel/employees'
           : permission('attendance.manage')
             ? '/personnel/attendance'
             : permission('salary.all')

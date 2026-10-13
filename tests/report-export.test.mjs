@@ -173,7 +173,7 @@ test('批量覆盖业务模块，空配置保持待配置而非零，静态配�
   const f = fixture(t)
   const data = f.snapshot()
   const catalog = getExportCatalog(data)
-  assert.equal(catalog.modules.length, 29)
+  assert.equal(catalog.modules.length, 34)
   const result = buildExportSheets(data, {
     modules: catalog.modules.map((module) => ({
       id: module.id,

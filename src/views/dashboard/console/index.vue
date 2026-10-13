@@ -257,10 +257,10 @@
         show: can('orders.view')
       },
       {
-        label: '用户管理',
-        description: '管理员工与打手账号',
+        label: '员工管理',
+        description: '管理员工账号与授权',
         icon: appearanceIcon('users', 'ri:group-line'),
-        path: '/system/user',
+        path: '/personnel/employees',
         color: 'green',
         show: can('users.manage')
       },

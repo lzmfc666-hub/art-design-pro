@@ -4,10 +4,11 @@
   import { useStudio, money, formatTime, statusLabels } from '@/hooks/business/useStudio'
   import type { Attachment, AuditLog, OrderStatus } from '@/types/studio'
   import { rulesForPlatform } from '@/utils/business/platform-rules'
+  import { studioRequest } from '@/api/studio'
 
   const props = defineProps<{ orderId: string }>()
   const emit = defineEmits<{ busy: [value: boolean] }>()
-  const { data, user, can, mutate, upload } = useStudio()
+  const { data, user, can, mutate, upload, clearSession } = useStudio()
   const order = computed(() => data.value?.orders.find((item) => item.id === props.orderId))
   const activeTab = ref('information')
   const dialog = ref<
@@ -36,6 +37,7 @@
     reason: '',
     paidAt: '',
     receipt: null as Attachment | null,
+    paymentMethod: 'cash' as 'cash' | 'balance',
     dispatchMode: 'pool' as 'pool' | 'direct',
     assignedTo: '',
     status: 'pending' as OrderStatus,
@@ -45,6 +47,46 @@
     gameId: '',
     map: '',
     remark: ''
+  })
+  const balance = ref<number | null>(null)
+  const balanceLoading = ref(false)
+  const balanceError = ref('')
+  let balanceVersion = 0
+  let actionRequestId = crypto.randomUUID()
+  watch(
+    () => JSON.stringify(fields),
+    () => {
+      actionRequestId = crypto.randomUUID()
+    },
+    { flush: 'sync' }
+  )
+  async function loadBalance() {
+    const version = ++balanceVersion
+    balance.value = null
+    balanceError.value = ''
+    if (!order.value || dialog.value !== 'payment' || fields.paymentMethod !== 'balance') {
+      balanceLoading.value = false
+      return
+    }
+    balanceLoading.value = true
+    try {
+      const result = await studioRequest<{ customerId: string; balance: number }>(
+        `customers/${encodeURIComponent(order.value.customerId)}/balance`
+      )
+      if (version === balanceVersion) balance.value = result.balance
+    } catch (cause) {
+      if (version !== balanceVersion) return
+      if ((cause as { status?: number }).status === 401) clearSession()
+      balanceError.value = cause instanceof Error ? cause.message : '储值余额加载失败'
+    } finally {
+      if (version === balanceVersion) balanceLoading.value = false
+    }
+  }
+  watch([() => fields.paymentMethod, dialog, () => props.orderId], () => {
+    void loadBalance()
+  })
+  onUnmounted(() => {
+    balanceVersion++
   })
   const platform = computed(() =>
     data.value?.platforms.find((item) => item.id === order.value?.platformId)
@@ -59,7 +101,13 @@
   const rules = computed(() => rulesForPlatform(platform.value))
   const players = computed(
     () =>
-      data.value?.users.filter((item) => item.role === 'player' && item.status === 'active') ?? []
+      data.value?.users.filter(
+        (item) =>
+          item.role === 'player' &&
+          item.status === 'active' &&
+          item.playerAccess?.login !== false &&
+          item.playerAccess?.claim !== false
+      ) ?? []
   )
   const correctionPlayers = computed(() =>
     (data.value?.users || []).filter((item) => item.role === 'player')
@@ -157,6 +205,7 @@
       reason: '',
       paidAt: new Date().toISOString(),
       receipt: null,
+      paymentMethod: 'cash',
       dispatchMode: order.value.dispatchMode,
       assignedTo: order.value.assignedTo ?? '',
       status: order.value.status,
@@ -227,11 +276,21 @@
         ElMessage.warning('请确认足额收款，实收金额须与订单金额一致')
         return
       }
-      if (!fields.paidAt) {
+      if (
+        fields.paymentMethod === 'balance' &&
+        (balanceLoading.value ||
+          balance.value === null ||
+          balanceError.value ||
+          balance.value < order.value.amount)
+      ) {
+        ElMessage.warning(balanceError.value || '请确认储值余额已读取且足够支付整笔订单')
+        return
+      }
+      if (fields.paymentMethod === 'cash' && !fields.paidAt) {
         ElMessage.warning('请选择客户实际付款时间')
         return
       }
-      if (rules.value.requiresReceipt && !fields.receipt) {
+      if (fields.paymentMethod === 'cash' && rules.value.requiresReceipt && !fields.receipt) {
         ElMessage.warning('请上传客户付款凭证')
         return
       }
@@ -286,16 +345,22 @@
         await mutate('/refunds', {
           orderId: order.value.id,
           amount: toCents(fields.amount),
-          reason: fields.reason.trim()
+          reason: fields.reason.trim(),
+          requestId: actionRequestId
         })
       } else {
         const body: Record<string, unknown> = { action, reason: fields.reason.trim() }
         if (action === 'payment')
           Object.assign(body, {
             action: 'confirm-payment',
+            paymentMethod: fields.paymentMethod,
+            requestId: actionRequestId,
             receivedAmount: toCents(fields.amount),
-            paidAt: fields.paidAt,
-            receipt: rules.value.requiresReceipt ? fields.receipt : null
+            paidAt: fields.paymentMethod === 'balance' ? null : fields.paidAt,
+            receipt:
+              fields.paymentMethod === 'balance' || !rules.value.requiresReceipt
+                ? null
+                : fields.receipt
           })
         if (action === 'dispatch')
           Object.assign(body, {
@@ -608,6 +673,9 @@
             ><ElDescriptionsItem label="队友">{{
               order.teammateId ? staffName(order.teammateId) : '独自完成 / 未上报'
             }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="收款方式">{{
+              order.paymentMethod === 'balance' ? '老板储值支付' : '现金 / 平台收款'
+            }}</ElDescriptionsItem>
             <ElDescriptionsItem label="客户付款时间">{{
               formatTime(order.paidAt)
             }}</ElDescriptionsItem
@@ -832,20 +900,42 @@
           @submit.prevent="submitAction"
         >
           <template v-if="dialog === 'payment'"
-            ><ElFormItem label="客户实际收款金额（元）" required
+            ><ElFormItem label="收款方式" required
+              ><ElRadioGroup v-model="fields.paymentMethod"
+                ><ElRadioButton value="cash">现金 / 平台收款</ElRadioButton
+                ><ElRadioButton value="balance">老板储值支付</ElRadioButton></ElRadioGroup
+              ></ElFormItem
+            >
+            <ElAlert
+              v-if="fields.paymentMethod === 'balance'"
+              :title="`本次扣款 ${money(order.amount)}；可用储值 ${balanceLoading ? '读取中' : money(balance)}。确认后将扣款并记录付款时间；按原来源规则允许退款时退回原储值账户。`"
+              type="info"
+              :closable="false"
+              class="mb-4" />
+            <ElAlert
+              v-if="fields.paymentMethod === 'balance' && balanceError"
+              :title="balanceError"
+              type="error"
+              :closable="false"
+              class="mb-4" />
+            <ElFormItem label="客户实际收款金额（元）" required
               ><ElInputNumber
                 v-model="fields.amount"
+                :disabled="fields.paymentMethod === 'balance'"
                 :min="0.01"
                 :precision="2"
                 class="!w-full" /></ElFormItem
-            ><ElFormItem label="客户实际付款时间" required
+            ><ElFormItem v-if="fields.paymentMethod === 'cash'" label="客户实际付款时间" required
               ><ElDatePicker
                 v-model="fields.paidAt"
                 type="datetime"
                 value-format="YYYY-MM-DDTHH:mm:ssZ"
                 format="YYYY-MM-DD HH:mm"
                 class="!w-full" /></ElFormItem
-            ><ElFormItem v-if="rules.requiresReceipt" label="付款凭证" required
+            ><ElFormItem
+              v-if="fields.paymentMethod === 'cash' && rules.requiresReceipt"
+              label="付款凭证"
+              required
               ><ElUpload
                 drag
                 class="payment-receipt-upload"
@@ -868,7 +958,7 @@
                 >{{ fields.receipt.name }}</ElLink
               ></ElFormItem
             ><ElAlert
-              v-else
+              v-if="fields.paymentMethod === 'cash' && !rules.requiresReceipt"
               title="本来源免传截图，请核对实际收款和平台订单号。"
               type="info"
               :closable="false"
@@ -908,13 +998,19 @@
                 class="!w-full" /></ElFormItem
             ><p class="text-xs text-g-500 mb-4">{{
               can('finance.refunds')
-                ? '确认保存表示已完成实际退款，统计回到原付款日更新。'
+                ? order.paymentMethod === 'balance'
+                  ? '确认后退款会自动回原客户储值账户，不再重复线下转账。'
+                  : '确认保存表示已完成实际退款，统计回到原付款日更新。'
                 : '申请提交财务审核，实际退款另行登记。'
             }}</p></template
           >
           <template v-if="dialog === 'edit'"
             ><ElAlert
-              title="更改当前实际订单，并保留原创建人和模板快照。修改金额会同步更正收款登记；实际退款请另行登记。"
+              :title="
+                order.paymentMethod === 'balance'
+                  ? '储值已支付订单的客户金额固定；可修改履约信息及报酬并记录原因，退款走原储值账户。'
+                  : '更改当前实际订单，并保留原创建人和模板快照。修改金额会同步更正收款登记；实际退款请另行登记。'
+              "
               type="info"
               :closable="false"
               class="mb-4" /><ElRow :gutter="16"
@@ -981,6 +1077,7 @@
               ><ElFormItem label="订单金额（元）" required
                 ><ElInputNumber
                   v-model="fields.amount"
+                  :disabled="order.paymentMethod === 'balance'"
                   :min="0.01"
                   :precision="2"
                   class="!w-full" /></ElFormItem></ElCol

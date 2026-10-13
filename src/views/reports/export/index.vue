@@ -116,6 +116,26 @@
               />
             </ElFormItem>
           </ElCol>
+          <ElCol
+            v-if="
+              selectedIds.some((id) => id === 'customerAccounts' || id === 'customerTransactions')
+            "
+            :xs="24"
+            :sm="12"
+            :lg="6"
+            ><ElFormItem label="老板客户"
+              ><ElSelect
+                v-model="filters.customerId"
+                clearable
+                filterable
+                placeholder="全部可见老板客户"
+                class="w-full"
+                ><ElOption
+                  v-for="customer in data?.customers || []"
+                  :key="customer.id"
+                  :label="customer.name"
+                  :value="customer.id" /></ElSelect></ElFormItem
+          ></ElCol>
           <ElCol :xs="24" :sm="12" :lg="6"
             ><ElFormItem label="相关人员"
               ><ElSelect
@@ -181,7 +201,7 @@
         </ElRow>
       </ElForm>
       <p class="text-sm text-g-500"
-        >经营报表按原付款日汇总；月报工资按核算月份，其他周期工资只统计实际发放。附加筛选不重算经营汇总。余额、人员与业务配置导出当前快照；月工资发放记录可发生在次月。</p
+        >订单收入按原付款日汇总，非订单客户扣款及离店押金没收按实际登记日计其他收入，利润已包含其他收入。充值和押金缴退不计经营收入。月报工资按核算月份，其他周期工资只统计实际发放。附加筛选不重算经营汇总。储值余额、押金余额、人员与业务配置均导出当前快照，不是所选期间期末快照。</p
       >
     </ElCard>
     <ElCard class="mb-5" shadow="never" v-loading="catalogLoading">
@@ -441,7 +461,8 @@
         : route.query.archived === 'hot'
           ? 'hot'
           : 'all',
-    personId: '',
+    personId: typeof route.query.personId === 'string' ? route.query.personId : '',
+    customerId: typeof route.query.customerId === 'string' ? route.query.customerId : '',
     platformId: '',
     status: '',
     orderDateKey:
@@ -525,6 +546,10 @@
     ]
     if (filters.personId)
       parts.push(data.value?.users.find((item) => item.id === filters.personId)?.name || '已选人员')
+    if (filters.customerId)
+      parts.push(
+        data.value?.customers.find((item) => item.id === filters.customerId)?.name || '已选老板客户'
+      )
     if (filters.platformId)
       parts.push(
         data.value?.platforms.find((item) => item.id === filters.platformId)?.name || '已选平台'
@@ -545,6 +570,7 @@
     财务结算: 'ri:bank-card-line',
     工资与提成: 'ri:money-cny-circle-line',
     人员管理: 'ri:team-line',
+    人员资金: 'ri:wallet-3-line',
     客户与配置: 'ri:settings-3-line',
     审计与个人: 'ri:shield-user-line'
   }
@@ -741,6 +767,11 @@
       selectedIds.value = preferred
       expanded.value = preferred.slice(0, 1)
     }
+  })
+  watch([() => route.query.personId, () => route.query.customerId], ([personId, customerId]) => {
+    if (route.path !== '/reports/export' || busy.value) return
+    filters.personId = typeof personId === 'string' ? personId : ''
+    filters.customerId = typeof customerId === 'string' ? customerId : ''
   })
   watch(
     [() => route.query.periodType, () => route.query.periodDate, () => route.query.archived],

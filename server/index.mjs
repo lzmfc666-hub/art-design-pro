@@ -170,6 +170,46 @@ export function createStudioServer(options = {}) {
       })
       if (!user) throw new ApiError('请先登录', 401)
       if (req.method === 'GET') {
+        if (path === '/players')
+          return json(res, 200, service.players(user.id, Object.fromEntries(url.searchParams)))
+        const playerHistoryMatch = path.match(/^\/players\/([^/]+)\/orders$/)
+        if (playerHistoryMatch)
+          return json(
+            res,
+            200,
+            service.playerHistory(
+              user.id,
+              playerHistoryMatch[1],
+              Object.fromEntries(url.searchParams)
+            )
+          )
+        const playerDepositMatch = path.match(
+          /^\/players\/([^/]+)\/(?:deposit|deposits|deposit-transactions)$/
+        )
+        if (playerDepositMatch)
+          return json(
+            res,
+            200,
+            service.playerDeposit(
+              user.id,
+              playerDepositMatch[1],
+              Object.fromEntries(url.searchParams)
+            )
+          )
+        const customerBalanceMatch = path.match(/^\/customers\/([^/]+)\/balance$/)
+        if (customerBalanceMatch)
+          return json(res, 200, service.customerBalance(user.id, customerBalanceMatch[1]))
+        const customerTransactionsMatch = path.match(/^\/customers\/([^/]+)\/transactions$/)
+        if (customerTransactionsMatch)
+          return json(
+            res,
+            200,
+            service.customerTransactions(
+              user.id,
+              customerTransactionsMatch[1],
+              Object.fromEntries(url.searchParams)
+            )
+          )
         if (path === '/diagnostics') return json(res, 200, service.diagnostics(user.id))
         if (path === '/logs/archive-backup') {
           const backup = service.prepareArchiveBackup(user.id, url.searchParams.get('beforeDate'))

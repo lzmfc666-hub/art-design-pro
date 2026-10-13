@@ -23,6 +23,12 @@ export interface Staff {
   maxActiveOrders: number
   permissionOverrides: Record<string, boolean>
   activeOrders?: number
+  playerAccess?: PlayerAccess
+}
+export interface PlayerAccess {
+  login: boolean
+  claim: boolean
+  withdraw: boolean
 }
 export interface Customer {
   id: string
@@ -34,6 +40,7 @@ export interface Customer {
   platformId?: string | null
   orderReferences?: CustomerOrderReference[]
   orderReferenceCount?: number
+  balance?: number
 }
 export interface CustomerOrderReference {
   id: string
@@ -122,6 +129,9 @@ export interface Order {
   paidAt: string | null
   receivedAt: string | null
   receipt: Attachment | null
+  paymentMethod?: 'cash' | 'balance'
+  balanceTransactionId?: string
+  balanceCustomerId?: string
   status: OrderStatus
   dispatchMode: 'pool' | 'direct'
   assignedTo: string | null
@@ -158,6 +168,9 @@ export interface Refund {
   processedBy?: string
   manualRewardReview?: boolean
   manualResolution?: string
+  requestId?: string
+  refundMethod?: 'cash' | 'balance'
+  balanceTransactionId?: string
 }
 export interface Withdrawal {
   id: string
@@ -273,6 +286,7 @@ export interface DayReport {
   supportCommission: number
   operationsCommission: number
   expenses: number
+  otherIncome: number
   profit: number | null
   incomplete: boolean
   estimatedReward: number
@@ -318,6 +332,42 @@ export interface PlayerAdjustment {
   resolvedBy?: string
   resolutionReason?: string
 }
+export interface CustomerBalanceAccount {
+  customerId: string
+  balance: number
+}
+export interface PlayerDepositAccount {
+  userId: string
+  balance: number
+}
+export interface FundTransaction {
+  id: string
+  accountId: string
+  kind:
+    | 'recharge'
+    | 'deduction'
+    | 'return'
+    | 'order-payment'
+    | 'order-refund'
+    | 'deposit'
+    | 'penalty'
+  amount: number
+  delta: number
+  balanceAfter: number
+  reason: string
+  receipt: Attachment | null
+  orderId: string | null
+  createdAt: string
+  createdBy: string
+  createdByName: string
+  requestId: string
+  exitType: 'leave' | 'absconded' | null
+}
+export interface PlayerListRecord extends Omit<Staff, 'permissionOverrides'> {
+  playerAccess: PlayerAccess
+  wallet?: Wallet
+  depositBalance?: number
+}
 export interface RewardReview {
   id: string
   orderId: string
@@ -358,6 +408,10 @@ export interface StudioData {
     monthlyProfit: number | null
   }
   wallets: Wallet[]
+  customerBalances?: CustomerBalanceAccount[]
+  playerDeposits?: PlayerDepositAccount[]
+  customerTransactions?: FundTransaction[]
+  playerDepositTransactions?: FundTransaction[]
   playerAdjustments?: PlayerAdjustment[]
   rewardReviews?: RewardReview[]
   demo: boolean

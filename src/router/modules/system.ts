@@ -8,12 +8,6 @@ export const systemRoutes: AppRouteRecord = {
   meta: { title: '系统管理', icon: 'ri:settings-3-line', business: true },
   children: [
     {
-      path: 'user',
-      name: 'User',
-      component: '/system/user',
-      meta: { title: '人员管理', icon: 'ri:team-line', studioPermissions: ['users.manage'] }
-    },
-    {
       path: 'role',
       name: 'Role',
       component: '/system/role',

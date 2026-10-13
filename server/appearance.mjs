@@ -32,13 +32,13 @@ export const APPEARANCE_ICON_DEFAULTS = Object.freeze({
   dashboard: 'ri:pie-chart-line',
   orders: 'ri:file-list-3-line',
   finance: 'ri:wallet-3-line',
-  personnel: 'ri:calendar-check-line',
+  personnel: 'ri:team-line',
   system: 'ri:settings-3-line',
   reports: 'ri:file-excel-2-line',
   createOrder: 'ri:add-box-line',
   orderList: 'ri:list-check-2',
   customers: 'ri:contacts-book-line',
-  users: 'ri:team-line',
+  users: 'ri:user-settings-line',
   roles: 'ri:user-settings-line',
   business: 'ri:gamepad-line',
   appearance: 'ri:palette-line',
@@ -48,6 +48,44 @@ export const APPEARANCE_ICON_DEFAULTS = Object.freeze({
   export: 'ri:download-2-line',
   profile: 'ri:user-line'
 })
+
+// 保留既有图标槽位，兼容旧版按路由路径保存的图标；显式槽位值优先。
+export const APPEARANCE_ICON_ROUTE_ALIASES = Object.freeze({
+  '/personnel/employees': 'users',
+  '/personnel/customers': 'customers',
+  '/personnel/players': 'personnel',
+  '/system/user': 'users',
+  '/orders/customers': 'customers',
+  '/dashboard': 'dashboard',
+  '/dashboard/console': 'dashboard',
+  '/dashboard/analysis': 'dashboard',
+  '/orders': 'orders',
+  '/orders/create': 'createOrder',
+  '/orders/list': 'orderList',
+  '/finance': 'finance',
+  '/finance/settlement': 'finance',
+  '/finance/salary': 'salary',
+  '/personnel': 'personnel',
+  '/personnel/attendance': 'attendance',
+  '/system': 'system',
+  '/system/role': 'roles',
+  '/system/menu': 'roles',
+  '/system/business': 'business',
+  '/system/appearance': 'appearance',
+  '/system/logs': 'logs',
+  '/system/user-center': 'profile',
+  '/reports': 'reports',
+  '/reports/export': 'export'
+})
+export function canonicalAppearanceIcons(value) {
+  const result = Object.fromEntries(
+    Object.entries(value || {}).filter(([key]) => Object.hasOwn(APPEARANCE_ICON_DEFAULTS, key))
+  )
+  for (const [path, key] of Object.entries(APPEARANCE_ICON_ROUTE_ALIASES)) {
+    if (Object.hasOwn(value || {}, path) && !Object.hasOwn(result, key)) result[key] = value[path]
+  }
+  return result
+}
 
 export function defaultAppearance() {
   return {
@@ -185,9 +223,11 @@ export function normalizeAppearance(config, attachmentResolver) {
     (login.background.mode === 'image' && !login.background.image)
   )
     throw new ApiError('图片背景必须先上传图片')
-  object(config.icons, '图标', Object.keys(APPEARANCE_ICON_DEFAULTS))
-  const icons = {}
-  for (const [key, value] of Object.entries(config.icons)) {
+  object(config.icons, '图标', [
+    ...Object.keys(APPEARANCE_ICON_DEFAULTS),
+    ...Object.keys(APPEARANCE_ICON_ROUTE_ALIASES)
+  ])
+  for (const value of Object.values(config.icons)) {
     if (
       typeof value !== 'string' ||
       value.length > 64 ||
@@ -195,8 +235,8 @@ export function normalizeAppearance(config, attachmentResolver) {
       !APPEARANCE_ICON_OPTIONS.includes(value)
     )
       throw new ApiError('图标须为受支持的 ri: 图标名称')
-    icons[key] = value
   }
+  const icons = canonicalAppearanceIcons(config.icons)
   return {
     studioName: config.studioName.trim(),
     logo: image(config.logo),

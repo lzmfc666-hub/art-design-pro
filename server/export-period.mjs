@@ -59,6 +59,7 @@ export function exportPeriod(request = {}, state = {}, now = new Date()) {
       const date = dateOf(value)
       if (date && date <= today) dates.push(date)
     }
+    for (const value of state.exportOnlyDates || []) include(value)
     for (const order of state.orders || [])
       for (const key of ['createdAt', 'paidAt', 'completedAt', 'canceledAt']) include(order[key])
     for (const table of [

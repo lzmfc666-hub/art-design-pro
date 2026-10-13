@@ -136,20 +136,28 @@
       permissions: ['attendance.manage']
     },
     {
-      name: '客户档案',
+      name: '老板管理',
       routeName: 'Customers',
       description: '维护客户与游戏信息',
       icon: 'ri:contacts-book-line',
       iconColor: 'var(--el-color-info)',
-      permissions: ['users.manage', 'orders.create']
+      permissions: ['users.manage', 'orders.create', 'finance.refunds']
     },
     {
-      name: '人员管理',
+      name: '员工管理',
       routeName: 'User',
-      description: '账号、角色与个人权限',
+      description: '员工账号、岗位与个人权限',
       icon: 'ri:team-line',
       iconColor: 'var(--el-color-primary)',
       permissions: ['users.manage']
+    },
+    {
+      name: '打手管理',
+      routeName: 'Players',
+      description: '打手档案与离店押金处理',
+      icon: 'ri:gamepad-line',
+      iconColor: 'var(--el-color-primary)',
+      permissions: ['users.manage', 'finance.withdrawals']
     },
     {
       name: '业务配置',

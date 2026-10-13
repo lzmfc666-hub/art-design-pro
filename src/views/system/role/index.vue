@@ -57,7 +57,12 @@
           ><ElButton
             type="primary"
             link
-            @click="router.push({ path: '/system/user', query: { role: row.role } })"
+            @click="
+              router.push({
+                path: row.role === 'player' ? '/personnel/players' : '/personnel/employees',
+                query: { role: row.role }
+              })
+            "
             >管理人员</ElButton
           ></template
         >

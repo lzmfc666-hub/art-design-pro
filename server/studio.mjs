@@ -10,12 +10,14 @@ import {
   appearanceAttachments,
   projectAppearanceAudit,
   projectPublicAppearance,
-  publicAppearanceAttachments
+  publicAppearanceAttachments,
+  canonicalAppearanceIcons
 } from './appearance.mjs'
 import { createAuditStore, isAuditCapacityError } from './audit-store.mjs'
 import { platformRules, normalizePlatformRules } from './platform-rules.mjs'
 import { buildPeriodExportSnapshot } from './export-period.mjs'
 import { buildDiagnosticsReport } from './diagnostics.mjs'
+import { createFundsStore } from './funds-store.mjs'
 
 export const ALL_PERMISSIONS = [
   'orders.view',
@@ -186,6 +188,24 @@ const requirePermission = (user, permission) => {
 }
 const requirePlayer = (user) => {
   if (user.role !== 'player') fail('此接口仅供打手账号使用', 403)
+  if (!playerAccess(user).login) fail('当前打手账号已关闭登录', 403)
+}
+export const playerAccess = (user) => ({
+  login: true,
+  claim: true,
+  withdraw: true,
+  ...(user.playerAccess || {})
+})
+const normalizePlayerAccess = (value, previous) => {
+  if (value == null) return playerAccess(previous || {})
+  if (
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.keys(value).some((key) => !['login', 'claim', 'withdraw'].includes(key)) ||
+    ['login', 'claim', 'withdraw'].some((key) => typeof value[key] !== 'boolean')
+  )
+    fail('打手访问设置必须包含登录、接单、提现三个有效开关')
+  return { login: value.login, claim: value.claim, withdraw: value.withdraw }
 }
 const find = (state, table, entityId, label = '记录') =>
   state[table].find((row) => row.id === entityId) || fail(`${label}不存在`, 404)
@@ -200,7 +220,11 @@ const commission = (amount, configuredRate) =>
   configuredRate == null ? null : Math.round((amount * configuredRate) / 10000)
 const activeCount = (state, userId) =>
   state.orders.filter((o) => o.status === 'active' && o.leaderId === userId).length
-const publicStaff = (state, user) => ({ ...user, activeOrders: activeCount(state, user.id) })
+const publicStaff = (state, user) => ({
+  ...user,
+  ...(user.role === 'player' ? { playerAccess: playerAccess(user) } : {}),
+  activeOrders: activeCount(state, user.id)
+})
 const hashPassword = (password) => {
   if (typeof password !== 'string' || password.length < 8 || password.length > 128)
     fail('密码长度应为8至128位')
@@ -406,6 +430,21 @@ export function createStudioService({
     archiveMaxBytes: auditArchiveMaxBytes,
     clock
   })
+  const funds = createFundsStore(db)
+  const appearanceFor = (state) => {
+    const config = state.appearance || defaultAppearance()
+    return { ...config, icons: canonicalAppearanceIcons(config.icons) }
+  }
+  const fundDateFormatter = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  })
   db.exec(
     'CREATE TABLE IF NOT EXISTS audit_archive_backups(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,before_date TEXT NOT NULL,scope_json TEXT NOT NULL,ready INTEGER NOT NULL DEFAULT 0,expires_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS audit_backup_expiry ON audit_archive_backups(expires_at)'
   )
@@ -541,6 +580,7 @@ export function createStudioService({
   })
   const publicCustomer = (customer) => ({
     ...customer,
+    balance: funds.balance('customer', customer.id),
     platformId: customer.platformId || null,
     orderReferences: db
       .prepare(
@@ -562,6 +602,153 @@ export function createStudioService({
         (editing || !can(user, 'orders.view')))
     )
       fail('没有查看或维护客户资料的权限', 403)
+  }
+  const moneyRequest = (user, path, body, callback, required = false) => {
+    const keys = [
+      'customerId',
+      'userId',
+      'kind',
+      'amount',
+      'reason',
+      'receipt',
+      'orderId',
+      'exitType',
+      'templateId',
+      'platformId',
+      'shopId',
+      'externalOrderNo',
+      'roomCode',
+      'gameId',
+      'map',
+      'reward',
+      'remark',
+      'dispatchMode',
+      'assignedTo',
+      'receivedAmount',
+      'paidAt',
+      'payOnArrival',
+      'paymentMethod',
+      'action',
+      'resolution',
+      'teammateId'
+    ]
+    const payload = Object.fromEntries(
+      keys
+        .filter((key) => Object.hasOwn(body, key))
+        .map((key) => [
+          key,
+          key === 'receipt' && body[key] && typeof body[key] === 'object' ? body[key].id : body[key]
+        ])
+    )
+    return funds.request(user.id, path, body.requestId, payload, callback, required)
+  }
+  const customerAccountVisible = (user) =>
+    can(user, 'orders.view') ||
+    can(user, 'orders.create') ||
+    can(user, 'users.manage') ||
+    can(user, 'finance.refunds')
+  const requireCustomerAccount = (user) => {
+    if (!customerAccountVisible(user)) fail('没有查看客户储值余额的权限', 403)
+  }
+  const depositVisible = (user, userId) => can(user, 'finance.withdrawals') || user.id === userId
+  const activeState = (userId) => {
+    const state = read(),
+      user = find(state, 'users', userId, '账号')
+    if (user.status !== 'active' || (user.role === 'player' && !playerAccess(user).login))
+      fail('账号已停用或关闭登录', 403)
+    return { state, user }
+  }
+  const accountPage = (input = {}) => {
+    const current = Number(input.current || 1),
+      size = Number(input.size || 20)
+    if (
+      !Number.isSafeInteger(current) ||
+      current < 1 ||
+      !Number.isSafeInteger(size) ||
+      size < 1 ||
+      size > 100 ||
+      !Number.isSafeInteger((current - 1) * size)
+    )
+      fail('分页参数无效')
+    return { current, size }
+  }
+  const postFund = (state, user, body, type) => {
+    requirePermission(user, type === 'customer' ? 'finance.refunds' : 'finance.withdrawals')
+    const accountId =
+      type === 'customer'
+        ? find(state, 'customers', body.customerId, '客户').id
+        : find(state, 'users', body.userId, '打手').id
+    if (type === 'deposit' && find(state, 'users', accountId).role !== 'player')
+      fail('押金对象必须是打手账号')
+    const kind = choice(
+      body.kind === 'refund' && type === 'deposit' ? 'return' : body.kind,
+      type === 'customer' ? ['recharge', 'deduction', 'return'] : ['deposit', 'penalty', 'return'],
+      '资金操作'
+    )
+    const exitType =
+      type === 'deposit' && kind !== 'deposit'
+        ? choice(body.exitType, ['leave', 'absconded'], '退店或跑路场景')
+        : null
+    const normalized = { ...body, kind, exitType }
+    return moneyRequest(
+      user,
+      type === 'customer' ? '/customer-transactions' : '/player-deposit-transactions',
+      normalized,
+      () => {
+        const amount = cents(body.amount, '资金金额', { positive: true }),
+          reason = requiredReason(body)
+        const row = funds.append({
+          type,
+          accountId,
+          kind,
+          amount,
+          direction: ['recharge', 'deposit'].includes(kind) ? 1 : -1,
+          reason,
+          receipt: attachment(state, user, body.receipt),
+          actor: user,
+          requestId: body.requestId,
+          exitType,
+          now: now(),
+          id: id()
+        })
+        audit(
+          state,
+          user,
+          type === 'customer' ? '客户储值资金登记' : '打手押金资金登记',
+          type === 'customer' ? 'customer-transaction' : 'player-deposit-transaction',
+          row.id,
+          null,
+          row
+        )
+        return row
+      },
+      true
+    )
+  }
+  const balancePayment = (state, user, order, body) => {
+    const row = funds.append({
+      type: 'customer',
+      accountId: order.customerId,
+      kind: 'order-payment',
+      amount: order.amount,
+      direction: -1,
+      reason: `订单储值支付：${order.orderNo}`,
+      orderId: order.id,
+      actor: user,
+      requestId: body.requestId,
+      sourceId: `order-payment:${order.id}`,
+      now: now(),
+      id: id()
+    })
+    order.paymentMethod = 'balance'
+    order.balanceTransactionId = row.id
+    order.balanceCustomerId = order.customerId
+    Object.assign(order, {
+      receivedAmount: order.amount,
+      paidAt: row.createdAt,
+      receivedAt: row.createdAt,
+      receipt: null
+    })
   }
   function createPlayerAdjustment(state, user, body, source = 'manual') {
     const target = find(state, 'users', body.userId, '打手')
@@ -615,6 +802,19 @@ export function createStudioService({
       )
     )
       return true
+    const fundingReceipt = db
+      .prepare(
+        "SELECT account_type,account_id FROM fund_transactions WHERE json_extract(receipt_json,'$.id')=?"
+      )
+      .all(attachmentId)
+    if (
+      fundingReceipt.some((row) =>
+        row.account_type === 'customer'
+          ? can(user, 'finance.refunds')
+          : depositVisible(user, row.account_id)
+      )
+    )
+      return true
     return false
   }
   const attachment = (state, user, value, required = false) => {
@@ -651,6 +851,8 @@ export function createStudioService({
     clean.receipt = null
     clean.externalOrderNo = ''
     clean.customerId = ''
+    delete clean.balanceCustomerId
+    delete clean.balanceTransactionId
     clean.snapshot.amount = null
     delete clean.commissionSnapshot
     return clean
@@ -701,6 +903,8 @@ export function createStudioService({
                   ([key, enabled]) => ALL_PERMISSIONS.includes(key) && typeof enabled === 'boolean'
                 )
               )
+            if (value.playerAccess)
+              result.playerAccess = pick(value.playerAccess, ['login', 'claim', 'withdraw'])
           }
           return result
         }
@@ -725,6 +929,9 @@ export function createStudioService({
             'receivedAmount',
             'paidAt',
             'receivedAt',
+            'paymentMethod',
+            'balanceTransactionId',
+            'balanceCustomerId',
             'status',
             'dispatchMode',
             'assignedTo',
@@ -943,6 +1150,33 @@ export function createStudioService({
                 'source'
               ])
             : null
+        case 'customer-transaction':
+        case 'player-deposit-transaction': {
+          if (
+            log.entity === 'customer-transaction'
+              ? !can(user, 'finance.refunds')
+              : !depositVisible(user, value.accountId)
+          )
+            return null
+          return {
+            ...pick(value, [
+              'id',
+              'accountId',
+              'kind',
+              'amount',
+              'delta',
+              'balanceAfter',
+              'reason',
+              'orderId',
+              'createdAt',
+              'createdBy',
+              'createdByName',
+              'requestId',
+              'exitType'
+            ]),
+            receipt: safeAttachment(value.receipt)
+          }
+        }
         case 'reward-review':
           return can(user, 'finance.withdrawals')
             ? pick(value, [
@@ -1280,6 +1514,7 @@ export function createStudioService({
       supportCommission: 0,
       operationsCommission: 0,
       expenses: 0,
+      otherIncome: 0,
       profit: 0,
       incomplete: false,
       estimatedReward: 0
@@ -1300,6 +1535,8 @@ export function createStudioService({
     }
     for (const expense of state.expenses.filter((e) => !e.deletedAt && e.date.startsWith(month)))
       days[Number(expense.date.slice(8)) - 1].expenses += expense.amount
+    for (const row of funds.income(month))
+      days[Number(row.date.slice(8)) - 1].otherIncome += row.amount
     for (const adjustment of state.playerAdjustments.filter(
       (row) => row.source !== 'status-correction'
     )) {
@@ -1325,7 +1562,12 @@ export function createStudioService({
       day.net = day.received - day.refunds
       day.profit = day.incomplete
         ? null
-        : day.net - day.reward - day.supportCommission - day.operationsCommission - day.expenses
+        : day.net +
+          day.otherIncome -
+          day.reward -
+          day.supportCommission -
+          day.operationsCommission -
+          day.expenses
     }
     const monthlyOrders = state.orders.filter(
       (o) => paidOrder(o) && shanghaiDate(o.paidAt).startsWith(month)
@@ -1428,7 +1670,7 @@ export function createStudioService({
       user: publicStaff(state, user),
       permissions: permissionsFor(user),
       roleDefaults: DEFAULT_PERMISSIONS,
-      appearance: state.appearance || defaultAppearance(),
+      appearance: appearanceFor(state),
       users: visibleUsers,
       customers:
         user.role === 'player' && !can(user, 'orders.view')
@@ -1478,6 +1720,15 @@ export function createStudioService({
         (row) => can(user, 'finance.withdrawals') || row.userId === user.id
       ),
       rewardReviews: can(user, 'finance.withdrawals') ? state.rewardReviews : [],
+      customerBalances: customerAccountVisible(user)
+        ? state.customers.map((row) => ({
+            customerId: row.id,
+            balance: funds.balance('customer', row.id)
+          }))
+        : [],
+      playerDeposits: state.users
+        .filter((row) => row.role === 'player' && depositVisible(user, row.id))
+        .map((row) => ({ userId: row.id, balance: funds.balance('deposit', row.id) })),
       reports: result,
       wallets: state.users
         .filter(
@@ -1499,6 +1750,12 @@ export function createStudioService({
   function validateTarget(state, assignedTo) {
     const target = find(state, 'users', assignedTo, '打手')
     if (target.role !== 'player' || target.status !== 'active') fail('指定账号必须是启用中的打手')
+    return target.id
+  }
+  function validateDispatchTarget(state, targetId) {
+    const target = find(state, 'users', validateTarget(state, targetId))
+    const access = playerAccess(target)
+    if (!access.login || !access.claim) fail('该打手未开放登录或接单，不能新指派')
     return target.id
   }
   function validateTeammate(state, leaderId, teammateId) {
@@ -1556,11 +1813,16 @@ export function createStudioService({
     const amount = cents(body.amount ?? template.amount, '客户金额', { positive: true }),
       reward = cents(body.reward ?? template.reward, '整单打手报酬')
     const dispatchMode = choice(body.dispatchMode, ['pool', 'direct'], '派单方式')
-    const assignedTo = dispatchMode === 'direct' ? validateTarget(state, body.assignedTo) : null
+    const assignedTo =
+      dispatchMode === 'direct' ? validateDispatchTarget(state, body.assignedTo) : null
+    const paymentMethod = choice(body.paymentMethod || 'cash', ['cash', 'balance'], '付款方式')
+    if (paymentMethod === 'balance' && body.payOnArrival) fail('储值支付不支持落地付')
     if (body.payOnArrival && !rules.allowPayOnArrival)
       fail('当前平台不允许落地付，请先确认客户付款')
     let payment = { receivedAmount: 0, paidAt: null, receivedAt: null, receipt: null }
-    if (!body.payOnArrival || Number(body.receivedAmount) > 0)
+    if (paymentMethod === 'balance')
+      payment = { receivedAmount: amount, paidAt: now(), receivedAt: now(), receipt: null }
+    else if (!body.payOnArrival || Number(body.receivedAmount) > 0)
       payment = paymentData(state, user, body, platform)
     if (payment.receivedAmount && payment.receivedAmount !== amount)
       fail('普通订单派单前须确认全额收款；金额应与实收一致')
@@ -1580,6 +1842,7 @@ export function createStudioService({
       amount,
       reward,
       ...payment,
+      paymentMethod,
       status: 'pending',
       dispatchMode,
       assignedTo,
@@ -1594,6 +1857,7 @@ export function createStudioService({
       assignments: [],
       submissions: []
     }
+    if (paymentMethod === 'balance') balancePayment(state, user, order, body)
     state.orders.push(order)
     audit(state, user, '创建订单', 'order', order.id, null, order)
     return safeOrder(state, user, order)
@@ -1602,6 +1866,16 @@ export function createStudioService({
     const order = find(state, 'orders', orderId, '订单'),
       before = clone(order)
     const action = body.action
+    if (order.paymentMethod === 'balance') {
+      if (
+        (Object.hasOwn(body, 'amount') && body.amount !== order.amount) ||
+        (Object.hasOwn(body, 'receivedAmount') && body.receivedAmount !== order.receivedAmount) ||
+        (Object.hasOwn(body, 'paymentMethod') && body.paymentMethod !== 'balance')
+      )
+        fail('储值支付订单不能直接更改客户金额、实收或付款方式，请通过独立退款/更正流程处理', 409)
+      if (action === 'edit' && body.customerId && body.customerId !== order.balanceCustomerId)
+        fail('储值支付订单不能更换付款客户', 409)
+    }
     if (action === 'correct-status') {
       if (!['finance', 'manager', 'owner', 'super_admin'].includes(user.role))
         fail('仅财务、店长、老板或超级管理员可以更正订单状态', 403)
@@ -1782,14 +2056,23 @@ export function createStudioService({
       } else if (action === 'confirm-payment') {
         if (order.status === 'canceled') fail('已取消订单不能确认收款', 409)
         if (paidOrder(order)) fail('该订单已确认收款，不能重复入账', 409)
-        const payment = paymentData(state, user, body, find(state, 'platforms', order.platformId))
-        if (payment.receivedAmount !== order.amount) fail('实收金额须与订单金额一致')
-        Object.assign(order, payment)
+        const requestedMethod = choice(
+          body.paymentMethod || 'cash',
+          ['cash', 'balance'],
+          '付款方式'
+        )
+        if (requestedMethod === 'balance') balancePayment(state, user, order, body)
+        else {
+          const payment = paymentData(state, user, body, find(state, 'platforms', order.platformId))
+          if (payment.receivedAmount !== order.amount) fail('实收金额须与订单金额一致')
+          Object.assign(order, payment)
+          order.paymentMethod = 'cash'
+        }
       } else if (action === 'dispatch') {
         if (order.status !== 'pending') fail('只有待接单订单可以派单', 409)
         order.dispatchMode = choice(body.dispatchMode, ['pool', 'direct'], '派单方式')
         order.assignedTo =
-          order.dispatchMode === 'direct' ? validateTarget(state, body.assignedTo) : null
+          order.dispatchMode === 'direct' ? validateDispatchTarget(state, body.assignedTo) : null
         order.publishedAt = now()
       } else if (action === 'release') {
         if (order.status !== 'active') fail('只有接单中订单可以解除接单', 409)
@@ -1831,11 +2114,31 @@ export function createStudioService({
     return safeOrder(state, user, order)
   }
 
-  function markRefund(state, user, refund) {
+  function markRefund(state, user, refund, requestId = refund.requestId) {
     const order = find(state, 'orders', refund.orderId)
     if (paidRefunds(state, order.id) + refund.amount > order.receivedAmount)
       fail('退款总额不能超过实收金额', 409)
     refund.status = 'paid'
+    if (order.paymentMethod === 'balance') {
+      const customerId = order.balanceCustomerId || order.customerId
+      find(state, 'customers', customerId, '原储值付款客户')
+      const row = funds.append({
+        type: 'customer',
+        accountId: customerId,
+        kind: 'order-refund',
+        amount: refund.amount,
+        direction: 1,
+        reason: refund.reason,
+        orderId: order.id,
+        actor: user,
+        requestId,
+        sourceId: `order-refund:${refund.id}`,
+        now: now(),
+        id: id()
+      })
+      refund.refundMethod = 'balance'
+      refund.balanceTransactionId = row.id
+    } else refund.refundMethod = 'cash'
     refund.processedAt = now()
     refund.processedBy = user.id
     const rewardUsers = state.rewardCredits
@@ -1863,7 +2166,8 @@ export function createStudioService({
       reason,
       status: 'pending',
       requestedBy: user.id,
-      createdAt: now()
+      createdAt: now(),
+      ...(body.requestId ? { requestId: body.requestId } : {})
     }
     state.refunds.push(refund)
     if (can(user, 'finance.refunds')) markRefund(state, user, refund)
@@ -1895,7 +2199,7 @@ export function createStudioService({
         })
     } else {
       if (refund.status !== 'pending') fail('退款已处理，不能重复审核', 409)
-      if (body.action === 'approve') markRefund(state, user, refund)
+      if (body.action === 'approve') markRefund(state, user, refund, body.requestId)
       else if (body.action === 'reject') {
         refund.reason += `；驳回：${requiredReason(body)}`
         refund.status = 'rejected'
@@ -1973,8 +2277,12 @@ export function createStudioService({
       }
       if (path === '/player-adjustments') {
         requirePermission(user, 'finance.withdrawals')
-        return clone(createPlayerAdjustment(state, user, body))
+        return moneyRequest(user, path, body, () =>
+          clone(createPlayerAdjustment(state, user, body))
+        )
       }
+      if (path === '/customer-transactions') return postFund(state, user, body, 'customer')
+      if (path === '/player-deposit-transactions') return postFund(state, user, body, 'deposit')
       const adjustmentMatch = path.match(/^\/player-adjustments\/([^/]+)\/action$/)
       if (adjustmentMatch) {
         requirePermission(user, 'finance.withdrawals')
@@ -2130,12 +2438,73 @@ export function createStudioService({
         })
         return { ok: true }
       }
-      if (path === '/orders') return createOrder(state, user, body)
+      if (path === '/orders') {
+        requirePermission(user, 'orders.create')
+        return safeOrder(
+          state,
+          user,
+          moneyRequest(
+            user,
+            path,
+            body,
+            () => createOrder(state, user, body),
+            body.paymentMethod === 'balance'
+          )
+        )
+      }
       const orderMatch = path.match(/^\/orders\/([^/]+)\/action$/)
-      if (orderMatch) return orderAction(state, user, orderMatch[1], body)
-      if (path === '/refunds') return refundCreate(state, user, body)
+      if (orderMatch) {
+        const target = find(state, 'orders', orderMatch[1])
+        if (
+          body.action === 'correct-status' &&
+          !['finance', 'manager', 'owner', 'super_admin'].includes(user.role)
+        )
+          fail('仅财务、店长、老板或超级管理员可以更正订单状态', 403)
+        if (
+          body.action === 'cancel' &&
+          (target.status === 'completed' || target.canceledFrom === 'completed')
+        )
+          requirePermission(user, 'finance.review')
+        else if (body.action === 'confirm-payment') requirePermission(user, 'orders.edit')
+        else if (['adjust', 'cancel-settle', 'review-pass', 'review-return'].includes(body.action))
+          requirePermission(user, 'finance.review')
+        else requirePermission(user, 'orders.edit')
+        return safeOrder(
+          state,
+          user,
+          moneyRequest(
+            user,
+            path,
+            body,
+            () => orderAction(state, user, orderMatch[1], body),
+            body.action === 'confirm-payment' && body.paymentMethod === 'balance'
+          )
+        )
+      }
+      if (path === '/refunds') {
+        if (!can(user, 'finance.refunds')) requirePermission(user, 'orders.edit')
+        const order = find(state, 'orders', body.orderId, '退款订单')
+        return moneyRequest(
+          user,
+          path,
+          body,
+          () => refundCreate(state, user, body),
+          order.paymentMethod === 'balance'
+        )
+      }
       const refundMatch = path.match(/^\/refunds\/([^/]+)\/action$/)
-      if (refundMatch) return refundAction(state, user, refundMatch[1], body)
+      if (refundMatch) {
+        requirePermission(user, 'finance.refunds')
+        const refund = find(state, 'refunds', refundMatch[1]),
+          order = find(state, 'orders', refund.orderId)
+        return moneyRequest(
+          user,
+          path,
+          body,
+          () => refundAction(state, user, refundMatch[1], body),
+          order.paymentMethod === 'balance' && body.action === 'approve'
+        )
+      }
       const withdrawalMatch = path.match(/^\/withdrawals\/([^/]+)\/action$/)
       if (withdrawalMatch) {
         requirePermission(user, 'finance.withdrawals')
@@ -2212,6 +2581,31 @@ export function createStudioService({
           fail('登录名已存在', 409)
         const role = choice(body.role, ROLES, '角色'),
           status = choice(body.status || 'active', ['active', 'disabled'], '状态')
+        if (existing?.role === 'player' && role !== 'player') {
+          const currentWallet = wallet(state, existing.id)
+          const unfinished = state.orders.some(
+            (order) =>
+              (['active', 'review'].includes(order.status) &&
+                (order.leaderId === existing.id || order.teammateId === existing.id)) ||
+              (order.status === 'pending' && order.assignedTo === existing.id) ||
+              (order.compensationPending &&
+                (order.leaderId === existing.id ||
+                  order.assignments.some((row) => row.leaderId === existing.id)))
+          )
+          if (
+            funds.balance('deposit', existing.id) > 0 ||
+            currentWallet.available > 0 ||
+            currentWallet.occupied > 0 ||
+            unfinished ||
+            state.playerAdjustments.some(
+              (row) => row.userId === existing.id && row.status === 'manual'
+            )
+          )
+            fail(
+              '该打手仍有押金、未提现报酬、在途提现、待追回或未完订单，请先核对结清后再更换角色',
+              409
+            )
+        }
         if (
           !Number.isInteger(body.maxActiveOrders) ||
           body.maxActiveOrders < 1 ||
@@ -2245,7 +2639,10 @@ export function createStudioService({
               : {}
             : { createdAt: now() }),
           maxActiveOrders: body.maxActiveOrders,
-          permissionOverrides: role === 'super_admin' ? {} : overrides
+          permissionOverrides: role === 'super_admin' ? {} : overrides,
+          ...(role === 'player'
+            ? { playerAccess: normalizePlayerAccess(body.playerAccess, existing) }
+            : {})
         }
         if (row.id === user.id && (status !== 'active' || role !== user.role))
           fail('不能停用自己或更改自身角色')
@@ -2256,7 +2653,12 @@ export function createStudioService({
         if (!state.users.some((u) => u.role === 'super_admin' && u.status === 'active'))
           fail('至少保留一个启用中的超级管理员')
         for (const order of state.orders) snapshotCommission(state, order)
-        if (body.password || status === 'disabled' || existing?.role !== row.role)
+        if (
+          body.password ||
+          status === 'disabled' ||
+          existing?.role !== row.role ||
+          (role === 'player' && !row.playerAccess.login)
+        )
           db.prepare('DELETE FROM sessions WHERE user_id=?').run(row.id)
         audit(
           state,
@@ -2273,6 +2675,11 @@ export function createStudioService({
         if (!can(user, 'orders.create') && !can(user, 'users.manage'))
           fail('没有维护客户的权限', 403)
         const existing = body.id ? find(state, 'customers', body.id, '客户') : null
+        if (
+          Object.hasOwn(body, 'balance') &&
+          body.balance !== funds.balance('customer', existing?.id || '')
+        )
+          fail('客户储值余额只能通过财务资金流水修改，不能直接编辑余额')
         const row = {
           id: existing?.id || id(),
           name: text(body.name, '客户名称', { required: true, max: 100 }),
@@ -2559,6 +2966,7 @@ export function createStudioService({
       const claimMatch = path.match(/^\/player\/orders\/([^/]+)\/claim$/)
       if (claimMatch) {
         requirePlayer(user)
+        if (!playerAccess(user).claim) fail('当前打手账号已关闭新接单', 403)
         const order = find(state, 'orders', claimMatch[1], '订单'),
           before = clone(order)
         if (!visibleOrder(state, user, order)) fail('订单尚未向你的等级开放或未指派给你', 403)
@@ -2600,6 +3008,7 @@ export function createStudioService({
       }
       if (path === '/player/withdrawals') {
         requirePlayer(user)
+        if (!playerAccess(user).withdraw) fail('当前打手账号已关闭新提现申请', 403)
         const amount = cents(body.amount, '提现金额', { positive: true })
         if (amount > wallet(state, user.id).available)
           fail('可提现余额不足，申请中的金额已占用', 409)
@@ -2619,7 +3028,7 @@ export function createStudioService({
       const state = read(),
         user = find(state, 'users', userId, '账号')
       if (user.status !== 'active') fail('账号已停用', 403)
-      return clone(state.appearance || defaultAppearance())
+      return clone(appearanceFor(state))
     },
     publicAppearance() {
       return projectPublicAppearance(read().appearance || defaultAppearance())
@@ -2774,6 +3183,13 @@ export function createStudioService({
       state.logs = [logBounds.start, logBounds.end]
         .filter(Boolean)
         .map((createdAt) => ({ createdAt }))
+      state.exportOnlyDates = [
+        can(user, 'finance.refunds') ? funds.firstDate({ type: 'customer' }) : null,
+        funds.firstDate({
+          type: 'deposit',
+          accountIds: can(user, 'finance.withdrawals') ? undefined : [user.id]
+        })
+      ].filter(Boolean)
       const result = buildPeriodExportSnapshot({
         base,
         state,
@@ -2869,6 +3285,95 @@ export function createStudioService({
           .map((row) => safeAuditLog(state, user, row))
           .filter(Boolean)
       else if (logRequested) result.logs = []
+      result.fundCounts = {}
+      const keyword = text(filters.keyword, '资金流水搜索', { max: 200 }).toLowerCase()
+      const startDate = start > result.exportPeriod.start ? start : result.exportPeriod.start
+      const endDate = end < result.exportPeriod.end ? end : result.exportPeriod.end
+      const customerNames = new Map(state.customers.map((row) => [row.id, row.name]))
+      const staffNames = new Map(state.users.map((row) => [row.id, row.name]))
+      const orderNumbers = new Map(state.orders.map((row) => [row.id, row.orderNo]))
+      const kindNames = {
+        recharge: '充值',
+        deduction: '非订单扣款',
+        'order-payment': '订单余额付款',
+        'order-refund': '订单余额退款',
+        deposit: '缴纳押金',
+        penalty: '离店押金没收'
+      }
+      for (const [moduleId, type, outputKey, authorized] of [
+        ['customerTransactions', 'customer', 'customerTransactions', can(user, 'finance.refunds')],
+        [
+          'playerDepositTransactions',
+          'deposit',
+          'playerDepositTransactions',
+          can(user, 'finance.withdrawals') || user.role === 'player'
+        ]
+      ]) {
+        if (!authorized) {
+          result.fundCounts[moduleId] = 0
+          continue
+        }
+        const options = {
+          type,
+          start: startDate,
+          end: endDate,
+          accountIds:
+            type === 'deposit' && !can(user, 'finance.withdrawals') ? [user.id] : undefined,
+          match: (row) => {
+            if (type === 'customer' && filters.customerId && row.accountId !== filters.customerId)
+              return false
+            if (
+              filters.personId &&
+              (type === 'customer'
+                ? row.createdBy !== filters.personId
+                : row.accountId !== filters.personId && row.createdBy !== filters.personId)
+            )
+              return false
+            if (!keyword) return true
+            const values = {
+              id: row.id,
+              accountId: row.accountId,
+              customerId: row.accountId,
+              userId: row.accountId,
+              customerName: customerNames.get(row.accountId) || '',
+              name: staffNames.get(row.accountId) || '',
+              kind:
+                row.kind === 'return'
+                  ? type === 'customer'
+                    ? '余额退还'
+                    : '押金退还'
+                  : kindNames[row.kind] || row.kind,
+              exitType:
+                row.exitType === 'leave' ? '离店' : row.exitType === 'absconded' ? '跑路' : '',
+              reason: row.reason,
+              orderNo: orderNumbers.get(row.orderId) || '',
+              createdByName: row.createdByName,
+              createdAt:
+                !filters.keywordField || filters.keywordField === 'createdAt'
+                  ? fundDateFormatter.format(new Date(row.createdAt))
+                  : '',
+              receiptName: row.receipt?.name || '',
+              receiptUrl: row.receipt?.url || '',
+              amount: row.amount / 100,
+              delta: row.delta / 100,
+              balanceAfter: row.balanceAfter / 100
+            }
+            const search = filters.keywordField
+              ? Object.hasOwn(values, filters.keywordField)
+                ? [values[filters.keywordField]]
+                : []
+              : Object.values(values)
+            return search.some((value) => String(value).toLowerCase().includes(keyword))
+          }
+        }
+        if (!keyword && !filters.customerId && !filters.personId) delete options.match
+        const count = funds.count(options)
+        result.fundCounts[moduleId] = count
+        if (request.modules?.some((row) => row.id === moduleId)) {
+          if (count > 100000) fail('资金流水匹配超过100000条，请缩小日期或关键词范围')
+          result[outputKey] = funds.rows({ ...options, limit: 100001 })
+        }
+      }
       return result
     },
     overview(userId, input = {}) {
@@ -2893,6 +3398,128 @@ export function createStudioService({
       return buildOverviewReport(snapshots, dates, now())
     },
     mutate,
+    customerBalance(userId, customerId) {
+      const { state, user } = activeState(userId)
+      requireCustomerAccount(user)
+      find(state, 'customers', customerId, '客户')
+      return { customerId, balance: funds.balance('customer', customerId) }
+    },
+    customerTransactions(userId, customerId, input = {}) {
+      const { state, user } = activeState(userId)
+      requirePermission(user, 'finance.refunds')
+      find(state, 'customers', customerId, '客户')
+      const { current, size } = accountPage(input),
+        options = { type: 'customer', accountIds: [customerId] }
+      return {
+        customerId,
+        balance: funds.balance('customer', customerId),
+        records: funds.rows({ ...options, limit: size, offset: (current - 1) * size }),
+        total: funds.count(options),
+        current,
+        size
+      }
+    },
+    playerDeposit(userId, targetId, input = {}) {
+      const { state, user } = activeState(userId)
+      if (!depositVisible(user, targetId)) fail('没有查看该打手押金的权限', 403)
+      find(state, 'users', targetId, '打手')
+      const { current, size } = accountPage(input),
+        options = { type: 'deposit', accountIds: [targetId] }
+      return {
+        userId: targetId,
+        balance: funds.balance('deposit', targetId),
+        records: funds.rows({ ...options, limit: size, offset: (current - 1) * size }),
+        total: funds.count(options),
+        current,
+        size
+      }
+    },
+    players(userId, input = {}) {
+      const { state, user } = activeState(userId)
+      if (!can(user, 'users.manage') && !can(user, 'finance.withdrawals'))
+        fail('没有查看打手档案的权限', 403)
+      const { current, size } = accountPage(input)
+      const contains = (value, query) =>
+        String(value || '')
+          .toLowerCase()
+          .includes(text(query, '搜索条件', { max: 128 }).toLowerCase())
+      for (const key of ['login', 'claim', 'withdraw'])
+        if (input[key] !== undefined && !['', 'true', 'false'].includes(String(input[key])))
+          fail('打手开关筛选无效')
+      const rows = state.users.filter(
+        (row) =>
+          row.role === 'player' &&
+          (!input.name || contains(row.name, input.name)) &&
+          (!input.username || contains(row.username, input.username)) &&
+          (!input.levelId || row.levelId === input.levelId) &&
+          (!input.status || row.status === input.status) &&
+          ['login', 'claim', 'withdraw'].every(
+            (key) =>
+              input[key] === undefined ||
+              input[key] === '' ||
+              playerAccess(row)[key] === (String(input[key]) === 'true')
+          )
+      )
+      const records = rows.slice((current - 1) * size, current * size).map((row) => ({
+        id: row.id,
+        username: row.username,
+        name: row.name,
+        role: row.role,
+        status: row.status,
+        levelId: row.levelId,
+        maxActiveOrders: row.maxActiveOrders,
+        activeOrders: activeCount(state, row.id),
+        playerAccess: playerAccess(row),
+        ...(can(user, 'finance.withdrawals')
+          ? { wallet: wallet(state, row.id), depositBalance: funds.balance('deposit', row.id) }
+          : {})
+      }))
+      return { records, total: rows.length, current, size }
+    },
+    playerHistory(userId, targetId, input = {}) {
+      const { state, user } = activeState(userId)
+      if (!can(user, 'orders.view') && !can(user, 'finance.withdrawals'))
+        fail('没有查看打手接单记录的权限', 403)
+      find(state, 'users', targetId, '打手')
+      const { current, size } = accountPage(input),
+        sortBy = choice(
+          input.sortBy || 'acceptedAt',
+          ['createdAt', 'completedAt', 'acceptedAt'],
+          '排序字段'
+        ),
+        sortOrder = choice(input.sortOrder || 'desc', ['asc', 'desc'], '排序方向')
+      const accepted = (row) =>
+        row.assignments.filter((entry) => entry.leaderId === targetId).at(-1)?.acceptedAt ||
+        row.submissions.find((entry) => entry.teammateId === targetId)?.submittedAt ||
+        ''
+      const value = (row) => (sortBy === 'acceptedAt' ? accepted(row) : row[sortBy] || '')
+      const rows = state.orders
+        .filter(
+          (row) =>
+            row.leaderId === targetId ||
+            row.teammateId === targetId ||
+            row.assignedTo === targetId ||
+            row.assignments.some((entry) => entry.leaderId === targetId) ||
+            row.submissions.some(
+              (entry) => entry.leaderId === targetId || entry.teammateId === targetId
+            )
+        )
+        .sort(
+          (a, b) =>
+            value(a).localeCompare(value(b)) * (sortOrder === 'asc' ? 1 : -1) ||
+            a.id.localeCompare(b.id)
+        )
+      return {
+        records: rows
+          .slice((current - 1) * size, current * size)
+          .map((row) =>
+            can(user, 'orders.view') ? safeOrder(state, user, row) : playerOrder(row)
+          ),
+        total: rows.length,
+        current,
+        size
+      }
+    },
     diagnostics(userId) {
       const state = readOnlyState(),
         user = find(state, 'users', userId, '账号')
@@ -2906,7 +3533,14 @@ export function createStudioService({
         .prepare('SELECT id FROM uploads')
         .all()
         .map((row) => row.id)
-      return buildDiagnosticsReport({ state, customerReferences, uploadIds, now: now() })
+      return buildDiagnosticsReport({
+        state,
+        customerReferences,
+        uploadIds,
+        fundAccounts: funds.accounts(),
+        fundTransactions: funds.diagnosticRows(),
+        now: now()
+      })
     },
     login(username, passwordValue) {
       const state = read(),
@@ -2915,6 +3549,7 @@ export function createStudioService({
       if (
         !user ||
         user.status !== 'active' ||
+        (user.role === 'player' && !playerAccess(user).login) ||
         !verifyPassword(passwordValue, state.passwords[user.id])
       )
         fail('账号或密码错误，或账号已停用', 401)
@@ -2964,7 +3599,12 @@ export function createStudioService({
         .get(sessionHash(token))
       if (!row || row.expires_at <= Date.parse(now())) return null
       const state = readOnly ? readOnlyState() : read(),
-        user = state.users.find((u) => u.id === row.user_id && u.status === 'active')
+        user = state.users.find(
+          (u) =>
+            u.id === row.user_id &&
+            u.status === 'active' &&
+            (u.role !== 'player' || playerAccess(u).login)
+        )
       return user ? publicStaff(state, user) : null
     },
     logout(token) {

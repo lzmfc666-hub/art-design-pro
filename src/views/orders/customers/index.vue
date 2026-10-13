@@ -1,8 +1,8 @@
 <template>
   <div class="customer-page art-full-height">
     <BusinessPageHeader
-      title="客户档案"
-      description="维护客户名称、来源、联系方式和游戏 ID，独立关联平台订单号。"
+      title="老板管理"
+      description="维护下单客户档案、来源与平台编号，查看储值余额；充值、扣款和退回由财务登记。"
       icon="ri:contacts-book-line"
       :badge="`${data?.customers.length || 0} 位客户`"
     />
@@ -29,13 +29,26 @@
         <template #orderReferenceCount="{ row }">{{
           row.orderReferenceCount ?? row.orderReferences?.length ?? 0
         }}</template>
+        <template #balance="{ row }">{{ money(row.balance) }}</template>
         <template #operation="{ row }"
           ><ElButton v-if="editable" link type="primary" :disabled="editorBusy" @click="edit(row)"
             >编辑与关联编号</ElButton
+          ><ElButton
+            link
+            type="primary"
+            :disabled="editorBusy || balanceBusy"
+            @click="openBalance(row)"
+            >储值账户</ElButton
           ></template
         >
       </ArtTable>
     </ElCard>
+    <CustomerBalance
+      v-model="balanceOpen"
+      :customer-id="balanceId"
+      :customer-name="balanceName"
+      @busy="balanceBusy = $event"
+    />
     <ElDialog
       v-model="open"
       :title="form.id ? '编辑客户档案' : '新增客户档案'"
@@ -202,7 +215,8 @@
   import { onBeforeRouteLeave, useRoute } from 'vue-router'
   import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
-  import { useStudio } from '@/hooks/business/useStudio'
+  import { useStudio, money } from '@/hooks/business/useStudio'
+  import CustomerBalance from './modules/customer-balance.vue'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import { studioRequest } from '@/api/studio'
@@ -218,6 +232,17 @@
   }
   const { data, user, loading, can, mutate, refresh, clearSession } = useStudio()
   const editable = computed(() => can('users.manage') || can('orders.create'))
+  const balanceOpen = ref(false)
+  const balanceId = ref('')
+  const balanceName = computed(
+    () => data.value?.customers.find((row) => row.id === balanceId.value)?.name || '老板'
+  )
+  const balanceBusy = ref(false)
+  function openBalance(row: Customer) {
+    if (balanceBusy.value || editorBusy.value) return
+    balanceId.value = row.id
+    balanceOpen.value = true
+  }
   const emptySearch = () => ({ name: '', contact: '', gameId: '', remark: '', platformId: '' })
   const search = ref(emptySearch())
   const route = useRoute()
@@ -263,13 +288,14 @@
     { prop: 'contact', label: '联系方式', minWidth: 180, showOverflowTooltip: true },
     { prop: 'gameId', label: '游戏 ID', minWidth: 160, showOverflowTooltip: true },
     { prop: 'orderReferenceCount', label: '关联编号', width: 100, useSlot: true },
+    { prop: 'balance', label: '储值余额', minWidth: 140, useSlot: true },
     { prop: 'remark', label: '备注', minWidth: 200, showOverflowTooltip: true },
-    { prop: 'operation', label: '操作', width: 150, fixed: 'right', useSlot: true }
+    { prop: 'operation', label: '操作', width: 260, fixed: 'right', useSlot: true }
   ])
   watch(
     () => route.fullPath,
     () => {
-      if (route.path !== '/orders/customers') return
+      if (route.path !== '/personnel/customers') return
       const keys = Object.keys(emptySearch()) as (keyof ReturnType<typeof emptySearch>)[]
       if (
         !keys.some((key) => typeof route.query[key] === 'string') &&

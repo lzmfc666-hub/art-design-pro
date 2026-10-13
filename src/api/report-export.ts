@@ -28,6 +28,7 @@ export interface ReportFilters {
   keywordField?: string
   archived?: 'all' | 'hot' | 'archive'
   personId?: string
+  customerId?: string
   platformId?: string
   status?: string
   orderDateKey?: 'createdAt' | 'paidAt' | 'completedAt'

@@ -22,6 +22,7 @@ const metricKeys = [
   'estimatedReward',
   'reward',
   'expenses',
+  'otherIncome',
   'supportCommission',
   'operationsCommission',
   'periodOperatingProfit',
@@ -163,6 +164,7 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
                 .filter((row) => !row.deletedAt && row.date === date)
                 .reduce((total, row) => total + row.amount, 0)
             : null,
+        otherIncome: profit ? (report?.otherIncome ?? 0) : null,
         personalNet: can('orders.view')
           ? snapshot.personalPerformance
             ? snapshot.personalPerformance
@@ -200,6 +202,7 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
         received: sum(periodDays, 'received'),
         refunds: sum(periodDays, 'refunds'),
         net: sum(periodDays, 'net'),
+        otherIncome: sum(periodDays, 'otherIncome'),
         estimatedReward: sum(periodDays, 'estimatedReward'),
         reward: sum(periodDays, 'reward'),
         supportCommission: periodDays.some((row) => row.incomplete)

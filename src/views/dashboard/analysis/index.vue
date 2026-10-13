@@ -2,7 +2,7 @@
   <div class="analysis-page">
     <BusinessPageHeader
       title="经营报表"
-      description="从真实收款、退款与经营成本，查看每月经营结果和渠道贡献。"
+      description="从订单收款、退款、其他收入与经营成本，查看每月经营结果和渠道贡献。"
       icon="ri:bar-chart-box-line"
       :badge="loading ? '正在更新' : incomplete ? '利润待核实' : '月度经营核算'"
     >
@@ -35,7 +35,7 @@
     </ElCard>
     <ElAlert
       class="mb-5"
-      title="收款、退款和经营成本归属客户原付款日；日报不扣底薪，月利润扣除当月底薪。提成的工资归属按订单完成月份计算。"
+      title="订单收入与成本归属原付款日；非订单客户扣款和离店 / 跑路押金没收按登记日计其他收入，并计入利润。充值及押金缴退不计经营收入，订单余额支付只计一次订单收入。日报不扣底薪，月利润再扣当月底薪。"
       type="info"
       :closable="false"
       show-icon
@@ -66,7 +66,7 @@
           @refresh="reloadMonth"
           ><template #left
             ><ElSpace wrap
-              ><ElTag effect="plain">{{ data?.reports.month || selectedMonth }} 付款归属日</ElTag
+              ><ElTag effect="plain">{{ data?.reports.month || selectedMonth }} 经营归属日</ElTag
               ><span class="text-g-500"
                 >月度底薪 {{ money(data?.reports.monthlyBase) }}</span
               ></ElSpace
@@ -88,6 +88,7 @@
           ><template #net="{ row }"
             ><strong>{{ money(row.net) }}</strong></template
           >
+          <template #otherIncome="{ row }">{{ money(row.otherIncome) }}</template>
           <template #reward="{ row }"
             ><div>{{ money(row.reward) }}</div
             ><small v-if="row.estimatedReward" class="text-warning"
@@ -228,10 +229,11 @@
   const channelTable = useBusinessTable(channels)
   const performanceTable = useBusinessTable(performance)
   const dayColumns = useTableColumns<DayReport>(() => [
-    { prop: 'date', label: '付款归属日', minWidth: 135 },
+    { prop: 'date', label: '经营归属日', minWidth: 135 },
     { prop: 'received', label: '客户收款', minWidth: 130, useSlot: true },
     { prop: 'refunds', label: '累计退款', minWidth: 125, useSlot: true },
     { prop: 'net', label: '净收入', minWidth: 130, useSlot: true },
+    { prop: 'otherIncome', label: '其他收入', minWidth: 140, useSlot: true },
     { prop: 'reward', label: '打手成本', minWidth: 170, useSlot: true },
     { prop: 'supportCommission', label: '客服提成', minWidth: 130, useSlot: true },
     { prop: 'operationsCommission', label: '运营提成', minWidth: 130, useSlot: true },

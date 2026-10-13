@@ -17,7 +17,7 @@ export function useStudio() {
   }
 }
 export const roleLabels: Record<Role, string> = {
-  owner: '老板',
+  owner: '工作室老板',
   manager: '店长',
   finance: '财务',
   hr: '人事',

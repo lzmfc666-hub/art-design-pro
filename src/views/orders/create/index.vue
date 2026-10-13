@@ -8,8 +8,9 @@
   import BusinessUpload from '@/components/business/BusinessUpload.vue'
   import { rulesForPlatform } from '@/utils/business/platform-rules'
   import { useMediaQuery } from '@vueuse/core'
+  import { studioRequest } from '@/api/studio'
 
-  const { data, user, can, mutate, loading, refresh } = useStudio()
+  const { data, user, can, mutate, loading, refresh, clearSession } = useStudio()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const router = useRouter()
   const saving = ref(false)
@@ -40,10 +41,43 @@
     dispatchMode: 'pool' as 'pool' | 'direct',
     assignedTo: '',
     payOnArrival: false,
+    paymentMethod: 'cash' as 'cash' | 'balance',
     receivedAmount: null as number | null,
     paidAt: new Date().toISOString(),
     receipt: null as Attachment | null
   })
+  const customerBalance = ref<number | null>(null)
+  const balanceLoading = ref(false)
+  const balanceError = ref('')
+  let balanceVersion = 0
+  let orderRequestId = crypto.randomUUID()
+  watch(
+    () => JSON.stringify(form),
+    () => {
+      orderRequestId = crypto.randomUUID()
+    },
+    { flush: 'sync' }
+  )
+  async function loadCustomerBalance() {
+    const version = ++balanceVersion
+    customerBalance.value = null
+    balanceError.value = ''
+    balanceLoading.value = false
+    if (!form.customerId) return
+    balanceLoading.value = true
+    try {
+      const result = await studioRequest<{ customerId: string; balance: number }>(
+        `customers/${encodeURIComponent(form.customerId)}/balance`
+      )
+      if (version === balanceVersion) customerBalance.value = result.balance
+    } catch (cause) {
+      if (version !== balanceVersion) return
+      if ((cause as { status?: number }).status === 401) clearSession()
+      balanceError.value = errorText(cause)
+    } finally {
+      if (version === balanceVersion) balanceLoading.value = false
+    }
+  }
   const templates = computed(() => data.value?.templates.filter((item) => item.active) ?? [])
   const steps = computed(() => [
     { label: '选择项目', done: !!form.templateId },
@@ -59,8 +93,15 @@
     {
       label: '核对收款与发布',
       done:
-        form.payOnArrival ||
-        (!!form.receivedAmount && !!form.paidAt && (!rules.value.requiresReceipt || !!form.receipt))
+        form.paymentMethod === 'balance'
+          ? !!form.amount &&
+            form.amount > 0 &&
+            customerBalance.value !== null &&
+            customerBalance.value >= toCents(form.amount)
+          : form.payOnArrival ||
+            (!!form.receivedAmount &&
+              !!form.paidAt &&
+              (!rules.value.requiresReceipt || !!form.receipt))
     }
   ])
   const activeStep = computed(() => {
@@ -112,7 +153,13 @@
   )
   const players = computed(
     () =>
-      data.value?.users.filter((item) => item.role === 'player' && item.status === 'active') ?? []
+      data.value?.users.filter(
+        (item) =>
+          item.role === 'player' &&
+          item.status === 'active' &&
+          item.playerAccess?.login !== false &&
+          item.playerAccess?.claim !== false
+      ) ?? []
   )
   const pendingOrders = computed(() =>
     (data.value?.orders ?? [])
@@ -158,6 +205,15 @@
         form.gameId = customer.gameId
         if (!form.platformId && customer.platformId) form.platformId = customer.platformId
       }
+      void loadCustomerBalance()
+    }
+  )
+  watch(
+    () => form.paymentMethod,
+    (method) => {
+      form.payOnArrival = false
+      form.receipt = null
+      if (method === 'balance') void loadCustomerBalance()
     }
   )
   watch(
@@ -212,6 +268,18 @@
 
   async function submitOrder() {
     if (operationBusy.value) return
+    const balancePayment = form.paymentMethod === 'balance'
+    if (
+      balancePayment &&
+      (balanceLoading.value || customerBalance.value === null || balanceError.value)
+    )
+      return void ElMessage.warning(balanceError.value || '请选择客户并等待储值余额读取完成')
+    if (
+      balancePayment &&
+      customerBalance.value !== null &&
+      toCents(form.amount) > customerBalance.value
+    )
+      return void ElMessage.warning('客户储值余额不足，请先充值或选择现金 / 平台收款')
     const warning = !form.templateId
       ? '请先选择订单项目'
       : !form.customerId
@@ -232,15 +300,20 @@
                       ? '当前订单来源不允许落地付'
                       : form.dispatchMode === 'direct' && !form.assignedTo
                         ? '请选择要指派的打手'
-                        : !form.payOnArrival &&
+                        : !balancePayment &&
+                            !form.payOnArrival &&
                             (form.receivedAmount === null || form.receivedAmount <= 0)
                           ? '普通订单须先确认客户已付款'
-                          : !form.payOnArrival &&
+                          : !balancePayment &&
+                              !form.payOnArrival &&
                               toCents(form.receivedAmount) !== toCents(form.amount)
                             ? '普通订单须足额收款，请核对订单金额与实收金额'
-                            : !form.payOnArrival && !form.paidAt
+                            : !balancePayment && !form.payOnArrival && !form.paidAt
                               ? '请选择客户实际付款时间'
-                              : !form.payOnArrival && rules.value.requiresReceipt && !form.receipt
+                              : !balancePayment &&
+                                  !form.payOnArrival &&
+                                  rules.value.requiresReceipt &&
+                                  !form.receipt
                                 ? '请上传客户付款凭证'
                                 : ''
     if (warning) {
@@ -251,11 +324,17 @@
     try {
       const result = (await mutate('/orders', {
         ...form,
+        requestId: orderRequestId,
         amount: toCents(form.amount),
         reward: toCents(form.reward),
-        receivedAmount: form.payOnArrival ? 0 : toCents(form.receivedAmount),
-        paidAt: form.payOnArrival ? null : form.paidAt,
-        receipt: form.payOnArrival || !rules.value.requiresReceipt ? null : form.receipt,
+        receivedAmount: balancePayment
+          ? toCents(form.amount)
+          : form.payOnArrival
+            ? 0
+            : toCents(form.receivedAmount),
+        paidAt: balancePayment || form.payOnArrival ? null : form.paidAt,
+        receipt:
+          balancePayment || form.payOnArrival || !rules.value.requiresReceipt ? null : form.receipt,
         shopId: form.shopId || null,
         assignedTo: form.dispatchMode === 'direct' ? form.assignedTo : null,
         roomCode: form.roomCode.trim(),
@@ -285,6 +364,7 @@
           dispatchMode: 'pool',
           assignedTo: '',
           payOnArrival: false,
+          paymentMethod: 'cash',
           receivedAmount: null,
           paidAt: new Date().toISOString(),
           receipt: null
@@ -300,6 +380,9 @@
 
   defineOptions({ name: 'OrderCreate' })
   onMounted(() => refresh().catch(() => {}))
+  onUnmounted(() => {
+    balanceVersion++
+  })
 </script>
 <template>
   <div>
@@ -463,9 +546,42 @@
                 placeholder="订单向打手开放后即可查看"
             /></ElFormItem>
             <ElDivider content-position="left">收款确认</ElDivider>
-            <ElFormItem v-if="rules.allowPayOnArrival" label="付款方式"
+            <ElFormItem label="收款方式" required>
+              <ElRadioGroup v-model="form.paymentMethod">
+                <ElRadioButton value="cash">现金 / 平台收款</ElRadioButton>
+                <ElRadioButton value="balance">老板储值支付</ElRadioButton>
+              </ElRadioGroup>
+            </ElFormItem>
+            <ElFormItem
+              v-if="rules.allowPayOnArrival && form.paymentMethod === 'cash'"
+              label="付款方式"
               ><ElSwitch v-model="form.payOnArrival" active-text="落地付：先发布，后补收款"
             /></ElFormItem>
+            <div v-if="form.paymentMethod === 'balance'" class="mb-5">
+              <div class="flex items-center gap-3 flex-wrap mb-3">
+                <span
+                  >当前储值余额：{{ balanceLoading ? '正在读取…' : money(customerBalance) }}</span
+                >
+                <ElButton
+                  size="small"
+                  :disabled="operationBusy || balanceLoading || !form.customerId"
+                  @click="loadCustomerBalance"
+                  >刷新余额</ElButton
+                >
+              </div>
+              <ElAlert
+                v-if="balanceError"
+                :title="balanceError"
+                type="error"
+                :closable="false"
+                class="mb-3"
+              />
+              <ElAlert
+                title="发布时从该客户储值余额扣除全额，并记录实际支付时间；按原来源规则允许退款时，会退回原储值账户。无需重复登记现金收款。"
+                type="info"
+                :closable="false"
+              />
+            </div>
             <ElAlert
               v-if="form.payOnArrival"
               title="落地付订单发布后须补录实际收款时间与凭证，收款前不能通过财务验收。"
@@ -474,7 +590,7 @@
               show-icon
               class="mb-5"
             />
-            <template v-else>
+            <template v-else-if="form.paymentMethod === 'cash'">
               <ElRow :gutter="20"
                 ><ElCol :xs="24" :sm="12"
                   ><ElFormItem label="已收金额（元）" required
@@ -540,9 +656,19 @@
               ><ElButton
                 type="primary"
                 :loading="saving"
-                :disabled="uploading || customerSaving"
+                :disabled="
+                  uploading ||
+                  customerSaving ||
+                  (form.paymentMethod === 'balance' && balanceLoading)
+                "
                 native-type="submit"
-                >{{ form.payOnArrival ? '发布落地付订单' : '确认收款并发布订单' }}</ElButton
+                >{{
+                  form.paymentMethod === 'balance'
+                    ? '确认储值扣款并发布订单'
+                    : form.payOnArrival
+                      ? '发布落地付订单'
+                      : '确认收款并发布订单'
+                }}</ElButton
               ></div
             >
           </ElForm>

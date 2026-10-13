@@ -30,13 +30,13 @@ export const APPEARANCE_ICON_TARGETS = [
   { key: 'dashboard', label: '工作台', icon: 'ri:pie-chart-line' },
   { key: 'orders', label: '订单业务', icon: 'ri:file-list-3-line' },
   { key: 'finance', label: '财务管理', icon: 'ri:wallet-3-line' },
-  { key: 'personnel', label: '排班考勤', icon: 'ri:calendar-check-line' },
+  { key: 'personnel', label: '人员管理', icon: 'ri:team-line' },
   { key: 'system', label: '系统管理', icon: 'ri:settings-3-line' },
   { key: 'reports', label: '数据报表', icon: 'ri:file-excel-2-line' },
   { key: 'createOrder', label: '创建与派单', icon: 'ri:add-box-line' },
   { key: 'orderList', label: '订单管理', icon: 'ri:list-check-2' },
-  { key: 'customers', label: '客户档案', icon: 'ri:contacts-book-line' },
-  { key: 'users', label: '人员管理', icon: 'ri:team-line' },
+  { key: 'customers', label: '老板管理', icon: 'ri:contacts-book-line' },
+  { key: 'users', label: '员工管理', icon: 'ri:user-settings-line' },
   { key: 'roles', label: '角色与权限', icon: 'ri:user-settings-line' },
   { key: 'business', label: '业务配置', icon: 'ri:gamepad-line' },
   { key: 'appearance', label: '界面外观', icon: 'ri:palette-line' },
@@ -46,6 +46,41 @@ export const APPEARANCE_ICON_TARGETS = [
   { key: 'export', label: '自选导出', icon: 'ri:download-2-line' },
   { key: 'profile', label: '个人中心', icon: 'ri:user-line' }
 ] as const
+const appearanceIconRouteAliases: Record<string, string> = {
+  '/personnel/employees': 'users',
+  '/personnel/customers': 'customers',
+  '/personnel/players': 'personnel',
+  '/system/user': 'users',
+  '/orders/customers': 'customers',
+  '/dashboard': 'dashboard',
+  '/dashboard/console': 'dashboard',
+  '/dashboard/analysis': 'dashboard',
+  '/orders': 'orders',
+  '/orders/create': 'createOrder',
+  '/orders/list': 'orderList',
+  '/finance': 'finance',
+  '/finance/settlement': 'finance',
+  '/finance/salary': 'salary',
+  '/personnel': 'personnel',
+  '/personnel/attendance': 'attendance',
+  '/system': 'system',
+  '/system/role': 'roles',
+  '/system/menu': 'roles',
+  '/system/business': 'business',
+  '/system/appearance': 'appearance',
+  '/system/logs': 'logs',
+  '/system/user-center': 'profile',
+  '/reports': 'reports',
+  '/reports/export': 'export'
+}
+export function canonicalAppearanceIcons(value: Record<string, string> = {}) {
+  const result = { ...value }
+  for (const [path, key] of Object.entries(appearanceIconRouteAliases)) {
+    if (Object.hasOwn(value, path) && !Object.hasOwn(result, key)) result[key] = value[path]
+    delete result[path]
+  }
+  return result
+}
 export const APPEARANCE_ICON_OPTIONS = [
   'ri:pie-chart-line',
   'ri:dashboard-line',
@@ -96,6 +131,7 @@ export function completeAppearance(value: AppearanceConfig): AppearanceConfig {
   return {
     ...defaults,
     ...value,
+    icons: canonicalAppearanceIcons(value.icons),
     login: value.login
       ? {
           ...defaults.login,

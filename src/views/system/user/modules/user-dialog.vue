@@ -1,7 +1,15 @@
 <template>
   <ElDialog
     v-model="visible"
-    :title="row ? '编辑人员档案' : '新增人员账号'"
+    :title="
+      accountKind === 'player'
+        ? row
+          ? '编辑打手档案'
+          : '新增打手账号'
+        : row
+          ? '编辑人员档案'
+          : '新增人员账号'
+    "
     width="min(820px, 94vw)"
     destroy-on-close
     :close-on-click-modal="!saving"
@@ -27,7 +35,7 @@
               ><ElFormItem label="登录账号" prop="username"
                 ><ElInput v-model="form.username" :disabled="!isAdmin" maxlength="64" /></ElFormItem
             ></ElCol>
-            <ElCol :xs="24" :sm="12"
+            <ElCol v-if="accountKind !== 'player'" :xs="24" :sm="12"
               ><ElFormItem label="角色" prop="role"
                 ><ElSelect v-model="form.role" :disabled="row?.id === user?.id"
                   ><ElOption
@@ -72,6 +80,38 @@
                   placeholder="8 至 128 位" /></ElFormItem
             ></ElCol>
           </ElRow>
+          <template v-if="form.role === 'player'">
+            <ElDivider content-position="left">打手操作权限</ElDivider>
+            <ElAlert
+              title="三项权限分别控制登录、接新订单和申请新提现。关闭接单不影响已接订单提交，关闭提现不改变已赚报酬；停用或关闭登录前，请先核对在进行订单及人员移交。"
+              type="info"
+              :closable="false"
+              class="mb-4"
+            />
+            <ElRow :gutter="20">
+              <ElCol :xs="24" :sm="8"
+                ><ElFormItem label="允许登录"
+                  ><ElSwitch
+                    v-model="form.playerAccess.login"
+                    active-text="允许"
+                    inactive-text="禁止" /></ElFormItem
+              ></ElCol>
+              <ElCol :xs="24" :sm="8"
+                ><ElFormItem label="允许接新订单"
+                  ><ElSwitch
+                    v-model="form.playerAccess.claim"
+                    active-text="允许"
+                    inactive-text="禁止" /></ElFormItem
+              ></ElCol>
+              <ElCol :xs="24" :sm="8"
+                ><ElFormItem label="允许申请新提现"
+                  ><ElSwitch
+                    v-model="form.playerAccess.withdraw"
+                    active-text="允许"
+                    inactive-text="禁止" /></ElFormItem
+              ></ElCol>
+            </ElRow>
+          </template>
         </ElTabPane>
         <ElTabPane label="个人权限">
           <ElAlert
@@ -127,14 +167,17 @@
   import { permissionLabels } from './permissions'
 
   const visible = defineModel<boolean>('visible', { required: true })
-  const props = defineProps<{ row?: Staff; defaultRole?: Role }>()
-  const emit = defineEmits<{ saved: [] }>()
+  const props = defineProps<{ row?: Staff; defaultRole?: Role; accountKind?: 'staff' | 'player' }>()
+  const emit = defineEmits<{ saved: []; busy: [value: boolean] }>()
   const { data, user, mutate } = useStudio()
   const isAdmin = computed(() => ['super_admin', 'admin'].includes(user.value?.role || ''))
   const selectableRoles = computed(() =>
     Object.fromEntries(
       Object.entries(roleLabels).filter(
-        ([key]) => key !== 'super_admin' || user.value?.role === 'super_admin'
+        ([key]) =>
+          (key !== 'super_admin' || user.value?.role === 'super_admin') &&
+          (props.accountKind !== 'staff' || key !== 'player') &&
+          (props.accountKind !== 'player' || key === 'player')
       )
     )
   )
@@ -148,8 +191,10 @@
     levelId: '',
     maxActiveOrders: 1,
     password: '',
-    permissionOverrides: {} as Record<string, boolean>
+    permissionOverrides: {} as Record<string, boolean>,
+    playerAccess: { login: true, claim: true, withdraw: true }
   })
+  watch(saving, (value) => emit('busy', value))
   const exportRestricted = computed(() => ['support', 'support_lead'].includes(form.role))
   const rules: FormRules = {
     name: [{ required: true, message: '请输入姓名或称呼', trigger: 'blur' }],
@@ -190,7 +235,7 @@
       {
         username: '',
         name: '',
-        role: props.defaultRole || 'support',
+        role: props.accountKind === 'player' ? 'player' : props.defaultRole || 'support',
         status: 'active',
         levelId: '',
         maxActiveOrders: 1,
@@ -200,6 +245,8 @@
     )
     form.password = ''
     form.permissionOverrides = { ...(props.row?.permissionOverrides || {}) }
+    form.playerAccess = { login: true, claim: true, withdraw: true, ...props.row?.playerAccess }
+    if (props.accountKind === 'player') form.role = 'player'
     nextTick(() => formRef.value?.clearValidate())
   })
   function overrideValue(key: string) {
@@ -221,6 +268,7 @@
       if (!(await formRef.value?.validate().catch(() => false))) return
       await mutate('/users', {
         ...form,
+        playerAccess: form.role === 'player' ? { ...form.playerAccess } : undefined,
         permissionOverrides: exportRestricted.value
           ? { ...form.permissionOverrides, 'reports.export': false }
           : form.permissionOverrides,

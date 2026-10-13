@@ -4,7 +4,7 @@ import { platformRules } from './platform-rules.mjs'
 
 const MAX_ROWS = 100000
 const roleNames = {
-  owner: '老板',
+  owner: '工作室老板',
   manager: '店长',
   finance: '财务',
   hr: '人事',
@@ -34,8 +34,21 @@ const statuses = {
 }
 const yuan = (value) => (value == null ? '待配置' : value / 100)
 const percent = (value) => (value == null ? '待配置' : value / 100)
-const displayTime = (value) =>
-  value ? new Date(value).toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai', hour12: false }) : ''
+const timeFormatter = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Asia/Shanghai',
+  hour12: false,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit'
+})
+const displayTime = (value) => {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? timeFormatter.format(date) : 'Invalid Date'
+}
 const permissionNames = {
   'orders.view': '查看全部订单',
   'orders.create': '创建和派单',
@@ -69,7 +82,7 @@ const menuRows = [
   ['经营报表', '/dashboard/analysis', ['profit.view']],
   ['订单管理', '/orders/list', ['orders.view']],
   ['创建与派单', '/orders/create', ['orders.create']],
-  ['客户档案', '/orders/customers', ['orders.create', 'users.manage']],
+  ['老板管理', '/personnel/customers', ['orders.create', 'users.manage', 'finance.refunds']],
   [
     '验收与结算',
     '/finance/settlement',
@@ -77,7 +90,8 @@ const menuRows = [
   ],
   ['工资与提成', '/finance/salary', ['salary.view', 'salary.all', 'salary.manage']],
   ['排班与到岗', '/personnel/attendance', ['attendance.manage']],
-  ['人员管理', '/system/user', ['users.manage']],
+  ['员工管理', '/personnel/employees', ['users.manage']],
+  ['打手管理', '/personnel/players', ['users.manage', 'finance.withdrawals']],
   ['角色与权限', '/system/role', ['users.manage']],
   ['业务配置', '/system/business', ['templates.manage', 'settings.manage']],
   ['界面外观', '/system/appearance', ['settings.manage']],
@@ -120,6 +134,134 @@ function modulesFor(snapshot) {
   const report = snapshot.reports
   const period = snapshot.exportPeriod
   const periodText = period ? `${period.label} ${period.start} 至 ${period.end}` : report.month
+  const customerFundKinds = {
+    recharge: '充值',
+    deduction: '非订单扣款',
+    return: '余额退还',
+    'order-payment': '订单余额付款',
+    'order-refund': '订单余额退款'
+  }
+  const depositKinds = { deposit: '缴纳押金', penalty: '离店押金没收', return: '押金退还' }
+  const exitTypes = { leave: '离店', absconded: '跑路' }
+  add(
+    'customerAccounts',
+    '老板客户储值账户',
+    '人员资金',
+    can('orders.view', 'orders.create', 'users.manage', 'finance.refunds'),
+    [
+      ['customerId', '客户 ID', 'text', false],
+      ['customerName', '老板客户'],
+      ['balance', '当前储值余额（元）', 'number'],
+      ['balanceScope', '余额口径']
+    ],
+    (snapshot.customerBalances || []).map((row) => ({
+      customerId: row.customerId,
+      customerName: customer(row.customerId),
+      balance: yuan(row.balance),
+      balanceScope: '当前余额快照，并非所选期间期末余额',
+      _customers: [row.customerId]
+    })),
+    '当前储值账户余额，不按所选日报、周报、月报或总计区间重建历史余额。充值、余额退还不计订单收入，交易明细见老板储值流水。'
+  )
+  add(
+    'customerTransactions',
+    '老板客户储值流水',
+    '人员资金',
+    can('finance.refunds'),
+    [
+      ['id', '流水 ID', 'text', false],
+      ['accountId', '客户 ID', 'text', false],
+      ['customerName', '老板客户'],
+      ['kind', '交易类型'],
+      ['amount', '交易金额（元）', 'number'],
+      ['delta', '余额变动（元）', 'number'],
+      ['balanceAfter', '本笔交易后余额（元）', 'number'],
+      ['reason', '登记原因'],
+      ['orderNo', '关联工作室订单号'],
+      ['createdByName', '登记人'],
+      ['createdAt', '登记时间'],
+      ['receiptName', '凭证名称', 'text', false],
+      ['receiptUrl', '凭证站内地址', 'text', false]
+    ],
+    (snapshot.customerTransactions || []).map((row) => ({
+      id: row.id,
+      accountId: row.accountId,
+      customerName: customer(row.accountId),
+      kind: customerFundKinds[row.kind] || row.kind,
+      amount: yuan(row.amount),
+      delta: yuan(row.delta),
+      balanceAfter: yuan(row.balanceAfter),
+      reason: row.reason,
+      orderNo: row.orderId ? orderIdentity(row.orderId).orderNo : '',
+      createdByName: row.createdByName || person(row.createdBy),
+      createdAt: displayTime(row.createdAt),
+      ...receipt(row.receipt),
+      _date: row.createdAt,
+      _people: [row.createdBy],
+      _customers: [row.accountId]
+    })),
+    '按实际登记日期筛选完整授权流水，不只导出页面分页。充值和退还不计收入；订单余额支付按订单只计一次收入，非订单扣款计其他收入。交易后余额是该笔记录的余额，不代表所选期间末余额。',
+    '实际交易登记日期'
+  )
+  add(
+    'playerDeposits',
+    '打手押金账户',
+    '人员资金',
+    can('finance.withdrawals') || snapshot.user.role === 'player',
+    [
+      ['userId', '打手 ID', 'text', false],
+      ['name', '打手'],
+      ['balance', '当前押金余额（元）', 'number'],
+      ['balanceScope', '余额口径']
+    ],
+    (snapshot.playerDeposits || []).map((row) => ({
+      userId: row.userId,
+      name: person(row.userId),
+      balance: yuan(row.balance),
+      balanceScope: '当前余额快照，并非所选期间期末余额',
+      _people: [row.userId]
+    })),
+    '当前押金余额与打手报酬钱包分开，不按报表期间重建历史。日常扣款只走报酬钱包；押金退还和没收仅用于离店或跑路处理。'
+  )
+  add(
+    'playerDepositTransactions',
+    '打手押金流水',
+    '人员资金',
+    can('finance.withdrawals') || snapshot.user.role === 'player',
+    [
+      ['id', '流水 ID', 'text', false],
+      ['accountId', '打手 ID', 'text', false],
+      ['name', '打手'],
+      ['kind', '交易类型'],
+      ['exitType', '离店类型'],
+      ['amount', '交易金额（元）', 'number'],
+      ['delta', '押金变动（元）', 'number'],
+      ['balanceAfter', '本笔交易后押金余额（元）', 'number'],
+      ['reason', '登记原因'],
+      ['createdByName', '登记人'],
+      ['createdAt', '登记时间'],
+      ['receiptName', '凭证名称', 'text', false],
+      ['receiptUrl', '凭证站内地址', 'text', false]
+    ],
+    (snapshot.playerDepositTransactions || []).map((row) => ({
+      id: row.id,
+      accountId: row.accountId,
+      name: person(row.accountId),
+      kind: depositKinds[row.kind] || row.kind,
+      exitType: exitTypes[row.exitType] || '',
+      amount: yuan(row.amount),
+      delta: yuan(row.delta),
+      balanceAfter: yuan(row.balanceAfter),
+      reason: row.reason,
+      createdByName: row.createdByName || person(row.createdBy),
+      createdAt: displayTime(row.createdAt),
+      ...receipt(row.receipt),
+      _date: row.createdAt,
+      _people: [row.accountId, row.createdBy]
+    })),
+    '按实际登记日期筛选完整授权流水。缴纳和退还押金不计收入；离店或跑路时的押金没收计其他收入，与日常报酬钱包扣款分开。交易后余额不代表所选期间期末余额。',
+    '实际交易登记日期'
+  )
   add(
     'playerAdjustments',
     '打手扣款与补款',
@@ -220,6 +362,7 @@ function modulesFor(snapshot) {
         ['received', '收款'],
         ['refunds', '退款'],
         ['net', '净收入'],
+        ['otherIncome', '其他收入（非订单扣款 / 离店押金没收）'],
         ['reward', '打手成本（含预计）'],
         ['estimatedReward', '预计打手成本'],
         ['supportCommission', '客服提成'],
@@ -239,6 +382,7 @@ function modulesFor(snapshot) {
             'received',
             'refunds',
             'net',
+            'otherIncome',
             'reward',
             'estimatedReward',
             'supportCommission',
@@ -249,7 +393,7 @@ function modulesFor(snapshot) {
             ['supportCommission', 'operationsCommission'].includes(key) &&
             report.days.some((row) => row.incomplete)
               ? '待配置'
-              : yuan(report.days.reduce((sum, row) => sum + row[key], 0))
+              : yuan(report.days.reduce((sum, row) => sum + (row[key] ?? 0), 0))
           ])
         ),
         monthlyBase: yuan(report.monthlyBase),
@@ -266,7 +410,7 @@ function modulesFor(snapshot) {
               : '完整'
       }
     ],
-    '按所选报表区间汇总；收入和订单成本归属原付款日。日/周报不摊底薪，工资发放按实际发放日；追加的明细字段筛选不回改经营汇总。'
+    '按所选报表区间汇总；订单收入和成本归属原付款日，其他收入按非订单客户扣款及离店押金没收的实际登记日计入利润。充值、押金缴纳及退还不计收入；余额支付订单只计一次订单收入。日/周报不摊底薪，工资发放按实际发放日；追加的明细字段筛选不回改经营汇总。'
   )
   add(
     'days',
@@ -279,6 +423,7 @@ function modulesFor(snapshot) {
         ['received', '收款'],
         ['refunds', '退款'],
         ['net', '净收入'],
+        ['otherIncome', '其他收入（非订单扣款 / 离店押金没收）'],
         ['reward', '打手成本（含预计）'],
         ['estimatedReward', '预计打手成本'],
         ['supportCommission', '客服提成'],
@@ -295,6 +440,7 @@ function modulesFor(snapshot) {
           'received',
           'refunds',
           'net',
+          'otherIncome',
           'reward',
           'estimatedReward',
           'supportCommission',
@@ -305,14 +451,14 @@ function modulesFor(snapshot) {
           key,
           ['supportCommission', 'operationsCommission'].includes(key) && row.incomplete
             ? '待配置'
-            : yuan(row[key])
+            : yuan(key === 'otherIncome' ? (row[key] ?? 0) : row[key])
         ])
       ),
       incomplete: row.incomplete ? '配置未齐' : '完整',
       _date: row.date
     })),
-    '所选报表区间的每日经营明细；退款回到原付款日调整，日利润未扣月底薪。',
-    '客户付款归属日'
+    '订单收入与退款归属原付款日；非订单扣款及离店押金没收按实际登记日计其他收入，已包含在日利润，不再次叠加。充值、押金缴退不计经营收入，日利润未扣月底薪。',
+    '订单付款 / 其他收入登记日'
   )
   add(
     'channels',
@@ -760,7 +906,7 @@ function modulesFor(snapshot) {
   )
   add(
     'staff',
-    '人员档案',
+    '员工档案',
     '人员管理',
     can('users.manage'),
     [
@@ -768,25 +914,59 @@ function modulesFor(snapshot) {
       ['username', '登录账号'],
       ['role', '角色'],
       ['status', '账号状态'],
-      ['levelName', '打手等级'],
-      ['maxActiveOrders', '接单上限', 'number'],
-      ['activeOrders', '执行中订单', 'number'],
       ['permissions', '实际业务权限'],
       ['permissionOverrides', '个人权限覆盖', 'text', false]
     ],
-    snapshot.users.map((row) => ({
-      ...row,
-      role: roleNames[row.role],
-      status: row.status === 'active' ? '启用' : '停用',
-      levelName: snapshot.levels.find((level) => level.id === row.levelId)?.name || '',
-      permissions: permissionText(permissionsFor(row)),
-      permissionOverrides: Object.entries(row.permissionOverrides)
-        .map(([key, value]) => `${permissionNames[key] || key}：${value ? '允许' : '禁止'}`)
-        .join('；'),
-      _status: row.status,
-      _people: [row.id]
-    })),
-    '人员和权限配置快照，不导出密码、密码哈希或登录会话；日期范围不适用。'
+    snapshot.users
+      .filter((row) => row.role !== 'player')
+      .map((row) => ({
+        ...row,
+        role: roleNames[row.role],
+        status: row.status === 'active' ? '启用' : '停用',
+        permissions: permissionText(permissionsFor(row)),
+        permissionOverrides: Object.entries(row.permissionOverrides || {})
+          .map(([key, value]) => `${permissionNames[key] || key}：${value ? '允许' : '禁止'}`)
+          .join('；'),
+        _status: row.status,
+        _people: [row.id]
+      })),
+    '当前员工和权限配置快照，仅含非打手账号，不导出密码、密码哈希或登录会话；日期范围不适用。'
+  )
+  add(
+    'players',
+    '打手档案',
+    '人员管理',
+    can('users.manage'),
+    [
+      ['name', '打手姓名 / 称呼'],
+      ['username', '登录账号'],
+      ['status', '账号状态'],
+      ['levelName', '打手等级'],
+      ['maxActiveOrders', '接单上限', 'number'],
+      ['activeOrders', '执行中订单', 'number'],
+      ['loginAllowed', '允许登录'],
+      ['claimAllowed', '允许新接单'],
+      ['withdrawAllowed', '允许申请提现'],
+      ['permissions', '实际业务权限'],
+      ['permissionOverrides', '个人权限覆盖', 'text', false]
+    ],
+    snapshot.users
+      .filter((row) => row.role === 'player')
+      .map((row) => ({
+        ...row,
+        status: row.status === 'active' ? '启用' : '停用',
+        levelName: snapshot.levels.find((level) => level.id === row.levelId)?.name || '',
+        loginAllowed: row.playerAccess?.login === false ? '禁止' : '允许',
+        claimAllowed: row.playerAccess?.claim === false ? '禁止' : '允许',
+        withdrawAllowed: row.playerAccess?.withdraw === false ? '禁止' : '允许',
+        permissions: permissionText(permissionsFor(row)),
+        permissionOverrides: Object.entries(row.permissionOverrides || {})
+          .map(([key, value]) => `${permissionNames[key] || key}：${value ? '允许' : '禁止'}`)
+          .join('；'),
+        _status: row.status,
+        _people: [row.id]
+      })),
+    '当前打手档案及操作开关，不包含密码或登录会话。登录、新接单及新提现分别控制，已有订单继续按实际权限处理；日期范围不适用。'
   )
   add(
     'roles',
@@ -956,13 +1136,13 @@ function modulesFor(snapshot) {
               dashboard: '工作台',
               orders: '订单业务',
               finance: '财务管理',
-              personnel: '排班考勤',
+              personnel: '人员管理',
               system: '系统管理',
               reports: '数据报表',
               createOrder: '创建与派单',
               orderList: '订单管理',
-              customers: '客户档案',
-              users: '人员管理',
+              customers: '老板管理',
+              users: '员工管理',
               roles: '角色与权限',
               business: '业务配置',
               appearance: '界面外观',
@@ -1062,7 +1242,7 @@ export function getExportCatalog(snapshot) {
           ? snapshot.customerOrderReferenceCount
           : item.id === 'logs' && snapshot.auditLogCount != null
             ? snapshot.auditLogCount
-            : rows.length
+            : (snapshot.fundCounts?.[item.id] ?? rows.length)
     }))
   }
 }
@@ -1078,12 +1258,13 @@ function filterOptions(filters) {
     'keywordField',
     'archived',
     'personId',
+    'customerId',
     'platformId',
     'status',
     'orderDateKey'
   ]
   if (Object.keys(filters).some((key) => !allowed.includes(key))) invalid('导出筛选项无效')
-  for (const key of ['keyword', 'keywordField', 'personId', 'platformId', 'status']) {
+  for (const key of ['keyword', 'keywordField', 'personId', 'customerId', 'platformId', 'status']) {
     if (filters[key] != null && (typeof filters[key] !== 'string' || filters[key].length > 200))
       invalid('导出筛选项过长或格式无效')
   }
@@ -1119,9 +1300,9 @@ export function buildExportSheets(snapshot, request, { previewLimit } = {}) {
     !request ||
     !Array.isArray(request.modules) ||
     request.modules.length === 0 ||
-    request.modules.length > 30
+    request.modules.length > 64
   )
-    invalid('请选择 1 至 30 个导出模块')
+    invalid('请选择 1 至 64 个导出模块')
   if (request.month && request.month !== snapshot.reports.month) invalid('核算月份与当前数据不一致')
   const options = { ...filterOptions(request.filters) }
   const periodRange = snapshot.exportPeriod
@@ -1161,6 +1342,8 @@ export function buildExportSheets(snapshot, request, { previewLimit } = {}) {
     })
     const matching = item.rows.filter((row) => {
       if (options.personId && row._people && !row._people.includes(options.personId)) return false
+      if (options.customerId && row._customers && !row._customers.includes(options.customerId))
+        return false
       if (options.platformId && row._platforms && !row._platforms.includes(options.platformId))
         return false
       if (options.status && row._status && row._status !== options.status) return false

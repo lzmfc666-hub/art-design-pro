@@ -16,7 +16,10 @@
         ><ArtSvgIcon icon="ri:calendar-2-line" />{{
           data?.reports.month || selectedMonth
         }}
-        经营成本</span
+        经营收支</span
+      >
+      <span
+        >其他收入 <strong>{{ ready ? money(totals.otherIncome) : '—' }}</strong></span
       >
       <span
         >打手成本 <strong>{{ ready ? money(totals.reward) : '—' }}</strong></span
@@ -52,11 +55,20 @@
         received: sum.received + row.received,
         refunds: sum.refunds + row.refunds,
         net: sum.net + row.net,
+        otherIncome: sum.otherIncome + row.otherIncome,
         reward: sum.reward + row.reward,
         estimatedReward: sum.estimatedReward + row.estimatedReward,
         expenses: sum.expenses + row.expenses
       }),
-      { received: 0, refunds: 0, net: 0, reward: 0, estimatedReward: 0, expenses: 0 }
+      {
+        received: 0,
+        refunds: 0,
+        net: 0,
+        otherIncome: 0,
+        reward: 0,
+        estimatedReward: 0,
+        expenses: 0
+      }
     )
   )
   const metrics = computed(() => [
@@ -87,7 +99,7 @@
         data.value?.reports.monthlyProfit == null
           ? '配置未齐'
           : money(data.value.reports.monthlyProfit),
-      note: '已扣成本、提成、费用及底薪',
+      note: '含其他收入，已扣成本、提成、费用及底薪',
       icon: 'ri:funds-line',
       tone: data.value?.reports.monthlyProfit == null ? ('warning' as const) : ('primary' as const)
     }

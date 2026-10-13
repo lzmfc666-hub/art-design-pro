@@ -20,6 +20,7 @@ export interface OverviewMetrics {
   estimatedReward: number | null
   reward: number | null
   expenses: number | null
+  otherIncome: number | null
   supportCommission: number | null
   operationsCommission: number | null
   periodOperatingProfit: number | null
@@ -51,6 +52,7 @@ export interface OverviewDay {
   received: number | null
   refunds: number | null
   net: number | null
+  otherIncome: number | null
   orders: number | null
   createdOrders: number | null
   completedOrders: number | null

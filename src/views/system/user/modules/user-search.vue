@@ -17,6 +17,7 @@
     status: string
   }
   const form = defineModel<T>({ required: true })
+  const props = defineProps<{ accountKind?: 'staff' | 'player' }>()
   defineEmits<{ search: []; reset: [] }>()
   const exampleFields = computed(() => 'userName' in form.value && !('name' in form.value))
   const items = computed(() => [
@@ -57,7 +58,10 @@
             type: 'select',
             props: {
               clearable: true,
-              options: Object.entries(roleLabels).map(([value, label]) => ({ value, label }))
+              options: Object.entries(roleLabels)
+                .filter(([value]) => props.accountKind !== 'staff' || value !== 'player')
+                .filter(([value]) => props.accountKind !== 'player' || value === 'player')
+                .map(([value, label]) => ({ value, label }))
             }
           }
         ]

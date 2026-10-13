@@ -12,7 +12,14 @@ const asRows = (value) =>
   Array.isArray(value) ? value.filter((row) => row && typeof row === 'object') : []
 
 /** Read-only inspection of saved business records. It does not rebuild or repair any ledger. */
-export function buildDiagnosticsReport({ state, customerReferences = [], uploadIds = [], now }) {
+export function buildDiagnosticsReport({
+  state,
+  customerReferences = [],
+  uploadIds = [],
+  fundAccounts = [],
+  fundTransactions = [],
+  now
+}) {
   const checks = [
     ['references', '业务关联', '核对档案和订单的关联记录是否存在、店铺是否属于订单来源。'],
     ['orders', '订单状态与金额', '核对状态、实际负责人、收款及完成材料，不将指定待接单当作异常。'],
@@ -21,6 +28,11 @@ export function buildDiagnosticsReport({ state, customerReferences = [], uploadI
     ['customerReferences', '客户平台编号', '核对独立编号的客户、来源、店铺关联及重复记录。'],
     ['payroll', '工资发放快照', '核对已发快照算术、人员关联和同月重复底薪，不用当前方案重算历史。'],
     ['attendance', '实际工时登记', '核对已登记工时，正常默认显示及未来排班不视为实际到岗。'],
+    [
+      'funds',
+      '客户储值与打手押金',
+      '核对独立账户与不可变流水、原路订单支付退款，不将资金缴纳当营业收入。'
+    ],
     ['pending', '配置和人工待办', '未配置工资、取消补偿及线下待追回只列提醒，不视为数据损坏。']
   ].map(([id, label, description]) => ({
     id,
@@ -637,6 +649,149 @@ export function buildDiagnosticsReport({ state, customerReferences = [], uploadI
         'user',
         user.id,
         '当前工资或提成配置未齐，需补齐后月结；不属于已发快照错误。'
+      )
+  }
+  const fundTotals = new Map(),
+    fundIds = new Map(),
+    refundTotals = new Map()
+  for (const row of asRows(fundTransactions)) {
+    inspect('funds')
+    fundIds.set(row.id, row)
+    const key = JSON.stringify([row.type, row.accountId]),
+      before = fundTotals.get(key) || 0
+    if (
+      !['customer', 'deposit'].includes(row.type) ||
+      !(row.type === 'customer' ? maps.customers : maps.users).has(row.accountId)
+    )
+      issue(
+        'funds',
+        'error',
+        'fund-transaction',
+        row.id,
+        '资金流水关联的账户档案不存在或类型不合法。'
+      )
+    const positive = ['recharge', 'deposit', 'order-refund'].includes(row.kind)
+    if (
+      !(
+        row.type === 'customer'
+          ? ['recharge', 'deduction', 'return', 'order-payment', 'order-refund']
+          : ['deposit', 'penalty', 'return']
+      ).includes(row.kind)
+    )
+      issue('funds', 'error', 'fund-transaction', row.id, '资金流水操作类型与账户类型不一致。')
+    if (
+      !money(row.amount) ||
+      row.amount <= 0 ||
+      !money(row.delta, { signed: true }) ||
+      row.delta !== (positive ? row.amount : -row.amount)
+    )
+      issue('funds', 'error', 'fund-transaction', row.id, '资金流水金额、方向或整数分不一致。')
+    if (
+      !Number.isSafeInteger(row.balanceAfter) ||
+      row.balanceAfter < 0 ||
+      row.balanceAfter !== before + row.delta
+    )
+      issue('funds', 'error', 'fund-transaction', row.id, '资金流水余额快照与此前累计变动不一致。')
+    if (
+      row.type === 'deposit' &&
+      ['penalty', 'return'].includes(row.kind) &&
+      !['leave', 'absconded'].includes(row.exitType)
+    )
+      issue(
+        'funds',
+        'error',
+        'fund-transaction',
+        row.id,
+        '押金退还或没收缺少退店/跑路场景，不能作为日常扣罚。'
+      )
+    if (money(row.delta, { signed: true })) fundTotals.set(key, before + row.delta)
+    attachment('funds', 'fund-transaction', row, row.receipt, '资金凭证')
+    if (row.kind === 'order-refund') {
+      const originalOrder = maps.orders.get(row.orderId)
+      if (
+        !originalOrder ||
+        originalOrder.paymentMethod !== 'balance' ||
+        row.accountId !== (originalOrder.balanceCustomerId || originalOrder.customerId)
+      )
+        issue(
+          'funds',
+          'error',
+          'fund-transaction',
+          row.id,
+          '储值退款流水没有回到订单原付款客户账户。'
+        )
+      refundTotals.set(row.orderId, (refundTotals.get(row.orderId) || 0) + row.amount)
+    }
+  }
+  const accountKeys = new Set()
+  for (const row of asRows(fundAccounts)) {
+    inspect('funds')
+    const key = JSON.stringify([row.type, row.accountId])
+    accountKeys.add(key)
+    if (
+      !Number.isSafeInteger(row.balance) ||
+      row.balance < 0 ||
+      row.balance !== (fundTotals.get(key) || 0)
+    )
+      issue(
+        'funds',
+        'error',
+        'fund-account',
+        row.accountId,
+        '当前储值或押金余额与独立流水累计不一致。'
+      )
+  }
+  for (const key of fundTotals.keys())
+    if (!accountKeys.has(key))
+      issue(
+        'funds',
+        'error',
+        'fund-account',
+        JSON.parse(key)[1],
+        '已有资金流水但对应账户余额记录不存在。'
+      )
+  for (const order of tables.orders.filter((row) => row.paymentMethod === 'balance')) {
+    inspect('funds')
+    const payment = fundIds.get(order.balanceTransactionId)
+    if (
+      !payment ||
+      payment.type !== 'customer' ||
+      payment.kind !== 'order-payment' ||
+      payment.orderId !== order.id ||
+      payment.accountId !== (order.balanceCustomerId || order.customerId) ||
+      payment.amount !== order.receivedAmount ||
+      payment.createdAt !== order.paidAt
+    )
+      issue(
+        'funds',
+        'error',
+        'order',
+        order.id,
+        '储值付款订单与原客户扣款流水、实收或付款时间不一致。'
+      )
+    const expectedRefund = tables.refunds
+      .filter((row) => row.orderId === order.id && row.status === 'paid')
+      .reduce((total, row) => total + row.amount, 0)
+    if ((refundTotals.get(order.id) || 0) !== expectedRefund)
+      issue('funds', 'error', 'order', order.id, '储值订单已退款金额与原路回到账户的流水不一致。')
+  }
+  for (const refund of tables.refunds.filter(
+    (row) => row.status === 'paid' && maps.orders.get(row.orderId)?.paymentMethod === 'balance'
+  )) {
+    const row = fundIds.get(refund.balanceTransactionId)
+    if (
+      !row ||
+      row.kind !== 'order-refund' ||
+      row.orderId !== refund.orderId ||
+      row.amount !== refund.amount ||
+      refund.refundMethod !== 'balance'
+    )
+      issue(
+        'funds',
+        'error',
+        'refund',
+        refund.id,
+        '已付储值退款记录与原路回账流水指针或金额不一致。'
       )
   }
   const errorCount = checks.reduce((sum, row) => sum + row.errorCount, 0)

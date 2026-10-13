@@ -17,16 +17,6 @@ export const ordersRoutes: AppRouteRecord = {
       name: 'OrderCreate',
       component: '/orders/create',
       meta: { title: '创建与派单', icon: 'ri:add-box-line', studioPermissions: ['orders.create'] }
-    },
-    {
-      path: 'customers',
-      name: 'Customers',
-      component: '/orders/customers',
-      meta: {
-        title: '客户档案',
-        icon: 'ri:contacts-book-line',
-        studioPermissions: ['users.manage', 'orders.create']
-      }
     }
   ]
 }

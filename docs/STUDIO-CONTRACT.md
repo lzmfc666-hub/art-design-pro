@@ -88,9 +88,31 @@ POST `/orders/:id/action` 支持：
 
 已提现后退款/旧金额更正仍保留人工核对流程，系统不自动追回。旧 rewardCredit 更正不足覆盖在途提现时明确拒绝，须先处理占用；新的独立扣补款只扣可用余额，不改变占用。人工-origin 扣补按财务费用口径计统计，订单状态冲正由原订单奖励成本计算，避免重复扣成本。
 
+## 储值、押金与资金请求
+
+客户余额读需 orders.view / orders.create / users.manage / finance.refunds 任一项；客户流水和资金写入需 finance.refunds。打手押金财务需 finance.withdrawals，本人仅能读自己的余额与流水。
+
+| 方法 / 路径 | 请求 | 响应 |
+| --- | --- | --- |
+| GET `/customers/:id/balance` | 无 | `{customerId,balance}` |
+| GET `/customers/:id/transactions` | current / size | `{customerId,balance,records,total,current,size}` |
+| POST `/customer-transactions` | `{customerId,kind:'recharge'\|'deduction'\|'return',amount,reason,receipt?,requestId}` | FundTransaction |
+| GET `/players/:id/deposit`、`/players/:id/deposit-transactions` | current / size | `{userId,balance,records,total,current,size}` |
+| POST `/player-deposit-transactions` | `{userId,kind:'deposit'\|'penalty'\|'return',amount,reason,receipt?,requestId,exitType?}` | FundTransaction；return / penalty 必须 exitType=leave / absconded |
+
+FundTransaction 为 `{id,accountId,kind,amount,delta,balanceAfter,reason,receipt,orderId,createdAt,createdBy,createdByName,requestId,exitType}`。amount 正整数分，delta 带正负号，账户不透支；记录不可更新 / 删除。客户额外自动种类为 order-payment、order-refund，由真实订单 / 退款事务产生。不同财务可按同类资金授权读取关联 SQLite 凭证；客户余额读权限、普通人员管理不能猜 ID 借读资金图片。
+
+写入请求通过 requestId 幂等，同编号同操作者同操作及内容返回原结果，变化 409，权限总在缓存前检查。资金、订单、审计、请求结果同时提交；无结果确认时重试原操作，不轮换编号制造第二笔。原 /player-adjustments 的 requestId 为兼容可选，新页面始终提供；resolve 继续按原终态规则防重复。
+
+Order 新增 `paymentMethod?:cash\|balance`、`balanceTransactionId?`、`balanceCustomerId?`，旧单默认 cash。余额创建及 confirm-payment 强制 requestId、全额扣款，paidAt 为服务器实际扣款时，内部资金支付不需要重复现金凭证，不与落地付同时创建。已余额收款不能改客户金额、实收或付款方式；退款申请 / 直接退款及 approve 须 requestId，审批后自动回原 balanceCustomerId 的储值账户，通过唯一退款源防重复，不再现金退款。大厅原退款禁令保持。
+
+充值和押金缴纳 / 退还不记经营收入；客户 deduction 及退出 penalty 才按真实登记日计 days / overview 的 otherIncome，利润加入此项且订单营收不重复。报酬钱包扣补沿旧成本调整。导出新增 customerBalances/customerTransactions/playerDeposits/playerDepositTransactions，余额只为当前 snapshot，流水由授权 SQL 筛选后计数 / 读取，实际总计日期含 SQL 最早资金时间，超 100000 明确拒绝。人员 staff 改为非打手，新增 players 档案模块；完整模块数为 34，批选上限 64，白名单授权保持。
+
 ## 人员、工资与考勤
 
-POST `/users` `{id?,username,name,role,status,levelId,maxActiveOrders,permissionOverrides,password?}` 需 `users.manage`；密码创建/重置仅管理员及超管，普通账号不能维护超管。停用、更换角色或重置密码撤销会话。
+POST `/users` `{id?,username,name,role,status,levelId,maxActiveOrders,permissionOverrides,password?,playerAccess?}` 需 `users.manage`；密码创建/重置仅管理员及超管，普通账号不能维护超管。停用、更换角色或重置密码撤销会话。playerAccess 三个严格布尔开关 login / claim / withdraw，旧默认为 true，关闭 login 撤销已有会话；claim 只拒新接单而允许已有提交，withdraw 只拒新申请而不改原报酬 / 在途提现。有未完订单、报酬、押金、在途提现或待追回差额时禁止 player 换角色隐藏资金。
+
+GET `/players?current&size&name&username&levelId&status&login&claim&withdraw` 由 users.manage 或 finance.withdrawals 分页投影名单，财务只拿可见资金 / 基本信息，不扩大账号编辑权限；GET `/players/:id/orders?current&size` 提供真实接单 / 上报记录，按服务端实际订单查看授权返回，不伪造 history。前端人员管理的 employees / customers / players 直接复用原页，旧 /system/user（role=player 切玩家）、/orders/customers 为永久跳转，query/hash 保留，退出后仍有效。
 
 POST `/salary-plans` 使用 SalaryPlan，需 `salary.manage`；`platformRates` 明确保存 0 或 null 的不同含义。POST `/payrolls` `{month}` 需同时有 `salary.manage` 与 `salary.all`，本人薪资授权不能用于全员月结。配置未齐禁止发放，工资保存历史快照；完成月计佣金，退款归原付款日并只扣新增多发佣金差额，补充结算不重发底薪。大厅运营提成固定 0，固定工资佣金为 0，已有有效计提比例/人员归属与发放底薪快照不随未来配置重算。月中换方案当前不按天折底薪，按工时计薪仍未开放。
 

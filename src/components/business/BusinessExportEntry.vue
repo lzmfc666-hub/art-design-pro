@@ -15,11 +15,12 @@
   const modules: Record<string, string> = {
     '/orders/list': 'orders',
     '/orders/create': 'orders',
-    '/orders/customers': 'customers',
+    '/personnel/customers': 'customers',
+    '/personnel/employees': 'staff',
+    '/personnel/players': 'players',
     '/dashboard/analysis': 'days',
     '/finance/salary': 'payroll',
     '/personnel/attendance': 'attendance',
-    '/system/user': 'staff',
     '/system/role': 'roles',
     '/system/menu': 'menus',
     '/system/business': 'templates',
@@ -51,10 +52,19 @@
       module = ['refunds', 'withdrawals', 'expenses'].includes(String(route.query.tab))
         ? String(route.query.tab)
         : 'orders'
+    if (route.path === '/personnel/players' && !can('users.manage')) module = 'playerDeposits'
     const related: Record<string, string> = {
       '/finance/settlement': 'orders,refunds,withdrawals,wallets,expenses',
       '/finance/salary': 'payroll,payrollHistory,salaryPlans',
-      '/system/business': 'templates,platforms,shops,levels'
+      '/system/business': 'templates,platforms,shops,levels',
+      '/personnel/customers': can('finance.refunds')
+        ? 'customers,customerAccounts,customerTransactions'
+        : 'customers,customerAccounts',
+      '/personnel/players': can('users.manage')
+        ? can('finance.withdrawals')
+          ? 'players,playerDeposits,playerDepositTransactions,playerAdjustments'
+          : 'players'
+        : 'playerDeposits,playerDepositTransactions,playerAdjustments'
     }
     void router.push({
       path: '/reports/export',

@@ -98,16 +98,20 @@
             show-word-limit
         /></ElFormItem>
         <ElAlert
-          title="保存即视为实际退款，请完成客户退款后再登记。"
+          :title="
+            refundIsBalance
+              ? '保存后自动退回原客户储值账户，不再重复线下退款。'
+              : '保存即视为实际退款，请完成客户退款后再登记。'
+          "
           type="warning"
           :closable="false"
         />
       </ElForm>
       <template #footer
         ><ElButton :disabled="saving" @click="refund.open = false">取消</ElButton
-        ><ElButton type="primary" :loading="saving" @click="saveRefund"
-          >确认实际退款并登记</ElButton
-        ></template
+        ><ElButton type="primary" :loading="saving" @click="saveRefund">{{
+          refundIsBalance ? '确认退回储值' : '确认实际退款并登记'
+        }}</ElButton></template
       >
     </ElDialog>
     <ElDialog
@@ -240,6 +244,18 @@
     { prop: 'actions', label: '操作', width: 190, fixed: 'right', useSlot: true }
   ])
   const refund = reactive({ open: false, orderId: '', amount: null as number | null, reason: '' })
+  let refundRequestId = crypto.randomUUID()
+  watch(
+    () => JSON.stringify([refund.orderId, refund.amount, refund.reason]),
+    () => {
+      refundRequestId = crypto.randomUUID()
+    },
+    { flush: 'sync' }
+  )
+  const refundIsBalance = computed(
+    () => data.value?.orders.find((row) => row.id === refund.orderId)?.paymentMethod === 'balance'
+  )
+  const approveRequestIds = new Map<string, string>()
   const reason = reactive({
     open: false,
     id: '',
@@ -296,16 +312,26 @@
     Object.assign(reason, { open: true, id: row.id, action, text: '' })
   }
   async function approve(row: Refund) {
+    const isBalance =
+      data.value?.orders.find((order) => order.id === row.orderId)?.paymentMethod === 'balance'
     try {
       await ElMessageBox.confirm(
-        `确认已向客户实际退款 ${money(row.amount)}？退款将归属原订单付款日统计。`,
+        isBalance
+          ? `确认将 ${money(row.amount)} 退回原客户储值账户？本次无需线下再退款。`
+          : `确认已向客户实际退款 ${money(row.amount)}？退款将归属原订单付款日统计。`,
         '审核并登记退款',
-        { type: 'warning', confirmButtonText: '确认已退款', cancelButtonText: '取消' }
+        {
+          type: 'warning',
+          confirmButtonText: isBalance ? '确认退回储值' : '确认已退款',
+          cancelButtonText: '取消'
+        }
       )
     } catch {
       return
     }
-    await submit(`/refunds/${row.id}/action`, { action: 'approve' }, '退款已登记')
+    const requestId = approveRequestIds.get(row.id) || crypto.randomUUID()
+    approveRequestIds.set(row.id, requestId)
+    await submit(`/refunds/${row.id}/action`, { action: 'approve', requestId }, '退款已登记')
   }
   async function saveRefund() {
     if (
@@ -319,7 +345,12 @@
     if (
       await submit(
         '/refunds',
-        { orderId: refund.orderId, amount: refund.amount, reason: refund.reason },
+        {
+          orderId: refund.orderId,
+          amount: refund.amount,
+          reason: refund.reason,
+          requestId: refundRequestId
+        },
         '实际退款已登记'
       )
     )

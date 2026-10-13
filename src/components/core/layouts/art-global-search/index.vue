@@ -126,6 +126,7 @@
   import { handleMenuJump } from '@/utils/navigation'
   import { type ScrollbarInstance } from 'element-plus'
   import { useStudio, statusLabels, roleLabels } from '@/hooks/business/useStudio'
+  import { canAccessStudioPage } from '@/utils/auth/studio-access'
 
   defineOptions({ name: 'ArtGlobalSearch' })
 
@@ -147,8 +148,12 @@
     [
       { key: 'menu', label: '菜单', allowed: true },
       { key: 'orders', label: '订单', allowed: can('orders.view') },
-      { key: 'customers', label: '客户', allowed: can('orders.create') || can('users.manage') },
-      { key: 'people', label: '人员', allowed: can('users.manage') }
+      {
+        key: 'customers',
+        label: '老板客户',
+        allowed: ['orders.create', 'users.manage', 'finance.refunds'].some(can)
+      },
+      { key: 'people', label: '人员', allowed: can('users.manage') || can('finance.withdrawals') }
     ].filter((item) => item.allowed)
   )
   const fields: Record<SearchCategory, { key: string; label: string }[]> = {
@@ -276,22 +281,26 @@
           })
         if (result.length >= 30) break
       }
-    if (category.value === 'people' && can('users.manage'))
+    if (category.value === 'people' && (can('users.manage') || can('finance.withdrawals')))
       for (const person of data.value?.users || []) {
+        if (person.role !== 'player' && !can('users.manage')) continue
         if (
           (searchField.value === 'username' ? person.username : person.name)
             .toLowerCase()
             .includes(q)
         )
           result.push({
-            path: `/system/user?role=${person.role}&${searchField.value}=${encodeURIComponent(searchField.value === 'username' ? person.username : person.name)}`,
+            path: `/personnel/${person.role === 'player' ? 'players' : 'employees'}?role=${person.role}&${searchField.value}=${encodeURIComponent(searchField.value === 'username' ? person.username : person.name)}`,
             meta: { title: person.name },
             businessRecord: true,
             description: `人员 · ${roleLabels[person.role]} · ${person.status === 'active' ? '启用' : '停用'}`
           })
         if (result.length >= 30) break
       }
-    if (category.value === 'customers' && (can('users.manage') || can('orders.create')))
+    if (
+      category.value === 'customers' &&
+      ['users.manage', 'orders.create', 'finance.refunds'].some(can)
+    )
       for (const customer of data.value?.customers || []) {
         const values: Record<string, string> = {
           name: customer.name,
@@ -301,7 +310,7 @@
         }
         if (values[searchField.value]?.toLowerCase().includes(q))
           result.push({
-            path: `/orders/customers?id=${encodeURIComponent(customer.id)}`,
+            path: `/personnel/customers?id=${encodeURIComponent(customer.id)}`,
             meta: { title: customer.name },
             businessRecord: true,
             description: `客户 · ${customer.gameId || '未填写游戏 ID'}`
@@ -327,7 +336,7 @@
 
     const flattenAndMatch = (item: AppRouteRecord) => {
       if (item.meta?.isHide) return
-      if (item.meta.studioPermissions?.length && !item.meta.studioPermissions.some(can)) return
+      if (!canAccessStudioPage(item.meta.studioPermissions, item.meta.studioPermissionMode)) return
 
       const lowerItemTitle = (
         searchField.value === 'path' ? item.path : formatMenuTitle(item.meta.title)
