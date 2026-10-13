@@ -407,7 +407,12 @@
   watch(
     [() => route.query.id, () => data.value?.customers],
     ([id]) => {
-      if (route.path !== '/orders/customers' || typeof id !== 'string' || !id || editorBusy.value)
+      if (
+        route.path !== '/personnel/customers' ||
+        typeof id !== 'string' ||
+        !id ||
+        editorBusy.value
+      )
         return
       const row = data.value?.customers.find((item) => item.id === id)
       if (row && (!open.value || form.id !== id)) edit(row)

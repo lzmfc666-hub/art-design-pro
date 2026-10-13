@@ -33,6 +33,7 @@ export const personnelRoutes: AppRouteRecord = {
       meta: {
         title: '打手管理',
         icon: 'ri:gamepad-line',
+        keepAlive: true,
         studioPermissions: ['users.manage', 'finance.withdrawals']
       }
     },

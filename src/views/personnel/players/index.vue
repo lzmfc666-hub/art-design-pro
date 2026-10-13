@@ -191,7 +191,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+  import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
   import { onBeforeRouteLeave, useRoute } from 'vue-router'
   import { ElMessage } from 'element-plus'
   import { studioRequest } from '@/api/studio'
@@ -321,12 +321,45 @@
   ])
   let version = 0
   let controller: AbortController | undefined
-  onUnmounted(() => {
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined
+  let refreshPending = false
+  const pageActive = () => route.path === '/personnel/players'
+  function stopRefresh() {
     version++
     controller?.abort()
+    clearTimeout(refreshTimer)
+    refreshTimer = undefined
+    refreshPending = false
+    loading.value = false
+  }
+  function scheduleRefresh() {
+    if (!pageActive() || !canView.value || document.visibilityState === 'hidden') return
+    refreshPending = true
+    clearTimeout(refreshTimer)
+    refreshTimer = setTimeout(() => {
+      refreshTimer = undefined
+      if (
+        !pageActive() ||
+        !canView.value ||
+        document.visibilityState === 'hidden' ||
+        pageBusy.value
+      )
+        return
+      refreshPending = false
+      void refreshRows()
+    }, 40)
+  }
+  onMounted(() => {
+    window.addEventListener('focus', scheduleRefresh)
+    document.addEventListener('visibilitychange', scheduleRefresh)
+  })
+  onUnmounted(() => {
+    stopRefresh()
+    window.removeEventListener('focus', scheduleRefresh)
+    document.removeEventListener('visibilitychange', scheduleRefresh)
   })
   async function refreshRows() {
-    if (!canView.value) return
+    if (!pageActive() || !canView.value) return
     const currentVersion = ++version
     controller?.abort()
     controller = new AbortController()
@@ -345,6 +378,12 @@
         size: number
       }>(`players?${query}`, undefined, 'GET', controller.signal)
       if (currentVersion !== version) return
+      const lastPage = Math.max(1, Math.ceil(result.total / result.size))
+      if (result.current > lastPage) {
+        pagination.current = lastPage
+        await refreshRows()
+        return
+      }
       records.value = result.records
       Object.assign(pagination, { total: result.total, current: result.current, size: result.size })
       if (selected.value) {
@@ -438,14 +477,17 @@
       ElMessage.warning('正在保存或上传，请稍后离开')
       return false
     }
+    editorOpen.value = false
+    detailOpen.value = false
+    selected.value = null
     return true
   })
   watch(
-    () => data.value?.permissions.join('|'),
+    [() => data.value?.permissions.join('|'), () => user.value?.id],
     () => {
-      version++
-      controller?.abort()
+      stopRefresh()
       records.value = []
+      pagination.total = 0
       if (!canView.value) {
         detailOpen.value = false
         editorOpen.value = false
@@ -455,16 +497,35 @@
       if (!canManage.value) editorOpen.value = false
       if (!canFunds.value && detailTab.value !== 'history') detailTab.value = 'history'
       if (!canHistory.value) detailOpen.value = false
-      void refreshRows()
+      scheduleRefresh()
     },
     { immediate: true }
   )
+  watch(() => data.value, scheduleRefresh)
+  watch(pageBusy, (busy) => {
+    if (!busy && refreshPending) scheduleRefresh()
+  })
+  let routeFiltersInitialized = false
+  let routeName: unknown
+  let routeUsername: unknown
   watch(
-    [() => route.query.name, () => route.query.username],
-    ([name, username]) => {
-      search.value.name = typeof name === 'string' ? name : ''
-      search.value.username = typeof username === 'string' ? username : ''
-      applySearch()
+    [() => route.path, () => route.query.name, () => route.query.username],
+    ([path, name, username]) => {
+      if (path !== '/personnel/players') {
+        stopRefresh()
+        return
+      }
+      if (!routeFiltersInitialized || name !== routeName || username !== routeUsername) {
+        routeFiltersInitialized = true
+        routeName = name
+        routeUsername = username
+        search.value.name = typeof name === 'string' ? name : ''
+        search.value.username = typeof username === 'string' ? username : ''
+        applied.name = search.value.name
+        applied.username = search.value.username
+        pagination.current = 1
+      }
+      scheduleRefresh()
     },
     { immediate: true }
   )

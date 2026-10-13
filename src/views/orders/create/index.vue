@@ -1,8 +1,8 @@
 <script setup lang="ts">
-  import { computed, reactive, ref, watch } from 'vue'
+  import { computed, nextTick, reactive, ref, watch } from 'vue'
   import { useRouter, onBeforeRouteLeave } from 'vue-router'
   import { ElMessage, ElMessageBox } from 'element-plus'
-  import type { Attachment, OrderTemplate } from '@/types/studio'
+  import type { Attachment, Customer, CustomerOrderReference, OrderTemplate } from '@/types/studio'
   import { useStudio, money, formatTime } from '@/hooks/business/useStudio'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import BusinessUpload from '@/components/business/BusinessUpload.vue'
@@ -19,12 +19,25 @@
   const customerDialog = ref(false)
   const submitted = ref(false)
   const customerDraft = reactive({
+    id: '',
     name: '',
     contact: '',
     gameId: '',
     remark: '',
     platformId: null as string | null
   })
+  const customerReference = reactive({ shopId: '', externalOrderNo: '' })
+  const savedCustomerReferences = ref<CustomerOrderReference[]>([])
+  const customerPlatform = computed(() =>
+    data.value?.platforms.find((item) => item.id === customerDraft.platformId)
+  )
+  const customerRules = computed(() => rulesForPlatform(customerPlatform.value))
+  const customerShops = computed(
+    () => data.value?.shops.filter((item) => item.platformId === customerDraft.platformId) ?? []
+  )
+  const customerHasReference = computed(() =>
+    savedCustomerReferences.value.some((item) => item.platformId === customerDraft.platformId)
+  )
   const operationBusy = computed(() => saving.value || uploading.value || customerSaving.value)
   const form = reactive({
     templateId: '',
@@ -184,11 +197,29 @@
     const item = templates.value.find((template) => template.id === id)
     if (item) selectTemplate(item)
   }
-  function openCustomerDialog() {
+  async function openCustomerDialog() {
     if (operationBusy.value) return
-    customerDraft.platformId = form.platformId || null
+    if (!customerDraft.id) {
+      customerDraft.platformId = form.platformId || null
+      await nextTick()
+      customerReference.shopId = customerShops.value.some((item) => item.id === form.shopId)
+        ? form.shopId
+        : customerRules.value.requiresShop
+          ? (customerShops.value[0]?.id ?? '')
+          : ''
+      customerReference.externalOrderNo = form.externalOrderNo
+    }
     customerDialog.value = true
   }
+  watch(
+    () => customerDraft.platformId,
+    () => {
+      customerReference.shopId = customerRules.value.requiresShop
+        ? (customerShops.value[0]?.id ?? '')
+        : ''
+      customerReference.externalOrderNo = ''
+    }
+  )
   watch(
     () => form.platformId,
     () => {
@@ -230,35 +261,88 @@
     }
   )
 
-  async function saveCustomer() {
+  async function saveCustomer(selectAfterSave = true) {
     if (customerSaving.value) return
     if (!customerDraft.name.trim()) {
       ElMessage.warning('请填写客户名称')
       return
     }
+    const externalOrderNo = customerReference.externalOrderNo.trim()
+    const needsReference = customerRules.value.requiresExternalOrderNo
+    if (needsReference && !externalOrderNo && (!selectAfterSave || !customerHasReference.value))
+      return void ElMessage.warning('当前客户来源要求平台订单号，请填写关联编号')
+    if (
+      needsReference &&
+      externalOrderNo &&
+      customerRules.value.requiresShop &&
+      !customerReference.shopId
+    )
+      return void ElMessage.warning('当前客户来源要求店铺，请选择同来源店铺')
     customerSaving.value = true
     try {
-      const result = (await mutate('/customers', {
+      const result = await mutate<Customer>('/customers', {
         ...customerDraft,
+        id: customerDraft.id || undefined,
         name: customerDraft.name.trim()
-      })) as { id?: string; customer?: { id: string } }
-      form.customerId =
-        result?.id ??
-        result?.customer?.id ??
-        data.value?.customers.find(
-          (item) =>
-            item.name === customerDraft.name.trim() && item.contact === customerDraft.contact
-        )?.id ??
-        ''
+      })
+      // 建档与关联编号是独立保存；后续失败时继续维护同一客户，避免重复建档。
+      customerDraft.id = result.id
+      if (needsReference && externalOrderNo) {
+        const submittedReference = {
+          customerId: result.id,
+          platformId: customerDraft.platformId!,
+          shopId: customerReference.shopId || null,
+          externalOrderNo
+        }
+        const sameReference = (item: CustomerOrderReference) =>
+          item.platformId === submittedReference.platformId &&
+          item.shopId === submittedReference.shopId &&
+          item.externalOrderNo === submittedReference.externalOrderNo
+        let reference = savedCustomerReferences.value.find(sameReference)
+        if (!reference) {
+          try {
+            reference = await mutate<CustomerOrderReference>(
+              '/customer-order-references',
+              submittedReference
+            )
+          } catch (cause) {
+            // 编号成功但响应丢失时，核对最新记录后继续，重复编号不会再次入库。
+            const recent = await studioRequest<{ records: CustomerOrderReference[] }>(
+              `customers/${encodeURIComponent(result.id)}/order-references?current=1&size=100`
+            ).catch(() => null)
+            reference = recent?.records.find(sameReference)
+            if (!reference) throw cause
+          }
+          savedCustomerReferences.value.unshift(reference)
+        }
+      }
+      if (!selectAfterSave) {
+        customerReference.externalOrderNo = ''
+        ElMessage.success('客户及关联编号已保存，可继续添加下一条')
+        return
+      }
+      form.customerId = result.id
+      if (customerDraft.platformId) form.platformId = customerDraft.platformId
+      await nextTick()
+      const lastReference = savedCustomerReferences.value.find(
+        (item) => item.platformId === form.platformId
+      )
+      if (lastReference && rules.value.requiresExternalOrderNo) {
+        form.shopId = lastReference.shopId || ''
+        form.externalOrderNo = lastReference.externalOrderNo
+      }
       customerDialog.value = false
       Object.assign(customerDraft, {
+        id: '',
         name: '',
         contact: '',
         gameId: '',
         remark: '',
         platformId: null
       })
-      ElMessage.success('客户已建档')
+      savedCustomerReferences.value = []
+      Object.assign(customerReference, { shopId: '', externalOrderNo: '' })
+      ElMessage.success('客户已建档并选中')
     } catch (error) {
       ElMessage.error(errorText(error))
     } finally {
@@ -728,16 +812,23 @@
     </ElRow>
     <ElDialog
       v-model="customerDialog"
+      class="quick-customer-dialog"
       title="新增客户档案"
-      width="min(540px, 94vw)"
+      width="min(680px, 94vw)"
       :close-on-click-modal="!customerSaving"
       :close-on-press-escape="!customerSaving"
       :show-close="!customerSaving"
-      ><ElForm
+      ><ElAlert
+        v-if="customerDraft.id"
+        title="客户档案已保存；可继续追加编号，保存并选择后返回当前订单。"
+        type="success"
+        :closable="false"
+        class="mb-4"
+      /><ElForm
         :model="customerDraft"
         label-position="top"
         :disabled="customerSaving"
-        @submit.prevent="saveCustomer"
+        @submit.prevent="saveCustomer()"
         ><ElFormItem label="客户名称" required
           ><ElInput v-model="customerDraft.name" maxlength="100" /></ElFormItem
         ><ElFormItem label="客户来源"
@@ -748,6 +839,51 @@
               :value="item.id"
               :label="item.name" /></ElSelect
         ></ElFormItem>
+        <template v-if="customerRules.requiresExternalOrderNo">
+          <ElAlert
+            :title="`${customerPlatform?.name || '当前来源'}要求平台订单号；可逐条追加多个关联编号。档案编号不会生成业务订单或收入。`"
+            type="info"
+            :closable="false"
+            class="mb-4"
+          />
+          <ElFormItem
+            v-if="customerShops.length || customerRules.requiresShop"
+            label="关联店铺"
+            :required="customerRules.requiresShop"
+            ><ElSelect
+              v-model="customerReference.shopId"
+              :clearable="!customerRules.requiresShop"
+              placeholder="选择同来源店铺"
+              ><ElOption
+                v-for="item in customerShops"
+                :key="item.id"
+                :value="item.id"
+                :label="item.name" /></ElSelect
+          ></ElFormItem>
+          <ElFormItem label="关联平台订单号" :required="!customerHasReference"
+            ><ElInput
+              v-model="customerReference.externalOrderNo"
+              maxlength="128"
+              placeholder="填写完整编号，可保留开头的 0"
+          /></ElFormItem>
+        </template>
+        <div v-if="savedCustomerReferences.length" class="mb-4">
+          <p class="text-sm text-g-500 mb-2"
+            >已独立保存 {{ savedCustomerReferences.length }} 条编号</p
+          >
+          <div class="flex flex-wrap gap-2">
+            <ElTag
+              v-for="item in savedCustomerReferences"
+              :key="item.id"
+              :title="item.externalOrderNo"
+              class="quick-customer-reference-tag"
+            >
+              {{ data?.platforms.find((platform) => platform.id === item.platformId)?.name }}：{{
+                item.externalOrderNo
+              }}
+            </ElTag>
+          </div>
+        </div>
         <ElFormItem label="联系方式"
           ><ElInput v-model="customerDraft.contact" maxlength="100" /></ElFormItem
         ><ElFormItem label="客户游戏 ID"
@@ -760,10 +896,39 @@
             maxlength="2000" /></ElFormItem></ElForm
       ><template #footer
         ><ElButton :disabled="customerSaving" @click="customerDialog = false">取消</ElButton
-        ><ElButton type="primary" :loading="customerSaving" @click="saveCustomer"
+        ><ElButton
+          v-if="customerRules.requiresExternalOrderNo"
+          :disabled="customerSaving"
+          @click="saveCustomer(false)"
+          >保存并继续添加编号</ElButton
+        ><ElButton type="primary" :loading="customerSaving" @click="saveCustomer()"
           >保存并选择</ElButton
         ></template
       ></ElDialog
     >
   </div>
 </template>
+
+<style scoped>
+  :deep(.quick-customer-dialog .el-dialog__footer) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  :deep(.quick-customer-dialog .el-dialog__footer .el-button + .el-button) {
+    margin-left: 0;
+  }
+
+  .quick-customer-reference-tag {
+    max-width: 100%;
+    height: auto;
+    min-height: 24px;
+  }
+
+  .quick-customer-reference-tag :deep(.el-tag__content) {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+</style>
