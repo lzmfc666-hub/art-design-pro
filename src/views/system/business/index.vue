@@ -7,72 +7,173 @@
       badge="历史订单保留快照"
     />
     <ElCard class="mb-4" shadow="never">
-      <ElTabs v-model="tab"
+      <ElTabs v-model="tab" :before-leave="preservePanelHeight"
         ><ElTabPane name="templates" label="订单项目 / 模板" /><ElTabPane
           name="sources"
           label="来源平台与店铺" /><ElTabPane name="levels" label="打手等级"
       /></ElTabs>
       <p class="text-sm text-g-500">配置用于新订单，已创建订单保留原模板快照和业务归属。</p>
     </ElCard>
-    <template v-if="tab === 'templates'">
-      <ArtSearchBar
-        v-model="search"
-        :items="searchItems"
-        @search="templateTable.resetPage"
-        @reset="resetSearch"
-      />
-      <ElCard class="mt-4">
+    <div
+      ref="panelsRef"
+      class="business-config-panels"
+      :style="{ minHeight: panelMinHeight ? `${panelMinHeight}px` : undefined }"
+    >
+      <template v-if="tab === 'templates'">
+        <ArtSearchBar
+          v-model="search"
+          :items="searchItems"
+          @search="templateTable.resetPage"
+          @reset="resetSearch"
+        />
+        <ElCard class="mt-4">
+          <ArtTableHeader
+            v-model:columns="templateColumns.columnChecks.value"
+            :loading="loading"
+            @refresh="reload"
+          >
+            <template #left
+              ><ElButton
+                v-if="can('templates.manage')"
+                type="primary"
+                :disabled="saving"
+                @click="editTemplate()"
+                v-ripple
+                >新增订单项目</ElButton
+              ><span class="ml-3 text-sm text-g-500"
+                >空白价格表示待配置，下单时必须填写有效金额。</span
+              ></template
+            >
+          </ArtTableHeader>
+          <ArtTable
+            :data="templateTable.tableData.value"
+            :columns="templateColumns.columns.value"
+            :loading="loading"
+            :pagination="templateTable.pagination"
+            height="440"
+            @pagination:size-change="templateTable.handleSizeChange"
+            @pagination:current-change="templateTable.handleCurrentChange"
+          >
+            <template #amount="{ row }">{{ money(row.amount) }}</template
+            ><template #reward="{ row }">{{ money(row.reward) }}</template>
+            <template #active="{ row }"
+              ><ElTag :type="row.active ? 'success' : 'info'">{{
+                row.active ? '启用' : '停用'
+              }}</ElTag></template
+            >
+            <template #operation="{ row }"
+              ><ElButton
+                v-if="can('templates.manage')"
+                link
+                type="primary"
+                :disabled="saving"
+                @click="editTemplate(row)"
+                >编辑配置</ElButton
+              ></template
+            >
+          </ArtTable>
+        </ElCard>
+      </template>
+      <template v-else-if="tab === 'sources'">
+        <ElCard class="mb-4">
+          <ArtTableHeader
+            v-model:columns="platformColumns.columnChecks.value"
+            :loading="loading"
+            @refresh="reload"
+          >
+            <template #left
+              ><ElButton
+                v-if="can('settings.manage')"
+                type="primary"
+                :disabled="saving"
+                @click="editPlatform()"
+                v-ripple
+                >新增来源平台</ElButton
+              ><span class="ml-3 text-sm text-g-500"
+                >各来源独立配置下单规则；运营提成比例由财务维护。</span
+              ></template
+            >
+          </ArtTableHeader>
+          <ArtTable
+            :data="platformTable.tableData.value"
+            :columns="platformColumns.columns.value"
+            :loading="loading"
+            :pagination="platformTable.pagination"
+            height="280"
+            @pagination:size-change="platformTable.handleSizeChange"
+            @pagination:current-change="platformTable.handleCurrentChange"
+          >
+            <template #rules="{ row }"
+              ><ElSpace wrap
+                ><ElTag
+                  v-for="rule in platformRuleLabels.filter(
+                    (item) => rulesForPlatform(row)[item.key]
+                  )"
+                  :key="rule.key"
+                  size="small"
+                  type="info"
+                  >{{ rule.label }}</ElTag
+                ></ElSpace
+              ></template
+            >
+            <template #operation="{ row }"
+              ><ElButton
+                v-if="can('settings.manage')"
+                link
+                type="primary"
+                :disabled="saving"
+                @click="editPlatform(row)"
+                >编辑平台</ElButton
+              ></template
+            >
+          </ArtTable>
+        </ElCard>
+        <ElCard>
+          <ArtTableHeader
+            v-model:columns="shopColumns.columnChecks.value"
+            :loading="loading"
+            @refresh="reload"
+          >
+            <template #left
+              ><ElButton
+                v-if="can('settings.manage')"
+                type="primary"
+                :disabled="saving || !shopPlatforms.length"
+                @click="editShop()"
+                v-ripple
+                >新增来源店铺</ElButton
+              ></template
+            >
+          </ArtTableHeader>
+          <ArtTable
+            :data="shopTable.tableData.value"
+            :columns="shopColumns.columns.value"
+            :loading="loading"
+            :pagination="shopTable.pagination"
+            :show-table-header="false"
+            height="240"
+            @pagination:size-change="shopTable.handleSizeChange"
+            @pagination:current-change="shopTable.handleCurrentChange"
+          >
+            <template #platformId="{ row }">{{
+              data?.platforms.find((item) => item.id === row.platformId)?.name || row.platformId
+            }}</template>
+            <template #operation="{ row }"
+              ><ElButton
+                v-if="can('settings.manage')"
+                link
+                type="primary"
+                :disabled="saving"
+                @click="editShop(row)"
+                >编辑店铺</ElButton
+              ></template
+            >
+          </ArtTable>
+        </ElCard>
+      </template>
+      <ElCard v-else>
         <ArtTableHeader
-          v-model:columns="templateColumns.columnChecks.value"
-          :loading="loading"
-          @refresh="reload"
-        >
-          <template #left
-            ><ElButton
-              v-if="can('templates.manage')"
-              type="primary"
-              :disabled="saving"
-              @click="editTemplate()"
-              v-ripple
-              >新增订单项目</ElButton
-            ><span class="ml-3 text-sm text-g-500"
-              >空白价格表示待配置，下单时必须填写有效金额。</span
-            ></template
-          >
-        </ArtTableHeader>
-        <ArtTable
-          :data="templateTable.tableData.value"
-          :columns="templateColumns.columns.value"
-          :loading="loading"
-          :pagination="templateTable.pagination"
-          height="440"
-          @pagination:size-change="templateTable.handleSizeChange"
-          @pagination:current-change="templateTable.handleCurrentChange"
-        >
-          <template #amount="{ row }">{{ money(row.amount) }}</template
-          ><template #reward="{ row }">{{ money(row.reward) }}</template>
-          <template #active="{ row }"
-            ><ElTag :type="row.active ? 'success' : 'info'">{{
-              row.active ? '启用' : '停用'
-            }}</ElTag></template
-          >
-          <template #operation="{ row }"
-            ><ElButton
-              v-if="can('templates.manage')"
-              link
-              type="primary"
-              :disabled="saving"
-              @click="editTemplate(row)"
-              >编辑配置</ElButton
-            ></template
-          >
-        </ArtTable>
-      </ElCard>
-    </template>
-    <template v-else-if="tab === 'sources'">
-      <ElCard class="mb-4">
-        <ArtTableHeader
-          v-model:columns="platformColumns.columnChecks.value"
+          v-model:columns="levelColumns.columnChecks.value"
           :loading="loading"
           @refresh="reload"
         >
@@ -81,75 +182,30 @@
               v-if="can('settings.manage')"
               type="primary"
               :disabled="saving"
-              @click="editPlatform()"
+              @click="editLevel()"
               v-ripple
-              >新增来源平台</ElButton
-            ><span class="ml-3 text-sm text-g-500"
-              >各来源独立配置下单规则；运营提成比例由财务维护。</span
+              >新增等级</ElButton
             ></template
           >
         </ArtTableHeader>
+        <ElAlert
+          title="公共抢单池按发布时间计算等级开放延迟；等级开放后持续可接单，直接指派采用指定负责人流程。"
+          type="info"
+          :closable="false"
+          class="mb-4"
+        />
         <ArtTable
-          :data="platformTable.tableData.value"
-          :columns="platformColumns.columns.value"
+          :data="levelTable.tableData.value"
+          :columns="levelColumns.columns.value"
           :loading="loading"
-          :pagination="platformTable.pagination"
-          height="280"
-          @pagination:size-change="platformTable.handleSizeChange"
-          @pagination:current-change="platformTable.handleCurrentChange"
-        >
-          <template #rules="{ row }"
-            ><ElSpace wrap
-              ><ElTag
-                v-for="rule in platformRuleLabels.filter((item) => rulesForPlatform(row)[item.key])"
-                :key="rule.key"
-                size="small"
-                type="info"
-                >{{ rule.label }}</ElTag
-              ></ElSpace
-            ></template
-          >
-          <template #operation="{ row }"
-            ><ElButton
-              v-if="can('settings.manage')"
-              link
-              type="primary"
-              :disabled="saving"
-              @click="editPlatform(row)"
-              >编辑平台</ElButton
-            ></template
-          >
-        </ArtTable>
-      </ElCard>
-      <ElCard>
-        <ArtTableHeader
-          v-model:columns="shopColumns.columnChecks.value"
-          :loading="loading"
-          @refresh="reload"
-        >
-          <template #left
-            ><ElButton
-              v-if="can('settings.manage')"
-              type="primary"
-              :disabled="saving || !shopPlatforms.length"
-              @click="editShop()"
-              v-ripple
-              >新增来源店铺</ElButton
-            ></template
-          >
-        </ArtTableHeader>
-        <ArtTable
-          :data="shopTable.tableData.value"
-          :columns="shopColumns.columns.value"
-          :loading="loading"
-          :pagination="shopTable.pagination"
+          :pagination="levelTable.pagination"
           :show-table-header="false"
-          height="240"
-          @pagination:size-change="shopTable.handleSizeChange"
-          @pagination:current-change="shopTable.handleCurrentChange"
+          height="360"
+          @pagination:size-change="levelTable.handleSizeChange"
+          @pagination:current-change="levelTable.handleCurrentChange"
         >
-          <template #platformId="{ row }">{{
-            data?.platforms.find((item) => item.id === row.platformId)?.name || row.platformId
+          <template #delaySeconds="{ row }">{{
+            row.delaySeconds === 0 ? '立即开放' : `发布 ${row.delaySeconds} 秒后开放`
           }}</template>
           <template #operation="{ row }"
             ><ElButton
@@ -157,61 +213,13 @@
               link
               type="primary"
               :disabled="saving"
-              @click="editShop(row)"
-              >编辑店铺</ElButton
+              @click="editLevel(row)"
+              >编辑规则</ElButton
             ></template
           >
         </ArtTable>
       </ElCard>
-    </template>
-    <ElCard v-else>
-      <ArtTableHeader
-        v-model:columns="levelColumns.columnChecks.value"
-        :loading="loading"
-        @refresh="reload"
-      >
-        <template #left
-          ><ElButton
-            v-if="can('settings.manage')"
-            type="primary"
-            :disabled="saving"
-            @click="editLevel()"
-            v-ripple
-            >新增等级</ElButton
-          ></template
-        >
-      </ArtTableHeader>
-      <ElAlert
-        title="公共抢单池按发布时间计算等级开放延迟；等级开放后持续可接单，直接指派采用指定负责人流程。"
-        type="info"
-        :closable="false"
-        class="mb-4"
-      />
-      <ArtTable
-        :data="levelTable.tableData.value"
-        :columns="levelColumns.columns.value"
-        :loading="loading"
-        :pagination="levelTable.pagination"
-        :show-table-header="false"
-        height="360"
-        @pagination:size-change="levelTable.handleSizeChange"
-        @pagination:current-change="levelTable.handleCurrentChange"
-      >
-        <template #delaySeconds="{ row }">{{
-          row.delaySeconds === 0 ? '立即开放' : `发布 ${row.delaySeconds} 秒后开放`
-        }}</template>
-        <template #operation="{ row }"
-          ><ElButton
-            v-if="can('settings.manage')"
-            link
-            type="primary"
-            :disabled="saving"
-            @click="editLevel(row)"
-            >编辑规则</ElButton
-          ></template
-        >
-      </ArtTable>
-    </ElCard>
+    </div>
     <ElDialog
       :model-value="!!open"
       :title="dialogTitle"
@@ -311,7 +319,7 @@
 
 <script setup lang="ts">
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
-  import { computed, onMounted, reactive, ref } from 'vue'
+  import { computed, nextTick, onMounted, reactive, ref } from 'vue'
   import { ElMessage } from 'element-plus'
   import { money, useStudio } from '@/hooks/business/useStudio'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
@@ -327,6 +335,14 @@
   defineOptions({ name: 'BusinessConfig' })
   const { data, loading, can, mutate, refresh } = useStudio()
   const tab = ref('templates')
+  const panelsRef = ref<HTMLElement>()
+  const panelMinHeight = ref(0)
+  async function preservePanelHeight() {
+    // 新表格在挂载后才设置高度；先保留旧区域高度，避免中间一帧把页面滚动夹到顶部。
+    panelMinHeight.value = Math.max(panelMinHeight.value, panelsRef.value?.offsetHeight || 0)
+    await nextTick()
+    return true
+  }
   const search = ref({ name: '', game: '', description: '', active: '' })
   const searchItems = [
     {
@@ -519,3 +535,9 @@
   }
   onMounted(reload)
 </script>
+
+<style scoped>
+  .business-config-panels {
+    overflow-anchor: none;
+  }
+</style>
