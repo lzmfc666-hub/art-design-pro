@@ -2,11 +2,16 @@
 <!-- 支持常用表单组件、自定义组件、插槽、校验、隐藏表单项 -->
 <!-- 写法同 ElementPlus 官方文档组件，把属性写在 props 里面就可以了 -->
 <template>
-  <section class="art-search-bar art-card-xs" :class="{ 'is-expanded': isExpanded }">
+  <section
+    ref="searchBarRef"
+    class="art-search-bar art-card-xs"
+    :class="{ 'is-expanded': isExpanded }"
+  >
     <ElForm
       ref="formRef"
       :model="modelValue"
-      :label-position="labelPosition"
+      :label-position="effectiveLabelPosition"
+      :label-width="labelWidth"
       v-bind="{ ...$attrs }"
     >
       <ElRow :gutter="gutter">
@@ -69,7 +74,14 @@
             </slot>
           </ElFormItem>
         </ElCol>
-        <ElCol :xs="24" :sm="24" :md="span" :lg="span" :xl="span" class="action-column">
+        <ElCol
+          :xs="24"
+          :sm="24"
+          :md="getColSpan(undefined, 'md')"
+          :lg="getColSpan(undefined, 'lg')"
+          :xl="getColSpan(undefined, 'xl')"
+          class="action-column"
+        >
           <div class="action-buttons-wrapper" :style="actionButtonsStyle">
             <div class="form-buttons">
               <ElButton v-if="showReset" class="reset-button" @click="handleReset" v-ripple>
@@ -104,7 +116,7 @@
 
 <script setup lang="ts">
   import { ArrowUpBold, ArrowDownBold } from '@element-plus/icons-vue'
-  import { useWindowSize } from '@vueuse/core'
+  import { useElementSize, useWindowSize } from '@vueuse/core'
   import { useI18n } from 'vue-i18n'
   import { toRaw, type Component } from 'vue'
   import {
@@ -151,6 +163,8 @@
   }
 
   const { width } = useWindowSize()
+  const searchBarRef = ref<HTMLElement>()
+  const { width: searchWidth } = useElementSize(searchBarRef)
   const { t } = useI18n()
   const isMobile = computed(() => width.value < 500)
 
@@ -234,7 +248,7 @@
     gutter: 12,
     isExpand: false,
     labelPosition: 'right',
-    labelWidth: '70px',
+    labelWidth: 'auto',
     showExpand: true,
     defaultExpanded: false,
     buttonLeftLimit: 2,
@@ -283,6 +297,9 @@
    * 是否展开状态
    */
   const isExpanded = ref(props.defaultExpanded)
+  const effectiveLabelPosition = computed(() =>
+    searchWidth.value > 0 && searchWidth.value < 600 ? 'top' : props.labelPosition
+  )
 
   const rootProps = ['label', 'labelWidth', 'key', 'type', 'hidden', 'span', 'slots']
   // 搜索参数默认更激进地去掉空值，减少无效 query 参数。
@@ -320,7 +337,19 @@
    * 根据屏幕尺寸智能降级，避免小屏幕上表单项被压缩过小
    */
   const getColSpan = (itemSpan: number | undefined, breakpoint: ResponsiveBreakpoint): number => {
-    return calculateResponsiveSpan(itemSpan, span.value, breakpoint)
+    const requestedSpan = itemSpan ?? props.span
+    // 侧栏展开或窗口变窄时，按搜索区域的实际宽度减少列数。
+    const minimumSpan =
+      searchWidth.value === 0
+        ? requestedSpan
+        : searchWidth.value < 600
+          ? 24
+          : searchWidth.value < 900
+            ? 12
+            : searchWidth.value < 1200
+              ? 8
+              : requestedSpan
+    return calculateResponsiveSpan(Math.max(requestedSpan, minimumSpan), props.span, breakpoint)
   }
 
   // 保留字符串表单字段，提交时再由 sanitizeOutputValue 清洗空筛选项。
@@ -506,12 +535,31 @@
   })
 
   // 解构 props 以便在模板中直接使用
-  const { span, gutter, labelPosition, labelWidth } = toRefs(props)
+  const { gutter, labelWidth } = toRefs(props)
 </script>
 
 <style lang="scss" scoped>
   .art-search-bar {
     padding: 15px 20px 0;
+
+    :deep(.el-form-item__label) {
+      white-space: nowrap;
+    }
+
+    :deep(.el-form-item__content) {
+      min-width: 0;
+
+      > * {
+        max-width: 100%;
+      }
+    }
+
+    :deep(.el-date-editor),
+    :deep(.el-input),
+    :deep(.el-select) {
+      width: 100%;
+      min-width: 0;
+    }
 
     .action-column {
       flex: 1;
