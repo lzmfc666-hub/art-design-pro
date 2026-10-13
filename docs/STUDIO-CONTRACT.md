@@ -134,7 +134,7 @@ POST `/exports/preview`、`/exports/download` 请求：
 | GET `/logs` | current/size（最大200）、source=hot/archive/all、actorId/entity/entityId、action、keyword、dateStart/dateEnd | `{records,total,current,size}`，需 `logs.view`；实体/人员/记录号精确匹配，action 独立包含匹配 |
 | GET `/logs/:id` | 无 | 按当前权限投影的 AuditLog，需 `logs.view` |
 | GET `/logs/storage` | 无 | `{hotRows,archiveRows,archiveBytes,archiveMaxBytes,retentionDays,hotMaxRows,warning,canBackup,maintenanceMode,emergencyLoginRows,emergencyLoginMaxRows,emergencyLoginRetentionDays}`，需 `settings.manage` 和 `logs.view` |
-| POST `/logs/maintenance` | `{action:'archive'}` | `{affectedRows,storage}`，同上权限，主动执行保留规则归档 |
+| POST `/logs/maintenance` | `{action:'archive'}` | `{affectedRows,candidateRows?,automaticArchiveRows?,storage}`，同上权限，affectedRows 为本请求实际总移动数；无候选不新增审计，近期记录不强制归档 |
 | GET `/logs/archive-backup?beforeDate=YYYY-MM-DD` | 截止日期 | 完整原始 JSON 流式附件，需下述完整备份权限组合 |
 | POST `/logs/maintenance` | `{action:'purge-archive',beforeDate,backupToken,backupConfirmed:true,reason}` | `{affectedRows,storage}`，同完整权限，reason 必填 |
 
@@ -148,11 +148,21 @@ POST `/exports/preview`、`/exports/download` 请求：
 
 正常登录的会话和审计同事务，失败 session 不残留。仅专用 `AUDIT_CAPACITY` 503 且正确密码账号满足完整备份权限时，允许签发维护登录会话，响应带 maintenanceNotice；其他错误不能吞，普通账号不能绕过容量阻断。应急记录在独立 `audit_emergency_logins`，只含登录人/时间等基础字段，最多 1,000 条/保留 30 天，不保存密码、token、财务内容。hot/all 日志可读，不混入归档备份。storage 的 maintenanceMode/warning 标示状态；维护登录不豁免业务写入，备份清理后正常审计成功恢复普通模式。
 
+## 只读数据检查
+
+GET `/diagnostics` 返回 `DiagnosticsReport`（类型见 `src/types/studio.ts`）：`generatedAt,readOnly:true,status,summary,checks,issues,scopeNotes`。status 为 ok/warning/error；summary 包含 `checkedRecords,errorCount,warningCount,issueCount,returnedIssues,truncated`，checkedRecords 为各项目核对次数之和。最多返回 100 条问题，错误优先；汇总及每项目数量统计全部问题，超限不假装完整。
+
+权限复用上述完整备份组合，默认老板 / 超管满足，普通管理员、财务、客服默认无权读取。登录鉴权与检查自身都直接读取当前状态，禁止迁移旧 JSON 日志、审计、修改实体或自动修复；测试以 SQLite query_only 及 total_changes 核对真实 HTTP 请求无写入。响应不包含原始凭证、账号秘密或业务金额明细，不能用公开主机探测替代业务检查。
+
+核对关联外键与来源店铺、订单状态与整数金额 / 退款、打手到账及状态冲正、扣补分项和提现占用、独立客户编号、历史工资快照算术 / 重复底薪、实际登记工时。合法指定待接单、状态冲正保留历史、已提现人工差额、同月补结算、负工资差额及未来未登记均遵守原业务规则；配置未齐、取消补偿和待追回列 warning。工资不按当前方案重算，凭证存在不能证明银行已到账。
+
+前端“数据检查”路由使用 `studioPermissionMode:'all'`，只有全部授权时显示菜单并放行深链；其他业务路由保持原任一授权规则。页面需手动开始检查，离开或失去授权时清除报告，不持久化到浏览器。
+
 ## 打手接口与当前界限
 
 真实打手五组接口已实现并验证：GET `/player/orders`；POST `/player/orders/:id/claim`；POST `/player/orders/:id/submit` `{screenshots,teammateId}`；GET `/player/wallet`；POST `/player/withdrawals` `{amount}`。仅打手账号可用，遵守指定人、等级延迟、接单上限、最新材料、可用余额与在途占用校验。接口服务连接真实数据库，尚无独立打手端 UI；不能将“没有独立页面”描述为“没有接通接口”。
 
-原源码服务器监控 `src/views/safeguard/server/index.vue` 是随机数和示例 IP 演示，不展示真实主机指标。当前服务没有 health/diagnostics/自动修复接口；已实现的维护入口为以上日志容量、备份、归档及凭据清理，不提供远程命令执行。
+原源码服务器监控 `src/views/safeguard/server/index.vue` 是随机数和示例 IP 演示，不展示真实主机指标。现有 diagnostics 只检查业务数据；没有主机 health 或自动修复接口，维护入口为数据检查、日志容量、备份、归档及凭据清理，不提供远程命令执行。
 
 ## 原框架前端协作
 

@@ -165,9 +165,12 @@ export function createStudioServer(options = {}) {
         res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`)
         return json(res, 200, { ok: true })
       }
-      const user = service.session(token)
+      const user = service.session(token, {
+        readOnly: req.method === 'GET' && path === '/diagnostics'
+      })
       if (!user) throw new ApiError('请先登录', 401)
       if (req.method === 'GET') {
+        if (path === '/diagnostics') return json(res, 200, service.diagnostics(user.id))
         if (path === '/logs/archive-backup') {
           const backup = service.prepareArchiveBackup(user.id, url.searchParams.get('beforeDate'))
           res.writeHead(200, {

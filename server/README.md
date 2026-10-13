@@ -71,7 +71,7 @@ node server/index.mjs
 
 `GET /logs` 按来源、人员、实体、记录号、动作、关键词和日期筛选并分页，`GET /logs/:id` 读取审计详情。读取及普通报表导出按当前权限对白名单字段投影，操作日志权限不授予金融明细或账号权限查看权。普通日志 Excel 是可见内容导出，不能替代完整恢复备份。
 
-`GET /logs/storage` 和主动归档 `POST /logs/maintenance {action:'archive'}` 需 `settings.manage` 与 `logs.view`。默认热日志保留 90 天/最多 10,000 行，移入归档后保留历史；归档内容达到 90% 容量告警，超过可容纳的上限时业务事务返回 503 且全部回滚。容量统计指归档 JSON 内容字节，不代表整个 SQLite 文件、附件或 WAL 的磁盘上限。不会自动删除财务历史，也不将容量无限扩张。
+`GET /logs/storage` 和主动归档 `POST /logs/maintenance {action:'archive'}` 需 `settings.manage` 与 `logs.view`。默认热日志保留 90 天/最多 10,000 行，超过任一条件的较旧记录移入归档。主动归档无候选返回 0，不新增维护审计；成功时返回实际总移动条数，包括本请求审计写入触发的额外自动归档。界面显示本次条数及零条原因，切换日志来源立即查询。归档内容达到 90% 容量告警，超过可容纳的上限时业务事务返回 503 且全部回滚。容量统计指归档 JSON 内容字节，不代表整个 SQLite 文件、附件或 WAL 的磁盘上限。不会自动删除财务历史，也不将容量无限扩张。
 
 完整原始 JSON 备份及清理需同时具备：`settings.manage`、`logs.view`、`reports.export`、`orders.view`、`users.manage`、`salary.all`、`profit.view`、`finance.review`、`finance.refunds`、`finance.withdrawals`、`finance.expenses`。默认老板/超管满足，普通管理员不满足。流程如下：
 
@@ -85,7 +85,9 @@ node server/index.mjs
 
 本服务尚未部署公网。SQLite 状态结构适合当前单工作室使用；多实例扩容前应迁移实体表和服务端会话管理。公网部署时需要 HTTPS、受控 origin、定期数据库备份和真实账号配置。归档 JSON 备份保留原始审计内容，但不能替代完整 SQLite 数据库备份。
 
-原源码 `src/views/safeguard/server/index.vue` 的服务器监控使用随机演示数值和示例 IP，不代表真实主机状态。当前服务没有 `health`、`diagnostics` 或自动修复接口；日志备份/归档/清理是已实现的维护能力。
+原源码 `src/views/safeguard/server/index.vue` 的服务器监控使用随机演示数值和示例 IP，不代表真实主机状态。现新增 `GET /api/studio/diagnostics` 只读业务数据检查，入口位于系统管理 → 数据检查，并从操作日志快捷进入。权限与完整日志备份相同，默认老板和超管满足；不开放匿名检查或额外服务端口。
+
+检查涵盖关联记录、订单状态与金额、打手报酬冲正、钱包及提现占用、客户平台编号、工资快照和实际工时；配置未齐及人工差额列为待核对，不当作损坏。响应只返回检查概要和至多 100 条异常 / 提醒，异常优先，总数不截断。请求和鉴权均只读，不修改业务、审计或旧日志，不重算历史工资；不能替代线下付款核实。仍没有真实主机 `health`、远程命令或自动修复接口。
 
 ## 验证
 

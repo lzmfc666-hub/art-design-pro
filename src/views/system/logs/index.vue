@@ -12,10 +12,14 @@
           <div
             ><h3 class="font-medium">日志存储管理</h3
             ><p class="mt-2 text-sm text-g-500"
-              >主动归档保留记录；清理仅删除已备份的归档，不删除实时日志。</p
+              >仅归档超过 {{ storage?.retentionDays ?? 90 }} 天，或超出
+              {{ storage?.hotMaxRows ?? 10000 }} 条的较旧记录；近期日志保留在实时记录中。</p
             ></div
           >
           <ElSpace wrap>
+            <ElButton v-if="canInspect" @click="router.push('/system/diagnostics')"
+              >数据检查</ElButton
+            >
             <ElButton :disabled="maintenanceBusy || !can('reports.export')" @click="exportArchive"
               >导出可见日志</ElButton
             >
@@ -48,6 +52,13 @@
           }}</ElDescriptionsItem>
         </ElDescriptions>
         <ElAlert
+          v-if="archiveResult"
+          :title="archiveResult.message"
+          :type="archiveResult.type"
+          :closable="false"
+          class="mt-4"
+        />
+        <ElAlert
           v-if="storage?.warning"
           title="归档容量接近上限，请先下载并核对备份，再按日期清理已备份归档。"
           type="warning"
@@ -67,7 +78,14 @@
       <ElCard class="art-table-card">
         <ArtTableHeader v-model:columns="columnChecks" :loading="loading" @refresh="reload">
           <template #left
-            ><ElTag type="info">共 {{ pagination.total }} 条符合条件记录</ElTag></template
+            ><ElSpace wrap
+              ><ElRadioGroup v-model="search.source" size="small" aria-label="日志来源">
+                <ElRadioButton value="all">全部日志</ElRadioButton>
+                <ElRadioButton value="hot">实时日志</ElRadioButton>
+                <ElRadioButton value="archive">归档日志</ElRadioButton>
+              </ElRadioGroup>
+              <ElTag type="info">共 {{ pagination.total }} 条符合条件记录</ElTag></ElSpace
+            ></template
           >
         </ArtTableHeader>
         <ArtTable
@@ -75,6 +93,11 @@
           :columns="columns"
           :loading="loading"
           :pagination="pagination"
+          :empty-text="
+            applied.source === 'archive'
+              ? '暂无符合条件的归档日志；近期记录请切换至实时日志查看'
+              : '暂无符合条件的日志，可调整筛选条件'
+          "
           height="440"
           @pagination:size-change="handleSizeChange"
           @pagination:current-change="handleCurrentChange"
@@ -199,6 +222,7 @@
   import { ElMessage, ElMessageBox } from 'element-plus'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import { studioRequest } from '@/api/studio'
+  import { dataInspectionPermissions } from '@/utils/auth/studio-access'
   import { formatTime, useStudio } from '@/hooks/business/useStudio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import type { AuditLog } from '@/types/studio'
@@ -220,6 +244,7 @@
     canBackup: boolean
   }
   const { data, user, can, clearSession } = useStudio()
+  const canInspect = computed(() => dataInspectionPermissions.every(can))
   const router = useRouter()
   const initialSearch = () => ({
     actorId: '',
@@ -240,6 +265,7 @@
     storageError = ref('')
   const storage = ref<LogStorage | null>(null)
   const maintenanceBusy = ref(false)
+  const archiveResult = ref<{ type: 'success' | 'info' | 'error'; message: string } | null>(null)
   const backupBusy = ref(false)
   const purge = reactive({
     open: false,
@@ -539,12 +565,27 @@
   async function archiveNow() {
     if (maintenanceBusy.value || !can('settings.manage') || !can('logs.view')) return
     maintenanceBusy.value = true
+    archiveResult.value = null
     try {
-      await request('logs/maintenance', { action: 'archive' })
+      const result = await request<{ affectedRows: number; storage: LogStorage }>(
+        'logs/maintenance',
+        { action: 'archive' }
+      )
+      storage.value = result.storage
+      archiveResult.value = {
+        type: result.affectedRows ? 'success' : 'info',
+        message: result.affectedRows
+          ? `本次已归档 ${result.affectedRows} 条记录，日志已保留，可切换至“归档日志”查看。`
+          : `本次归档 0 条：暂无超过 ${result.storage.retentionDays} 天或超出 ${result.storage.hotMaxRows} 条保留数量的实时日志，无需归档。`
+      }
+      pagination.current = 1
       await reload()
-      ElMessage.success('符合保留规则的实时记录已归档')
+      if (result.affectedRows) ElMessage.success(`已归档 ${result.affectedRows} 条记录`)
+      else ElMessage.info('暂无符合规则的记录，已保留近期实时日志')
     } catch (cause) {
-      ElMessage.error(cause instanceof Error ? cause.message : '归档失败')
+      const message = cause instanceof Error ? cause.message : '归档失败'
+      archiveResult.value = { type: 'error', message }
+      ElMessage.error(message)
     } finally {
       maintenanceBusy.value = false
     }
@@ -599,6 +640,14 @@
     }
   }
   watch(
+    () => search.value.source,
+    (source) => {
+      applied.value.source = source
+      pagination.current = 1
+      void loadRecords()
+    }
+  )
+  watch(
     () => can('logs.view'),
     (allowed) => {
       if (!allowed) {
@@ -609,6 +658,7 @@
         selected.value = null
         detailOpen.value = false
         storage.value = null
+        archiveResult.value = null
         purge.open = false
       }
     }

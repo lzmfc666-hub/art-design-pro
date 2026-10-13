@@ -1,4 +1,5 @@
 import type { AppRouteRecord } from '@/types/router'
+import { dataInspectionPermissions } from '@/utils/auth/studio-access'
 
 export const systemRoutes: AppRouteRecord = {
   path: '/system',
@@ -54,6 +55,18 @@ export const systemRoutes: AppRouteRecord = {
       name: 'AuditLogs',
       component: '/system/logs',
       meta: { title: '操作日志', icon: 'ri:history-line', studioPermissions: ['logs.view'] }
+    },
+    {
+      path: 'diagnostics',
+      name: 'DataDiagnostics',
+      component: '/system/diagnostics',
+      meta: {
+        title: '数据检查',
+        icon: 'ri:shield-check-line',
+        studioPermissions: dataInspectionPermissions,
+        studioPermissionMode: 'all',
+        keepAlive: false
+      }
     },
     {
       path: 'user-center',

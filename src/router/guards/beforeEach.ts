@@ -192,7 +192,7 @@ async function handleRouteGuard(
 
   // 5. 处理已匹配的路由
   if (to.matched.length > 0) {
-    if (!canAccessStudioPage(to.meta.studioPermissions)) {
+    if (!canAccessStudioPage(to.meta.studioPermissions, to.meta.studioPermissionMode)) {
       next({ name: 'Exception403', replace: true })
       return
     }

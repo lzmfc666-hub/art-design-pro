@@ -34,6 +34,7 @@ export interface RouteMeta extends Record<string | number | symbol, unknown> {
   /** 保留的原模板示例，仅超级管理员可访问 */
   templateExample?: boolean
   studioPermissions?: string[]
+  studioPermissionMode?: 'any' | 'all'
   /** 路由图标 */
   icon?: string
   /** 是否显示徽章 */

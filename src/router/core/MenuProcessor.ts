@@ -80,7 +80,7 @@ export class MenuProcessor {
       const hasPermission =
         (!item.meta.templateExample || isStudioSuperAdmin(useStudio().user.value)) &&
         (!itemRoles || itemRoles.some((role) => roles?.includes(role))) &&
-        canAccessStudioPage(item.meta.studioPermissions)
+        canAccessStudioPage(item.meta.studioPermissions, item.meta.studioPermissionMode)
 
       if (hasPermission) {
         const filteredItem = { ...item }

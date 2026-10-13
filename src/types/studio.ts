@@ -230,6 +230,40 @@ export interface AuditLog {
   after: unknown
   createdAt: string
 }
+export type DiagnosticsStatus = 'ok' | 'warning' | 'error'
+export interface DiagnosticsIssue {
+  id: string
+  checkId: string
+  severity: 'error' | 'warning'
+  entity: string
+  entityId: string | null
+  message: string
+}
+export interface DiagnosticsCheck {
+  id: string
+  label: string
+  status: DiagnosticsStatus
+  checkedRecords: number
+  errorCount: number
+  warningCount: number
+  description: string
+}
+export interface DiagnosticsReport {
+  generatedAt: string
+  readOnly: true
+  status: DiagnosticsStatus
+  summary: {
+    checkedRecords: number
+    errorCount: number
+    warningCount: number
+    issueCount: number
+    returnedIssues: number
+    truncated: boolean
+  }
+  checks: DiagnosticsCheck[]
+  issues: DiagnosticsIssue[]
+  scopeNotes: string[]
+}
 export interface DayReport {
   date: string
   received: number

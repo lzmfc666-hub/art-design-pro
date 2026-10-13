@@ -15,6 +15,7 @@ import {
 import { createAuditStore, isAuditCapacityError } from './audit-store.mjs'
 import { platformRules, normalizePlatformRules } from './platform-rules.mjs'
 import { buildPeriodExportSnapshot } from './export-period.mjs'
+import { buildDiagnosticsReport } from './diagnostics.mjs'
 
 export const ALL_PERMISSIONS = [
   'orders.view',
@@ -464,8 +465,10 @@ export function createStudioService({
       JSON.stringify(seedState(now(), initialPassword, seed))
     )
   }
+  const readOnlyState = () =>
+    JSON.parse(db.prepare('SELECT json FROM studio_state WHERE id=1').get().json)
   const read = () => {
-    const state = JSON.parse(db.prepare('SELECT json FROM studio_state WHERE id=1').get().json)
+    const state = readOnlyState()
     state.playerAdjustments ||= []
     state.statusCorrectionReversals ||= {}
     if (state.logs?.length) {
@@ -960,7 +963,7 @@ export function createStudioService({
             : null
         case 'audit-maintenance':
           return can(user, 'settings.manage') && can(user, 'logs.view')
-            ? pick(value, ['action', 'beforeDate', 'reason', 'affectedRows'])
+            ? pick(value, ['action', 'beforeDate', 'reason', 'affectedRows', 'candidateRows'])
             : null
         default:
           return null
@@ -1911,9 +1914,13 @@ export function createStudioService({
       if (path === '/logs/maintenance') {
         requirePermission(user, 'settings.manage')
         requirePermission(user, 'logs.view')
+        const archiveRowsBefore =
+          body.action === 'archive' ? auditStore.storage().archiveRows : null
         let affectedRows
-        if (body.action === 'archive') affectedRows = auditStore.archive()
-        else if (body.action === 'purge-archive') {
+        if (body.action === 'archive') {
+          affectedRows = auditStore.archive()
+          if (affectedRows === 0) return { affectedRows: 0, storage: auditStore.storage() }
+        } else if (body.action === 'purge-archive') {
           requireBackupAudit(user)
           if (body.backupConfirmed !== true) fail('请先导出并确认已经保存日志备份')
           requiredReason(body)
@@ -1934,10 +1941,21 @@ export function createStudioService({
             action: body.action,
             beforeDate: body.beforeDate || null,
             reason: body.reason || '按热日志保留规则归档',
-            affectedRows
+            ...(body.action === 'archive' ? { candidateRows: affectedRows } : { affectedRows })
           }
         )
-        return { affectedRows, storage: auditStore.storage() }
+        const storage = auditStore.storage()
+        if (body.action === 'archive') {
+          const candidateRows = affectedRows
+          affectedRows = storage.archiveRows - archiveRowsBefore
+          return {
+            affectedRows,
+            candidateRows,
+            automaticArchiveRows: affectedRows - candidateRows,
+            storage
+          }
+        }
+        return { affectedRows, storage }
       }
       const rewardReviewMatch = path.match(/^\/reward-reviews\/([^/]+)\/action$/)
       if (rewardReviewMatch) {
@@ -2875,6 +2893,21 @@ export function createStudioService({
       return buildOverviewReport(snapshots, dates, now())
     },
     mutate,
+    diagnostics(userId) {
+      const state = readOnlyState(),
+        user = find(state, 'users', userId, '账号')
+      if (user.status !== 'active') fail('账号已停用', 403)
+      requireBackupAudit(user)
+      const customerReferences = db
+        .prepare('SELECT * FROM customer_order_references')
+        .all()
+        .map(publicReference)
+      const uploadIds = db
+        .prepare('SELECT id FROM uploads')
+        .all()
+        .map((row) => row.id)
+      return buildDiagnosticsReport({ state, customerReferences, uploadIds, now: now() })
+    },
     login(username, passwordValue) {
       const state = read(),
         loginName = text(username, '登录名', { required: true, max: 64 })
@@ -2924,13 +2957,13 @@ export function createStudioService({
         ...(maintenanceNotice ? { maintenanceNotice } : {})
       }
     },
-    session(token) {
+    session(token, { readOnly = false } = {}) {
       if (!token || typeof token !== 'string' || token.length > 128) return null
       const row = db
         .prepare('SELECT user_id,expires_at FROM sessions WHERE token_hash=?')
         .get(sessionHash(token))
       if (!row || row.expires_at <= Date.parse(now())) return null
-      const state = read(),
+      const state = readOnly ? readOnlyState() : read(),
         user = state.users.find((u) => u.id === row.user_id && u.status === 'active')
       return user ? publicStaff(state, user) : null
     },
