@@ -153,6 +153,7 @@
     payroll: '工资发放',
     'salary-plan': '工资方案',
     attendance: '考勤',
+    'work-schedule': '固定班次',
     user: '人员',
     shop: '来源店铺',
     platform: '来源平台',

@@ -97,6 +97,7 @@ export function defaultAppearance() {
       title: '欢迎使用电竞工作室后台',
       subtitle: '统一管理订单、人员与财务',
       description: '账号由工作室管理员分配，忘记密码请联系管理员。',
+      illustration: { mode: 'default', image: null },
       background: { mode: 'default', color: '#eef4ff', image: null, overlay: 50 }
     },
     glass: { enabled: false },
@@ -181,7 +182,12 @@ export function normalizeAppearance(config, attachmentResolver) {
   const defaults = defaultAppearance()
   const loginConfig = config.login === undefined ? defaults.login : config.login
   const glassConfig = config.glass === undefined ? defaults.glass : config.glass
-  object(loginConfig, '登录页', ['title', 'subtitle', 'description', 'background'])
+  object(loginConfig, '登录页', ['title', 'subtitle', 'description', 'illustration', 'background'])
+  const illustrationConfig =
+    loginConfig.illustration === undefined ? defaults.login.illustration : loginConfig.illustration
+  object(illustrationConfig, '登录左侧大图', ['mode', 'image'])
+  if (!['default', 'image'].includes(illustrationConfig.mode))
+    throw new ApiError('请选择默认或自定义登录左侧大图')
   object(loginConfig.background, '登录背景', ['mode', 'color', 'image', 'overlay'])
   object(glassConfig, '毛玻璃', ['enabled'])
   if (typeof glassConfig.enabled !== 'boolean') throw new ApiError('请选择是否启用毛玻璃效果')
@@ -209,6 +215,10 @@ export function normalizeAppearance(config, attachmentResolver) {
     title: plainText(loginConfig.title, '登录标题', 80, true),
     subtitle: plainText(loginConfig.subtitle, '登录副标题', 200),
     description: plainText(loginConfig.description, '登录说明', 800),
+    illustration: {
+      mode: illustrationConfig.mode,
+      image: image(illustrationConfig.image)
+    },
     background: {
       mode: mode(loginConfig.background.mode),
       color: color(loginConfig.background.color),
@@ -217,6 +227,8 @@ export function normalizeAppearance(config, attachmentResolver) {
     }
   }
   if (typeof hero.showDecoration !== 'boolean') throw new ApiError('请选择是否显示首页装饰图形')
+  if (login.illustration.mode === 'image' && !login.illustration.image)
+    throw new ApiError('自定义登录左侧大图必须先上传图片')
   if (
     (page.mode === 'image' && !page.image) ||
     (hero.mode === 'image' && !hero.image) ||
@@ -255,15 +267,19 @@ export function appearanceAttachments(config, { activeOnly = false } = {}) {
     !activeOnly || config?.hero?.mode === 'image' ? config?.hero?.image : null,
     !activeOnly || config?.login?.background?.mode === 'image'
       ? config?.login?.background?.image
+      : null,
+    !activeOnly || config?.login?.illustration?.mode === 'image'
+      ? config?.login?.illustration?.image
       : null
   ].filter(Boolean)
 }
 
-/** 匿名图片只允许当前保存的公开品牌与正在使用的登录背景。 */
+/** 匿名图片只允许当前保存的公开品牌与正在使用的登录图片。 */
 export function publicAppearanceAttachments(config) {
   return [
     config?.logo,
-    config?.login?.background?.mode === 'image' ? config.login.background.image : null
+    config?.login?.background?.mode === 'image' ? config.login.background.image : null,
+    config?.login?.illustration?.mode === 'image' ? config.login.illustration.image : null
   ].filter(Boolean)
 }
 
@@ -279,6 +295,13 @@ export function projectPublicAppearance(config) {
       title: normalized.login.title,
       subtitle: normalized.login.subtitle,
       description: normalized.login.description,
+      illustration: {
+        mode: normalized.login.illustration.mode,
+        image:
+          normalized.login.illustration.mode === 'image'
+            ? publicImage(normalized.login.illustration.image)
+            : null
+      },
       background: {
         ...normalized.login.background,
         image:

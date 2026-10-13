@@ -2,7 +2,7 @@
   <div class="attendance-page">
     <BusinessPageHeader
       title="排班与考勤"
-      description="按日展示启用人员，未登记默认为正常；实际工时单独登记，支持休息与跨夜排班。"
+      description="按日展示启用人员，可为每人设置固定班次；未登记默认为正常，实际工时单独登记。"
       icon="ri:calendar-check-line"
     />
     <ElRow :gutter="16" class="mb-4">
@@ -16,6 +16,50 @@
         />
       </ElCol>
     </ElRow>
+    <ElCard v-if="can('attendance.manage')" class="mb-4">
+      <div class="schedule-panel-title">
+        <div>
+          <h3>每人固定班次</h3>
+          <p class="mt-1 text-sm text-g-500"
+            >设置各自的上、下班时间，支持跨夜；当天单独登记的考勤优先。</p
+          >
+        </div>
+        <ElTag type="info">不自动登记实际工时</ElTag>
+      </div>
+      <div class="schedule-panel-controls mt-4">
+        <ElSelect
+          v-model="schedulePersonId"
+          filterable
+          clearable
+          placeholder="选择要设置上班时间的人员"
+          aria-label="固定班次人员"
+          class="schedule-person-select"
+        >
+          <ElOption
+            v-for="person in activePeople"
+            :key="person.id"
+            :value="person.id"
+            :label="`${person.name} · ${roleLabels[person.role]}`"
+          />
+        </ElSelect>
+        <div class="schedule-panel-summary">
+          <p>{{
+            schedulePersonId
+              ? `当前班次：${scheduleDescription(currentSchedule)}`
+              : '选择人员后可查看、调整固定班次'
+          }}</p>
+          <p v-if="nextSchedule" class="mt-1 text-xs text-g-500">
+            {{ nextSchedule.effectiveFrom }} 起：{{ scheduleDescription(nextSchedule) }}
+          </p>
+        </div>
+        <ElButton
+          type="primary"
+          :disabled="!schedulePersonId || scheduleSaving"
+          @click="editSchedule()"
+          >设置上班时间</ElButton
+        >
+      </div>
+    </ElCard>
     <ArtSearchBar v-model="search" :items="searchItems" @search="resetPage" @reset="resetSearch" />
     <ElCard class="mt-4">
       <ArtTableHeader v-model:columns="columnChecks" :loading="loading" @refresh="reload">
@@ -55,8 +99,11 @@
           }}
           <ElTag v-if="timePart(row.end) < timePart(row.start)" size="small" type="info"
             >次日</ElTag
-          ></template
-        >
+          >
+          <ElTag v-if="row.synthetic && row.start" size="small" type="info" class="ml-2"
+            >固定班次</ElTag
+          >
+        </template>
         <template #planned="{ row }"
           >{{ hours(timePart(row.start), timePart(row.end)).toFixed(2) }} h</template
         >
@@ -201,6 +248,120 @@
         ><ElButton type="primary" :loading="saving" @click="save">保存记录</ElButton></template
       >
     </ElDialog>
+    <ElDialog
+      v-model="scheduleOpen"
+      title="设置个人上班时间"
+      width="min(640px, 94vw)"
+      destroy-on-close
+      :close-on-click-modal="!scheduleSaving"
+      :close-on-press-escape="!scheduleSaving"
+      :show-close="!scheduleSaving"
+    >
+      <ElForm
+        ref="scheduleFormRef"
+        :model="scheduleForm"
+        :rules="scheduleRules"
+        :disabled="scheduleSaving"
+        label-position="top"
+        @submit.prevent="saveSchedule"
+      >
+        <ElFormItem label="人员"
+          ><span>{{
+            data?.users.find((person) => person.id === scheduleForm.userId)?.name
+          }}</span></ElFormItem
+        >
+        <ElFormItem label="生效日期" prop="effectiveFrom">
+          <ElDatePicker
+            v-model="scheduleForm.effectiveFrom"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :disabled-date="disablePastDate"
+            :clearable="false"
+            class="w-full"
+            @change="loadScheduleVersion"
+          />
+        </ElFormItem>
+        <ElFormItem label="固定班次">
+          <ElSwitch
+            v-model="scheduleForm.enabled"
+            active-text="启用"
+            inactive-text="不安排固定班次"
+          />
+        </ElFormItem>
+        <ElRow v-if="scheduleForm.enabled" :gutter="16">
+          <ElCol :xs="24" :sm="12"
+            ><ElFormItem label="上班时间" prop="start">
+              <ElTimePicker
+                v-model="scheduleForm.start"
+                format="HH:mm"
+                value-format="HH:mm"
+                class="w-full"
+              /> </ElFormItem
+          ></ElCol>
+          <ElCol :xs="24" :sm="12"
+            ><ElFormItem label="下班时间" prop="end">
+              <ElTimePicker
+                v-model="scheduleForm.end"
+                format="HH:mm"
+                value-format="HH:mm"
+                class="w-full"
+              /> </ElFormItem
+          ></ElCol>
+        </ElRow>
+        <p v-if="scheduleForm.enabled" class="mb-4 text-sm text-g-500">
+          班次时长 {{ hours(scheduleForm.start, scheduleForm.end).toFixed(2) }} 小时{{
+            scheduleForm.end && scheduleForm.start && scheduleForm.end < scheduleForm.start
+              ? '，下班时间归属次日'
+              : ''
+          }}。
+        </p>
+        <ElFormItem label="备注">
+          <ElInput
+            v-model="scheduleForm.remark"
+            type="textarea"
+            :rows="2"
+            maxlength="1000"
+            show-word-limit
+          />
+        </ElFormItem>
+        <ElAlert
+          title="仅影响生效日起尚未单独登记的日期；历史记录、实际工时和工资不变。休息、请假等仍在当天考勤中编辑。"
+          type="info"
+          :closable="false"
+        />
+        <p
+          v-if="scheduleHistory.some((item) => item.effectiveFrom > scheduleForm.effectiveFrom)"
+          class="mt-2 text-xs text-g-500"
+        >
+          已安排的后续版本仍按各自日期生效；需要修改时，请选择下方对应版本。
+        </p>
+        <template v-if="scheduleHistory.length">
+          <h4 class="mt-5 mb-2">班次设置记录</h4>
+          <ElTable :data="scheduleHistory" max-height="220" size="small">
+            <ElTableColumn prop="effectiveFrom" label="生效日期" width="110" />
+            <ElTableColumn label="固定班次" min-width="170"
+              ><template #default="{ row }">{{ scheduleDescription(row) }}</template></ElTableColumn
+            >
+            <ElTableColumn label="操作" width="90"
+              ><template #default="{ row }">
+                <ElButton
+                  v-if="row.effectiveFrom >= today()"
+                  link
+                  type="primary"
+                  @click="editSchedule(row.effectiveFrom)"
+                  >调整</ElButton
+                >
+                <span v-else class="text-g-500">历史</span>
+              </template></ElTableColumn
+            >
+          </ElTable>
+        </template>
+      </ElForm>
+      <template #footer>
+        <ElButton :disabled="scheduleSaving" @click="scheduleOpen = false">取消</ElButton>
+        <ElButton type="primary" :loading="scheduleSaving" @click="saveSchedule">保存班次</ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -209,14 +370,110 @@
   import BusinessStatCard from '@/components/business/BusinessStatCard.vue'
   import { computed, onMounted, reactive, ref, watch } from 'vue'
   import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-  import { useStudio } from '@/hooks/business/useStudio'
+  import { roleLabels, useStudio } from '@/hooks/business/useStudio'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
-  import type { Attendance } from '@/types/studio'
+  import type { Attendance, WorkSchedule } from '@/types/studio'
   type AttendanceRow = Attendance & { synthetic?: boolean }
 
   defineOptions({ name: 'Attendance' })
   const { data, loading, can, mutate, refresh } = useStudio()
+  const activePeople = computed(() =>
+    (data.value?.users || []).filter((person) => person.status === 'active')
+  )
+  const schedulePersonId = ref('')
+  const scheduleOpen = ref(false)
+  const scheduleSaving = ref(false)
+  const scheduleFormRef = ref<FormInstance>()
+  const scheduleForm = reactive({
+    userId: '',
+    effectiveFrom: today(),
+    enabled: true,
+    start: '09:00' as string | null,
+    end: '18:00' as string | null,
+    remark: ''
+  })
+  const scheduleRules: FormRules = {
+    effectiveFrom: [{ required: true, message: '请选择生效日期', trigger: 'change' }],
+    start: [{ required: true, message: '请选择上班时间', trigger: 'change' }],
+    end: [{ required: true, message: '请选择下班时间', trigger: 'change' }]
+  }
+  const schedulesByPerson = computed(() => {
+    const grouped = new Map<string, WorkSchedule[]>()
+    for (const schedule of data.value?.workSchedules || []) {
+      const records = grouped.get(schedule.userId) || []
+      records.push(schedule)
+      grouped.set(schedule.userId, records)
+    }
+    for (const records of grouped.values())
+      records.sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))
+    return grouped
+  })
+  function scheduleFor(userId: string, date: string) {
+    return schedulesByPerson.value.get(userId)?.find((item) => item.effectiveFrom <= date)
+  }
+  const currentSchedule = computed(() => scheduleFor(schedulePersonId.value, today()))
+  const nextSchedule = computed(() =>
+    (schedulesByPerson.value.get(schedulePersonId.value) || []).findLast(
+      (item) => item.effectiveFrom > today()
+    )
+  )
+  const scheduleHistory = computed(() => schedulesByPerson.value.get(scheduleForm.userId) || [])
+  function scheduleDescription(schedule?: WorkSchedule) {
+    return schedule?.enabled
+      ? `${schedule.start} — ${schedule.end}${schedule.end < schedule.start ? '（次日）' : ''}`
+      : '未安排固定班次'
+  }
+  function disablePastDate(date: Date) {
+    const calendarDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+    return calendarDate < today()
+  }
+  function loadScheduleVersion() {
+    const schedule = scheduleFor(scheduleForm.userId, scheduleForm.effectiveFrom)
+    Object.assign(scheduleForm, {
+      enabled: schedule?.enabled ?? true,
+      start: schedule?.start || '09:00',
+      end: schedule?.end || '18:00',
+      remark: schedule?.remark || ''
+    })
+    scheduleFormRef.value?.clearValidate()
+  }
+  function editSchedule(effectiveFrom = today()) {
+    if (!can('attendance.manage') || scheduleSaving.value || !schedulePersonId.value) return
+    scheduleForm.userId = schedulePersonId.value
+    scheduleForm.effectiveFrom = effectiveFrom
+    loadScheduleVersion()
+    scheduleOpen.value = true
+  }
+  async function saveSchedule() {
+    if (!can('attendance.manage') || scheduleSaving.value) return
+    scheduleSaving.value = true
+    try {
+      if (!(await scheduleFormRef.value?.validate().catch(() => false))) return
+      if (scheduleForm.enabled && !hours(scheduleForm.start, scheduleForm.end))
+        return void ElMessage.warning('上班和下班时间不能相同，请填写有效班次')
+      await mutate('/work-schedules', {
+        ...scheduleForm,
+        start: scheduleForm.enabled ? scheduleForm.start : '',
+        end: scheduleForm.enabled ? scheduleForm.end : ''
+      })
+      scheduleOpen.value = false
+      ElMessage.success('个人上班时间已保存，实际工时仍需单独登记')
+    } catch (cause) {
+      ElMessage.error(cause instanceof Error ? cause.message : '保存班次失败')
+    } finally {
+      scheduleSaving.value = false
+    }
+  }
+  watch(
+    () => can('attendance.manage'),
+    (allowed) => {
+      if (!allowed) {
+        scheduleOpen.value = false
+        open.value = false
+      }
+    }
+  )
   const labels = {
     normal: '正常',
     rest: '休息',
@@ -281,18 +538,21 @@
           .filter(
             (user) => user.status === 'active' && !recorded.some((row) => row.userId === user.id)
           )
-          .map((user) => ({
-            id: 'unregistered:' + date + ':' + user.id,
-            userId: user.id,
-            date,
-            start: '',
-            end: '',
-            status: 'normal',
-            actualHours: 0,
-            hoursRegistered: false,
-            remark: '',
-            synthetic: true
-          }))
+          .map((user) => {
+            const schedule = scheduleFor(user.id, date)
+            return {
+              id: 'unregistered:' + date + ':' + user.id,
+              userId: user.id,
+              date,
+              start: schedule?.enabled ? schedule.start : '',
+              end: schedule?.enabled ? schedule.end : '',
+              status: 'normal',
+              actualHours: 0,
+              hoursRegistered: false,
+              remark: '',
+              synthetic: true
+            } as AttendanceRow
+          })
       : []
     return [...recorded, ...projected]
       .filter(
@@ -476,6 +736,12 @@
         (row) => row.userId === form.userId && row.date === form.date
       )
       if (existing) edit(existing)
+      else {
+        const schedule = scheduleFor(form.userId, form.date)
+        form.start = schedule?.enabled ? schedule.start : ''
+        form.end = schedule?.enabled ? schedule.end : ''
+        originalShift.value = `${form.start}|${form.end}`
+      }
     }
   )
   async function save() {
@@ -526,3 +792,24 @@
   }
   onMounted(reload)
 </script>
+
+<style scoped lang="scss">
+  .schedule-panel-title,
+  .schedule-panel-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .schedule-person-select {
+    width: min(320px, 100%);
+  }
+
+  .schedule-panel-summary {
+    flex: 1;
+    min-width: 180px;
+    font-size: 14px;
+  }
+</style>

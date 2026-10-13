@@ -26,12 +26,17 @@ export const useAppearanceStore = defineStore('appearance', () => {
   function publicProjection(value: PublicAppearance): PublicAppearance {
     const publicImage = (image: PublicAppearance['logo']) =>
       image ? { ...image, url: `/api/studio/public-assets/${image.id}` } : null
+    const illustration = value.login.illustration || DEFAULT_APPEARANCE.login.illustration
     return JSON.parse(
       JSON.stringify({
         studioName: value.studioName,
         logo: publicImage(value.logo),
         login: {
           ...value.login,
+          illustration: {
+            mode: illustration.mode,
+            image: illustration.mode === 'image' ? publicImage(illustration.image) : null
+          },
           background: {
             ...value.login.background,
             image:

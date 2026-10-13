@@ -334,8 +334,6 @@
         return void ElMessage.warning('执行、验收和完成状态必须选择负责人')
       if (fields.leaderId && fields.leaderId === fields.teammateId)
         return void ElMessage.warning('负责人和队友不能是同一人')
-      if (fields.status === 'review' && !order.value.submissions.at(-1)?.screenshots.length)
-        return void ElMessage.warning('待验收状态需要已有完成截图')
       if (fields.status === 'completed' && order.value.receivedAmount !== order.value.amount)
         return void ElMessage.warning('已完成状态须已足额收款')
     }
@@ -426,7 +424,7 @@
     saving.value = true
     try {
       await ElMessageBox.confirm(
-        '请核对完成截图和负责人 / 队友信息。验收通过后，本单报酬将计入对应打手的可提现金额。',
+        '请核对完成材料或后台登记原因，以及负责人 / 队友信息。验收通过后，本单报酬将计入对应打手的可提现金额。',
         '确认财务验收通过',
         { confirmButtonText: '核对无误，通过验收', cancelButtonText: '继续核对', type: 'warning' }
       )
@@ -797,7 +795,12 @@
             ><template #header
               ><div class="flex justify-between gap-3"
                 ><span
-                  >{{ submission.recheckBy ? '财务复核申请：' : '打手提交：'
+                  >{{
+                    submission.recheckBy
+                      ? '财务复核申请：'
+                      : submission.source === 'status-correction'
+                        ? '后台登记：'
+                        : '打手提交：'
                   }}{{ formatTime(submission.recheckedAt || submission.submittedAt) }}</span
                 ><ElTag
                   :type="
@@ -817,6 +820,17 @@
                 ></div
               ></template
             ><ElAlert
+              v-if="submission.source === 'status-correction' && !submission.recheckBy"
+              title="后台状态登记（免截图）"
+              :description="
+                '登记人 ' +
+                staffName(submission.correctedBy || '') +
+                '；' +
+                (submission.correctionReason || '')
+              "
+              type="info"
+              :closable="false"
+              class="mb-4" /><ElAlert
               v-if="submission.recheckBy"
               title="财务复核（沿用原完成材料）"
               :description="
@@ -1033,7 +1047,7 @@
           ></template>
           <template v-if="dialog === 'correct-status'">
             <ElAlert
-              title="状态更正会校验履约材料与收款条件，并同步处理财务影响、保留更正原因。实际退款仍需另行登记。"
+              title="后台状态更正无需上传截图。执行、验收与完成需指定实际负责人，完成需足额收款；系统同步处理财务影响并保留原因。实际退款仍需另行登记。"
               type="warning"
               :closable="false"
               class="mb-4"

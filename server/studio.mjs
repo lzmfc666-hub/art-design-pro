@@ -253,6 +253,7 @@ function emptyState() {
     withdrawals: [],
     expenses: [],
     attendance: [],
+    workSchedules: [],
     salaryPlans: [],
     payrolls: [],
     logs: [],
@@ -510,6 +511,7 @@ export function createStudioService({
     const state = readOnlyState()
     state.playerAdjustments ||= []
     state.statusCorrectionReversals ||= {}
+    state.workSchedules ||= []
     if (state.logs?.length) {
       const ownsTransaction = !db.isTransaction
       if (ownsTransaction) db.exec('BEGIN IMMEDIATE')
@@ -629,6 +631,8 @@ export function createStudioService({
       'payOnArrival',
       'paymentMethod',
       'action',
+      'status',
+      'leaderId',
       'resolution',
       'teammateId'
     ]
@@ -945,6 +949,7 @@ export function createStudioService({
             'canceledAt',
             'cancelReason',
             'canceledFrom',
+            'rewardBeforeCancellation',
             'compensationPending',
             'compensationSettled'
           ])
@@ -979,7 +984,10 @@ export function createStudioService({
                 'recheckBy',
                 'recheckedAt',
                 'recheckReason',
-                'previousSubmissionId'
+                'previousSubmissionId',
+                'source',
+                'correctedBy',
+                'correctionReason'
               ]),
               screenshots: (row.screenshots || []).map(safeAttachment)
             }))
@@ -1038,6 +1046,22 @@ export function createStudioService({
             receipt: safeAttachment(value.receipt)
           }
         }
+        case 'work-schedule':
+          return can(user, 'attendance.manage') ||
+            can(user, 'salary.all') ||
+            value.userId === user.id
+            ? pick(value, [
+                'id',
+                'userId',
+                'effectiveFrom',
+                'enabled',
+                'start',
+                'end',
+                'remark',
+                'updatedAt',
+                'updatedBy'
+              ])
+            : null
         case 'attendance':
           return can(user, 'attendance.manage') ||
             can(user, 'salary.all') ||
@@ -1699,6 +1723,9 @@ export function createStudioService({
       attendance: state.attendance.filter(
         (row) => can(user, 'attendance.manage') || allSalary || row.userId === user.id
       ),
+      workSchedules: state.workSchedules.filter(
+        (row) => can(user, 'attendance.manage') || allSalary || row.userId === user.id
+      ),
       salaryPlans: state.salaryPlans.filter(salaryVisible),
       payrolls: viewSalary
         ? state.payrolls
@@ -1891,31 +1918,37 @@ export function createStudioService({
       if (['active', 'review', 'completed'].includes(next) && !leaderId)
         fail('请先选择实际负责打手，不能无负责人更正为执行或完成状态')
       if (leaderId && ['active', 'review', 'completed'].includes(next))
-        validateTarget(state, leaderId)
+        if (find(state, 'users', leaderId, '打手').role !== 'player')
+          fail('实际负责人必须是打手账号')
+      const hasSettledReward = state.rewardCredits.some(
+        (row) => row.orderId === order.id && row.amount > 0
+      )
       const priorSettlement = state.statusCorrectionReversals[order.id]
       const resolvedTeammate = Object.hasOwn(body, 'teammateId')
         ? body.teammateId
         : (order.teammateId ?? priorSettlement?.teammateId)
       if (
         ['active', 'review', 'completed'].includes(next) &&
-        state.rewardCredits.some((row) => row.orderId === order.id && row.amount > 0) &&
+        hasSettledReward &&
         (leaderId !== (priorSettlement?.leaderId || order.leaderId) ||
           (resolvedTeammate ?? null) !==
             (priorSettlement ? priorSettlement.teammateId : order.teammateId))
       )
         fail('已结算订单不能直接更换结算打手，请先由财务处理原打手与新打手的扣补款差额', 409)
-      if (
-        next === 'active' &&
-        order.status !== 'active' &&
-        activeCount(state, leaderId) >= find(state, 'users', leaderId).maxActiveOrders
-      )
-        fail('负责人已经达到同时接单上限', 409)
       if (next === 'completed' && (!paidOrder(order) || order.receivedAmount !== order.amount))
         fail('完成前必须确认客户足额收款')
-      if (next === 'review' && !order.submissions.at(-1)?.screenshots?.length)
-        fail('尚无完成材料，不能直接更正为待验收')
-      if (order.status === 'completed' || order.compensationSettled)
+      if (
+        (['completed', 'canceled'].includes(order.status) || order.compensationSettled) &&
+        hasSettledReward
+      )
         reverseStatusReward(state, order, user, reason)
+      if (
+        order.status === 'canceled' &&
+        !hasSettledReward &&
+        order.reward === 0 &&
+        Number.isSafeInteger(order.rewardBeforeCancellation)
+      )
+        order.reward = order.rewardBeforeCancellation
       if (['active', 'review', 'completed'].includes(next)) {
         if (order.leaderId !== leaderId || !order.assignments.some((row) => !row.releasedAt)) {
           const old = order.assignments.findLast((row) => !row.releasedAt)
@@ -1923,24 +1956,44 @@ export function createStudioService({
           order.assignments.push({ leaderId, acceptedAt: now(), correctedBy: user.id })
         }
         order.leaderId = leaderId
-        order.teammateId = validateTeammate(state, leaderId, resolvedTeammate)
+        if (resolvedTeammate === leaderId) fail('队友不能与负责人相同')
+        if (resolvedTeammate && find(state, 'users', resolvedTeammate, '队友').role !== 'player')
+          fail('队友必须是打手账号')
+        order.teammateId = resolvedTeammate || null
         if (order.teammateId && order.reward % 2) fail('双人平分报酬必须为偶数分')
       }
-      if (next === 'review' && order.submissions.at(-1)?.review) {
+      if (next === 'review') {
         const previous = order.submissions.at(-1)
-        order.submissions.push({
-          id: id(),
-          submittedAt: previous.submittedAt,
-          leaderId: order.leaderId,
-          teammateId: order.teammateId,
-          screenshots: clone(previous.screenshots),
-          previousSubmissionId: previous.id,
-          recheckBy: user.id,
-          recheckedAt: now(),
-          recheckReason: reason
-        })
+        const sameParticipants =
+          previous?.leaderId === order.leaderId &&
+          (previous?.teammateId ?? null) === order.teammateId
+        if (!previous || previous.review || !sameParticipants || !previous.screenshots.length) {
+          const reuseMaterials = sameParticipants && previous.screenshots.length > 0
+          order.submissions.push({
+            id: id(),
+            submittedAt: reuseMaterials ? previous.submittedAt : now(),
+            leaderId: order.leaderId,
+            teammateId: order.teammateId,
+            screenshots: reuseMaterials ? clone(previous.screenshots) : [],
+            source: 'status-correction',
+            correctedBy: user.id,
+            correctionReason: reason,
+            ...(reuseMaterials
+              ? {
+                  previousSubmissionId: previous.id,
+                  recheckBy: user.id,
+                  recheckedAt: now(),
+                  recheckReason: reason
+                }
+              : {})
+          })
+        }
       }
       order.status = next
+      if (next !== 'canceled') {
+        order.compensationPending = false
+        if (!hasSettledReward || next === 'completed') order.compensationSettled = false
+      }
       if (next === 'pending') {
         const active = order.assignments.findLast((row) => !row.releasedAt)
         if (active) Object.assign(active, { releasedAt: now(), reason })
@@ -1954,9 +2007,28 @@ export function createStudioService({
         order.completedAt ||= state.statusCorrectionReversals[order.id]?.completedAt || now()
         snapshotCommission(state, order)
         settleReward(state, order, user)
-        order.compensationPending = false
-        order.compensationSettled = false
+        let submission = order.submissions.at(-1)
+        if (
+          !submission ||
+          submission.review ||
+          submission.leaderId !== order.leaderId ||
+          (submission.teammateId ?? null) !== order.teammateId
+        ) {
+          submission = {
+            id: id(),
+            submittedAt: now(),
+            leaderId: order.leaderId,
+            teammateId: order.teammateId,
+            screenshots: [],
+            source: 'status-correction',
+            correctedBy: user.id,
+            correctionReason: reason
+          }
+          order.submissions.push(submission)
+        }
+        Object.assign(submission, { review: 'passed', reviewedAt: now(), reviewerId: user.id })
       } else if (next === 'canceled') {
+        order.rewardBeforeCancellation = order.reward
         order.canceledAt = now()
         order.cancelReason = reason
         order.canceledFrom = before.status
@@ -1972,7 +2044,15 @@ export function createStudioService({
       if (!submission || submission.review) fail('提交材料已审核，不能重复处理', 409)
       if (action === 'review-pass') {
         if (!paidOrder(order) || order.receivedAmount !== order.amount) fail('验收前请确认足额收款')
-        if (!submission.screenshots.length) fail('完成截图不能为空')
+        if (
+          !submission.screenshots.length &&
+          !(
+            submission.source === 'status-correction' &&
+            submission.correctedBy &&
+            submission.correctionReason
+          )
+        )
+          fail('完成截图或后台状态更正记录不能为空')
         order.status = 'completed'
         order.completedAt ||= state.statusCorrectionReversals[order.id]?.completedAt || now()
         submission.review = 'passed'
@@ -2002,6 +2082,7 @@ export function createStudioService({
       if (order.teammateId && reward % 2) fail('双人平分报酬必须为偶数分')
       order.amount = amount
       order.reward = reward
+      if (order.status === 'canceled') order.rewardBeforeCancellation = reward
       if (paidOrder(order)) order.receivedAmount = amount
       if (order.status === 'completed' || order.compensationSettled)
         settleReward(state, order, user)
@@ -2012,6 +2093,7 @@ export function createStudioService({
       if (order.status !== 'canceled' || !order.compensationPending || order.compensationSettled)
         fail('该订单不需要重复补偿结算', 409)
       order.reward = cents(body.reward, '最终整单报酬')
+      order.rewardBeforeCancellation = order.reward
       if (order.reward > 0 && !order.leaderId)
         order.leaderId = order.assignments.at(-1)?.leaderId ?? null
       if (order.reward > 0 && !order.leaderId) fail('没有历史负责人，不能结算打手报酬')
@@ -2093,6 +2175,7 @@ export function createStudioService({
         if (order.status === 'canceled') fail('订单已经取消', 409)
         if (order.status === 'completed') requirePermission(user, 'finance.review')
         order.canceledFrom = order.status
+        order.rewardBeforeCancellation = order.reward
         order.status = 'canceled'
         order.canceledAt = now()
         order.cancelReason = reason
@@ -2770,6 +2853,50 @@ export function createStudioService({
         )
         if (existing) state[table][state[table].indexOf(existing)] = row
         else state[table].push(row)
+        return clone(row)
+      }
+      if (path === '/work-schedules') {
+        requirePermission(user, 'attendance.manage')
+        const employee = find(state, 'users', body.userId, '人员')
+        if (employee.status !== 'active') fail('停用人员不能设置新班次')
+        const effectiveFrom = validDate(body.effectiveFrom, '生效日期')
+        if (effectiveFrom < shanghaiDate(now()))
+          fail('固定班次只能从今天或之后生效，历史排班不能改写')
+        if (typeof body.enabled !== 'boolean') fail('固定班次启用状态无效')
+        const clockValue = (value, label) => {
+          if (typeof value !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value))
+            fail(`${label}格式应为有效的HH:mm`)
+          return value
+        }
+        const start = body.enabled ? clockValue(body.start, '上班时间') : ''
+        const end = body.enabled ? clockValue(body.end, '下班时间') : ''
+        if (body.enabled && start === end)
+          fail('上班和下班时间不能相同；跨夜班次请填写次日下班时间')
+        const existing = state.workSchedules.find(
+          (row) => row.userId === employee.id && row.effectiveFrom === effectiveFrom
+        )
+        const row = {
+          id: existing?.id || id(),
+          userId: employee.id,
+          effectiveFrom,
+          enabled: body.enabled,
+          start,
+          end,
+          remark: text(body.remark, '班次备注', { max: 1000 }),
+          updatedAt: now(),
+          updatedBy: user.id
+        }
+        audit(
+          state,
+          user,
+          body.enabled ? '设置个人固定班次' : '取消个人固定班次',
+          'work-schedule',
+          row.id,
+          existing,
+          row
+        )
+        if (existing) state.workSchedules[state.workSchedules.indexOf(existing)] = row
+        else state.workSchedules.push(row)
         return clone(row)
       }
       if (path === '/attendance') {

@@ -22,6 +22,7 @@ export interface LoginAppearance {
   title: string
   subtitle: string
   description: string
+  illustration: { mode: 'default' | 'image'; image: Attachment | null }
   background: AppearanceBackground
 }
 export type PublicAppearance = Pick<AppearanceConfig, 'studioName' | 'logo' | 'login' | 'glass'>
@@ -116,6 +117,7 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
     title: '欢迎使用电竞工作室后台',
     subtitle: '统一管理订单、人员与财务',
     description: '账号由工作室管理员分配，忘记密码请联系管理员。',
+    illustration: { mode: 'default', image: null },
     background: { mode: 'default', color: '#eef4ff', image: null, overlay: 50 }
   },
   glass: { enabled: false },
@@ -136,6 +138,7 @@ export function completeAppearance(value: AppearanceConfig): AppearanceConfig {
       ? {
           ...defaults.login,
           ...value.login,
+          illustration: { ...defaults.login.illustration, ...value.login.illustration },
           background: { ...defaults.login.background, ...value.login.background }
         }
       : defaults.login,

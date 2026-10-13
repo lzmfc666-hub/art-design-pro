@@ -103,6 +103,9 @@ export interface Submission {
   recheckedAt?: string
   recheckReason?: string
   previousSubmissionId?: string
+  source?: 'status-correction'
+  correctedBy?: string
+  correctionReason?: string
 }
 export interface Assignment {
   leaderId: string
@@ -148,6 +151,7 @@ export interface Order {
   canceledAt?: string
   cancelReason?: string
   canceledFrom?: OrderStatus
+  rewardBeforeCancellation?: number
   compensationPending?: boolean
   compensationSettled?: boolean
   commissionSnapshot?: {
@@ -192,6 +196,17 @@ export interface Expense {
   receipt: Attachment | null
   createdBy: string
   deletedAt?: string | null
+}
+export interface WorkSchedule {
+  id: string
+  userId: string
+  effectiveFrom: string
+  enabled: boolean
+  start: string
+  end: string
+  remark: string
+  updatedAt: string
+  updatedBy: string
 }
 export interface Attendance {
   id: string
@@ -395,6 +410,7 @@ export interface StudioData {
   withdrawals: Withdrawal[]
   expenses: Expense[]
   attendance: Attendance[]
+  workSchedules?: WorkSchedule[]
   salaryPlans: SalaryPlan[]
   payrolls: Payroll[]
   logs: AuditLog[]

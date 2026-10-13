@@ -127,3 +127,58 @@ test('inactive login background is neither projected nor permitted as a public i
   assert.equal(appearanceAttachments(config).length, 1)
   assert.equal(appearanceAttachments(config, { activeOnly: true }).length, 0)
 })
+
+test('older login settings keep their text and background while receiving a default left illustration', () => {
+  const config = defaultAppearance()
+  delete config.login.illustration
+  config.login.title = '原有登录文案'
+  config.login.background = { ...config.login.background, mode: 'image', image: image('login-bg') }
+  const normalized = normalizeAppearance(config, resolver)
+  assert.deepEqual(normalized.login.illustration, { mode: 'default', image: null })
+  assert.equal(normalized.login.title, '原有登录文案')
+  assert.equal(normalized.login.background.image.id, 'login-bg')
+  assert.deepEqual(projectPublicAppearance(config).login.illustration, {
+    mode: 'default',
+    image: null
+  })
+  assert.deepEqual(projectAppearanceAudit(config).login.illustration, {
+    mode: 'default',
+    image: null
+  })
+})
+
+test('left illustration has independent validation and public attachment projection', () => {
+  const config = defaultAppearance()
+  config.login.illustration = { mode: 'image', image: image('left') }
+  const result = normalizeAppearance(config, resolver)
+  assert.equal(result.login.background.mode, 'default')
+  assert.equal(result.login.illustration.image.url, '/api/studio/uploads/left')
+  assert.equal(
+    projectPublicAppearance(config).login.illustration.image.url,
+    '/api/studio/public-assets/left'
+  )
+  assert.deepEqual(
+    publicAppearanceAttachments(config).map((row) => row.id),
+    ['left']
+  )
+  assert.deepEqual(
+    appearanceAttachments(config, { activeOnly: true }).map((row) => row.id),
+    ['left']
+  )
+  config.login.illustration.mode = 'default'
+  assert.equal(projectPublicAppearance(config).login.illustration.image, null)
+  assert.deepEqual(publicAppearanceAttachments(config), [])
+  assert.deepEqual(appearanceAttachments(config, { activeOnly: true }), [])
+  assert.equal(appearanceAttachments(config)[0].id, 'left')
+  for (const illustration of [
+    null,
+    'image',
+    { mode: 'external', image: null },
+    { mode: 'image', image: null },
+    { mode: 'default', image: null, html: '<img>' }
+  ]) {
+    assert.throws(() =>
+      normalizeAppearance({ ...config, login: { ...config.login, illustration } }, resolver)
+    )
+  }
+})

@@ -618,6 +618,9 @@ function modulesFor(snapshot) {
       ['leaderName', '负责人'],
       ['teammateName', '队友'],
       ['submittedAt', '上报时间'],
+      ['source', '提交来源'],
+      ['correctedByName', '后台登记人'],
+      ['correctionReason', '后台登记原因'],
       ['review', '验收结果'],
       ['reviewerName', '审核人'],
       ['reviewedAt', '审核时间'],
@@ -630,6 +633,9 @@ function modulesFor(snapshot) {
         leaderName: person(row.leaderId),
         teammateName: person(row.teammateId),
         submittedAt: displayTime(row.submittedAt),
+        source: row.source === 'status-correction' ? '后台状态登记（免截图）' : '打手上报',
+        correctedByName: person(row.correctedBy),
+        correctionReason: row.correctionReason || '',
         reviewedAt: displayTime(row.reviewedAt),
         reviewerName: person(row.reviewerId),
         review: row.review || '待验收',
@@ -880,6 +886,36 @@ function modulesFor(snapshot) {
     '方案生效日期'
   )
   add(
+    'workSchedules',
+    '每人固定班次',
+    '人员管理',
+    true,
+    [
+      ['name', '人员'],
+      ['effectiveFrom', '生效日期'],
+      ['enabled', '固定班次'],
+      ['start', '上班时间'],
+      ['end', '下班时间'],
+      ['overnight', '是否跨夜'],
+      ['remark', '说明'],
+      ['updatedByName', '设置人'],
+      ['updatedAt', '设置时间']
+    ],
+    (snapshot.workSchedules || []).map((row) => ({
+      ...row,
+      name: person(row.userId),
+      enabled: row.enabled ? '启用' : '停用',
+      overnight: row.enabled && row.end < row.start ? '次日下班' : '',
+      updatedByName: person(row.updatedBy),
+      updatedAt: displayTime(row.updatedAt),
+      _date: row.effectiveFrom,
+      _periodFilter: false,
+      _people: [row.userId]
+    })),
+    '当前权限可见的固定班次版本；不自动生成考勤或实际工时。报表账期不截断配置版本，可额外按生效日期筛选。',
+    '班次生效日期'
+  )
+  add(
     'attendance',
     '排班与考勤',
     '人员管理',
@@ -1118,6 +1154,17 @@ function modulesFor(snapshot) {
       ['heroImageUrl', '横幅背景图片站内地址'],
       ['heroOverlay', '横幅图片遮罩（%）', 'number'],
       ['showDecoration', '展示原玻璃装饰图'],
+      ['loginTitle', '登录标题'],
+      ['loginSubtitle', '登录副标题'],
+      ['loginDescription', '登录说明'],
+      ['loginIllustrationMode', '登录左侧大图类型'],
+      ['loginIllustrationName', '登录左侧大图名称'],
+      ['loginIllustrationUrl', '登录左侧大图站内地址'],
+      ['loginBackgroundMode', '登录整体背景类型'],
+      ['loginBackgroundColor', '登录整体背景颜色'],
+      ['loginBackgroundName', '登录整体背景图片名称'],
+      ['loginBackgroundUrl', '登录整体背景站内地址'],
+      ['glassEnabled', '毛玻璃效果'],
       ['icons', '菜单与快捷入口预设图标'],
       ['revision', '配置版本', 'number'],
       ['updatedAt', '保存时间']
@@ -1167,6 +1214,18 @@ function modulesFor(snapshot) {
               heroImageUrl: imageUrl(config.hero.image),
               heroOverlay: config.hero.overlay,
               showDecoration: config.hero.showDecoration ? '是' : '否',
+              loginTitle: config.login?.title || '',
+              loginSubtitle: config.login?.subtitle || '',
+              loginDescription: config.login?.description || '',
+              loginIllustrationMode:
+                config.login?.illustration?.mode === 'image' ? '自定义图片' : '默认大图',
+              loginIllustrationName: config.login?.illustration?.image?.name || '',
+              loginIllustrationUrl: imageUrl(config.login?.illustration?.image),
+              loginBackgroundMode: modeLabels[config.login?.background?.mode || 'default'],
+              loginBackgroundColor: config.login?.background?.color || '',
+              loginBackgroundName: config.login?.background?.image?.name || '',
+              loginBackgroundUrl: imageUrl(config.login?.background?.image),
+              glassEnabled: config.glass?.enabled ? '启用' : '停用',
               icons: Object.entries(APPEARANCE_ICON_DEFAULTS)
                 .map(([key, original]) => `${iconLabels[key]}：${config.icons[key] || original}`)
                 .join('；'),

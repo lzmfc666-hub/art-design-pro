@@ -312,6 +312,7 @@
           'customer',
           'user',
           'attendance',
+          'work-schedule',
           'platform',
           'shop',
           'template',
@@ -320,7 +321,7 @@
           'payroll',
           'appearance',
           'upload'
-        ].map((value) => ({ value, label: value }))
+        ].map((value) => ({ value, label: value === 'work-schedule' ? '个人固定班次' : value }))
       }
     },
     {

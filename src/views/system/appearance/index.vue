@@ -237,7 +237,27 @@
                   maxlength="800"
                   show-word-limit
               /></ElFormItem>
-              <ElFormItem label="背景类型"
+              <ElFormItem label="左侧大图"
+                ><ElRadioGroup v-model="form.login.illustration.mode">
+                  <ElRadioButton value="default">原默认大图</ElRadioButton>
+                  <ElRadioButton value="image">自定义图片</ElRadioButton>
+                </ElRadioGroup></ElFormItem
+              >
+              <ElFormItem v-if="form.login.illustration.mode === 'image'" label="左侧大图图片"
+                ><AppearanceImageUpload
+                  label="登录左侧大图"
+                  :image-url="form.login.illustration.image?.url"
+                  :filename="form.login.illustration.image?.name"
+                  recommended="建议使用清晰的横向插图，图片会完整显示；保存后可在登录前查看"
+                  :disabled="locked"
+                  @uploaded="setImage('illustration', $event)"
+                  @remove="removeImage('illustration')"
+                  @busy="uploading = $event"
+              /></ElFormItem>
+              <p class="field-tip mb-5"
+                >左侧大图与整页背景分别设置；窄屏登录页会自动收起左侧展示区。</p
+              >
+              <ElFormItem label="整页背景类型"
                 ><ElRadioGroup v-model="form.login.background.mode">
                   <ElRadioButton value="default">原默认背景</ElRadioButton
                   ><ElRadioButton value="color">纯色</ElRadioButton
@@ -363,11 +383,19 @@
             :class="{ 'mini-login-glass': form.glass.enabled }"
             :style="loginPreviewStyle"
           >
-            <div class="mini-login-brand"
+            <div class="mini-login-brand" :style="loginTextStyle"
               ><img v-if="form.logo" :src="form.logo.url" alt="Logo 草稿" /><strong>{{
                 form.studioName
               }}</strong></div
             >
+            <div class="mini-login-illustration">
+              <img
+                v-if="form.login.illustration.mode === 'image' && form.login.illustration.image"
+                :src="form.login.illustration.image.url"
+                alt="登录左侧大图草稿"
+              />
+              <ThemeSvg v-else :src="loginIcon" size="100%" />
+            </div>
             <div class="mini-login-form"
               ><h3>{{ form.login.title }}</h3
               ><p>{{ form.login.subtitle }}</p
@@ -446,7 +474,10 @@
   import AppearanceImageUpload from './modules/appearance-image-upload.vue'
   import { useAppearanceStore } from '@/store/modules/appearance'
   import { useStudio, formatTime } from '@/hooks/business/useStudio'
-  import { appearanceBackgroundStyle } from '@/hooks/business/useAppearance'
+  import {
+    appearanceBackgroundStyle,
+    appearanceBackgroundTextStyle
+  } from '@/hooks/business/useAppearance'
   import {
     APPEARANCE_ICON_OPTIONS,
     APPEARANCE_ICON_TARGETS,
@@ -455,6 +486,7 @@
   } from '@/types/appearance'
   import type { Attachment } from '@/types/studio'
   import glassArt from '@imgs/dashboard/overview-glass.svg'
+  import loginIcon from '@imgs/svg/login_icon.svg'
 
   defineOptions({ name: 'Appearance' })
   const store = useAppearanceStore()
@@ -551,17 +583,24 @@
         : {}
   )
   const loginPreviewStyle = computed(() => appearanceBackgroundStyle(form.value.login.background))
+  const loginTextStyle = computed(() => appearanceBackgroundTextStyle(form.value.login.background))
   const backgroundFor = (target: 'page' | 'hero' | 'login') =>
     target === 'login' ? form.value.login.background : form.value[target]
 
-  function setImage(target: 'logo' | 'page' | 'hero' | 'login', attachment: Attachment) {
+  function setImage(
+    target: 'logo' | 'page' | 'hero' | 'login' | 'illustration',
+    attachment: Attachment
+  ) {
     if (!canEdit.value) return
     if (target === 'logo') form.value.logo = attachment
+    else if (target === 'illustration') form.value.login.illustration.image = attachment
     else backgroundFor(target).image = attachment
   }
-  function removeImage(target: 'logo' | 'page' | 'hero' | 'login') {
+  function removeImage(target: 'logo' | 'page' | 'hero' | 'login' | 'illustration') {
     if (locked.value) return
     if (target === 'logo') form.value.logo = null
+    else if (target === 'illustration')
+      form.value.login.illustration = { mode: 'default', image: null }
     else {
       const background = backgroundFor(target)
       background.image = null
@@ -614,6 +653,8 @@
         return `${label}需为纯文本，最多 ${max} 个字符`
     }
     if (!value.login.title.trim()) return '请填写登录标题'
+    if (value.login.illustration.mode === 'image' && !value.login.illustration.image)
+      return '请先上传登录左侧大图'
     if (typeof value.glass.enabled !== 'boolean') return '请选择是否启用毛玻璃'
     const loginBackground = value.login.background
     if (!/^#[0-9a-fA-F]{6}$/.test(loginBackground.color)) return '登录背景颜色需为 #RRGGBB 格式'
@@ -882,6 +923,7 @@
     align-items: center;
     margin-bottom: 18px;
     font-size: 12px;
+    color: var(--appearance-background-text, var(--art-gray-900));
 
     img {
       width: 24px;
@@ -909,6 +951,21 @@
       font-size: 10px;
       color: var(--art-gray-600);
       white-space: pre-line;
+    }
+  }
+
+  .mini-login-illustration {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 140px;
+    margin-bottom: 18px;
+
+    img,
+    :deep(svg) {
+      width: 100%;
+      max-height: 140px;
+      object-fit: contain;
     }
   }
 

@@ -26,9 +26,11 @@
 | POST `/appearance` | `{config,revision}` | 需 `settings.manage`；保存后版本递增，版本冲突 409 |
 | POST `/appearance/reset` | `{revision}` | 同上，恢复默认并留审计，不删除旧上传图片 |
 | GET `/appearance/public` | 无 | 匿名仅返回 `{studioName,logo,login,glass}`；不返回业务背景、图标、版本或修改人 |
-| GET `/public-assets/:id` | 无 | 匿名仅允许当前已保存 Logo 与已启用登录背景，其余 ID 404 |
+| GET `/public-assets/:id` | 无 | 匿名仅允许当前已保存 Logo、已启用登录背景和登录左图，其余 ID 404 |
 
 外观允许指定模式、HEX 颜色、整数遮罩、预设图标、登录文案/背景和玻璃样式。图片必须为本站真实上传附件：新图片属于当前配置人，已有配置图片可继续复用；不能借用他人订单/金融凭证，不能传任意 URL、SVG、HTML 或 CSS。登录后的品牌图片和启用业务背景可共享下载，配置管理员可预览当前配置中的未启用图片；共享只用于下载，不授予业务附件复用权限。匿名投影图片 URL 使用 `/api/studio/public-assets/:id`。
+
+`login.illustration={mode:'default'|'image',image:Attachment|null}` 独立控制左侧大图，与 `login.background` 整页背景同时生效。旧配置缺字段自动使用原默认插图；草稿图片保存前不对匿名开放，恢复默认/移除后不再匿名提供旧图。匿名投影与配置审计只返回白名单字段。
 
 GET `/overview?start=2026-10-07&end=2026-10-13` 返回 `OverviewReport`。有效日期为 1900-01-01 至 9998-12-31，开始不得晚于结束，最多 366 天。比较区间是紧邻上一同长区间；无法比较的零基数变化或无权限/无法核实指标为 null。普通区间经营利润不扣月度底薪，完整月份区间另提供扣底薪利润；当前钱包余额不做历史回溯或区间同比。收入、退款和订单成本回到原付款日；完成业绩与工资佣金按完成日期/月归属。
 
@@ -69,11 +71,11 @@ POST `/orders/:id/action` 支持：
 | `cancel-settle` | reward/teammateId/reason | `finance.review`，确认取消订单最终补偿，不能重复 |
 | `correct-status` | status/reason/leaderId?/teammateId? | 财务、店长、老板、超管四类角色且 `orders.edit` |
 
-`correct-status` 可选 pending/active/review/completed/canceled，必须说明原因。普通管理员即使覆盖授权 `orders.edit` 仍禁止。执行/验收/完成须真实启用的负责人；完成须足额收款；待验收须有效完成材料；执行状态还受接单上限限制。`teammateId:null` 明确清空队友，未提供则沿用原值。
+`correct-status` 可选 pending/active/review/completed/canceled，五种状态可相互更正且无需截图，必须说明原因。普通管理员即使覆盖授权 `orders.edit` 仍禁止。执行/验收/完成须真实的打手负责人（允许历史停用账号），完成须足额收款；后台更正不受当前接单上限限制。`teammateId:null` 明确清空队友，未提供则沿用原值。后台免图记录保存 `source:'status-correction',correctedBy,correctionReason`，验收、日志、导出和诊断共同识别，不能伪装为打手提交截图。
 
 已结算终态回退建立冲正扣补流水，不能裸改状态或抹去已付历史；超出可用余额的差额交人工处理。恢复只使用原负责人、队友和原报酬，保留原 completedAt/佣金月份；改结算人员或金额须另走财务差额处理，缺条件返回明确错误。已完成更正到待验收保留原材料审核历史，新增带 `recheckBy/recheckedAt/recheckReason/previousSubmissionId` 的复核材料，正常再次验收不重发奖励。
 
-直接指定仍须打手接受，因此创建/派单后显示待接单是当前流程。后台没有代打手完成上报接口。双人固定平分报酬必须为偶数分。
+直接指定仍须打手接受，因此创建/派单后显示待接单是当前流程。财务通过状态更正进行后台免图登记；打手本人正常上报接口仍须完成截图。双人固定平分报酬必须为偶数分。
 
 ## 退款、提现、费用与人工扣补款
 
@@ -106,7 +108,7 @@ FundTransaction 为 `{id,accountId,kind,amount,delta,balanceAfter,reason,receipt
 
 Order 新增 `paymentMethod?:cash\|balance`、`balanceTransactionId?`、`balanceCustomerId?`，旧单默认 cash。余额创建及 confirm-payment 强制 requestId、全额扣款，paidAt 为服务器实际扣款时，内部资金支付不需要重复现金凭证，不与落地付同时创建。已余额收款不能改客户金额、实收或付款方式；退款申请 / 直接退款及 approve 须 requestId，审批后自动回原 balanceCustomerId 的储值账户，通过唯一退款源防重复，不再现金退款。大厅原退款禁令保持。
 
-充值和押金缴纳 / 退还不记经营收入；客户 deduction 及退出 penalty 才按真实登记日计 days / overview 的 otherIncome，利润加入此项且订单营收不重复。报酬钱包扣补沿旧成本调整。导出新增 customerBalances/customerTransactions/playerDeposits/playerDepositTransactions，余额只为当前 snapshot，流水由授权 SQL 筛选后计数 / 读取，实际总计日期含 SQL 最早资金时间，超 100000 明确拒绝。人员 staff 改为非打手，新增 players 档案模块；完整模块数为 34，批选上限 64，白名单授权保持。
+充值和押金缴纳 / 退还不记经营收入；客户 deduction 及退出 penalty 才按真实登记日计 days / overview 的 otherIncome，利润加入此项且订单营收不重复。报酬钱包扣补沿旧成本调整。导出新增 customerBalances/customerTransactions/playerDeposits/playerDepositTransactions，余额只为当前 snapshot，流水由授权 SQL 筛选后计数 / 读取，实际总计日期含 SQL 最早资金时间，超 100000 明确拒绝。人员 staff 改为非打手，新增 players 档案模块；加入固定班次后完整模块数为 35，批选上限 64，白名单授权保持。
 
 ## 人员、工资与考勤
 
@@ -117,6 +119,8 @@ GET `/players?current&size&name&username&levelId&status&login&claim&withdraw` �
 POST `/salary-plans` 使用 SalaryPlan，需 `salary.manage`；`platformRates` 明确保存 0 或 null 的不同含义。POST `/payrolls` `{month}` 需同时有 `salary.manage` 与 `salary.all`，本人薪资授权不能用于全员月结。配置未齐禁止发放，工资保存历史快照；完成月计佣金，退款归原付款日并只扣新增多发佣金差额，补充结算不重发底薪。大厅运营提成固定 0，固定工资佣金为 0，已有有效计提比例/人员归属与发放底薪快照不随未来配置重算。月中换方案当前不按天折底薪，按工时计薪仍未开放。
 
 POST `/attendance` `{id?,userId,date,start,end,status,actualHours?,remark}` 需 `attendance.manage`，同人同日一条。状态含 normal 正常、rest 休息，并保留 scheduled 待登记、present 到岗、leave 请假、absent 缺勤兼容值。
+
+POST `/work-schedules` `{userId,effectiveFrom,enabled,start,end,remark}` 需 `attendance.manage`。固定班次采用每人每生效日唯一的版本，只允许今天或未来生效；启用时 start/end 为不同的有效 HH:mm，支持次日下班，停用时两者为空。同生效日可更新，过去版本不可改写。`bootstrap.workSchedules` 返回管理考勤、全员薪资或本人范围内的配置。已登记日考勤优先，固定班次只为未登记日期提供默认时间，不产生到岗工时、工资或每日记录。日志按权限投影；导出模块 `workSchedules` 保留可见版本，诊断核对有效日期/时间、人员关联和重复版本。
 
 - 未登记日期仅由界面默认展示正常，不写虚构的每日记录、班次或实际工时。
 - normal/rest 的 start/end 可同时为空，有值须成对；正常无班次可单独登记 0–24 小时，有班次则不超过班次时长，支持跨夜。

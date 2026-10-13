@@ -33,3 +33,27 @@ export function appearanceBackgroundStyle(background: AppearanceBackground): CSS
     '--appearance-dark-veil': `rgba(15,23,42,${opacity})`
   }
 }
+
+/** 自定义纯色不随深浅主题变化，展示区文字按实际背景选择可读颜色。 */
+export function appearanceBackgroundTextStyle(background: AppearanceBackground): CSSProperties {
+  if (background.mode !== 'color' || !/^#[0-9a-fA-F]{6}$/.test(background.color)) return {}
+  const luminanceOf = (color: string) => {
+    const channels = [1, 3, 5].map((offset) => {
+      const value = Number.parseInt(color.slice(offset, offset + 2), 16) / 255
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+    })
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+  }
+  const luminance = luminanceOf(background.color)
+  const fallback = luminance > 0.179 ? '#000000' : '#ffffff'
+  const readable = (color: string) => {
+    const foreground = luminanceOf(color)
+    const contrast =
+      (Math.max(luminance, foreground) + 0.05) / (Math.min(luminance, foreground) + 0.05)
+    return contrast >= 4.5 ? color : fallback
+  }
+  return {
+    '--appearance-background-text': readable(luminance > 0.179 ? '#111827' : '#f8fafc'),
+    '--appearance-background-muted-text': readable(luminance > 0.179 ? '#374151' : '#e2e8f0')
+  }
+}

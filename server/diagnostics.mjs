@@ -81,6 +81,7 @@ export function buildDiagnosticsReport({
       'salaryPlans',
       'payrolls',
       'attendance',
+      'workSchedules',
       'rewardReviews',
       'commissionAdjustments'
     ].map((key) => [key, asRows(state[key])])
@@ -189,11 +190,25 @@ export function buildDiagnosticsReport({
     )
       issue('orders', 'error', 'order', order.id, '已完成订单缺少足额收款或有效完成时间。')
     const latest = asRows(order.submissions).at(-1)
+    const manualReview =
+      latest?.source === 'status-correction' &&
+      maps.users.has(latest.correctedBy) &&
+      typeof latest.correctionReason === 'string' &&
+      latest.correctionReason.trim().length > 0 &&
+      timestamp(latest.submittedAt) &&
+      latest.leaderId === order.leaderId &&
+      (latest.teammateId ?? null) === (order.teammateId ?? null)
     if (
       order.status === 'review' &&
-      (!latest || !asRows(latest.screenshots).length || latest.review)
+      (!latest || (!asRows(latest.screenshots).length && !manualReview) || latest.review)
     )
-      issue('orders', 'error', 'order', order.id, '待验收订单没有可审核的最新完成材料。')
+      issue(
+        'orders',
+        'error',
+        'order',
+        order.id,
+        '待验收订单没有可审核的最新完成材料或后台登记记录。'
+      )
     if (order.status === 'pending' && order.dispatchMode === 'direct' && !order.assignedTo)
       issue('orders', 'error', 'order', order.id, '指定待接单订单缺少指定接单人。')
   }
@@ -591,6 +606,39 @@ export function buildDiagnosticsReport({
     month: '2-digit',
     day: '2-digit'
   }).format(new Date(now))
+  const scheduleVersions = new Set()
+  for (const schedule of tables.workSchedules) {
+    inspect('attendance')
+    link('attendance', 'work-schedule', schedule, 'userId', 'users', '固定班次人员')
+    const validClock = (value) =>
+      typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value)
+    const version = JSON.stringify([schedule.userId, schedule.effectiveFrom])
+    if (
+      !date(schedule.effectiveFrom) ||
+      typeof schedule.enabled !== 'boolean' ||
+      (schedule.enabled
+        ? !validClock(schedule.start) ||
+          !validClock(schedule.end) ||
+          schedule.start === schedule.end
+        : schedule.start !== '' || schedule.end !== '')
+    )
+      issue(
+        'attendance',
+        'error',
+        'work-schedule',
+        schedule.id,
+        '固定班次的生效日期、启停状态或上下班时间无效。'
+      )
+    if (scheduleVersions.has(version))
+      issue(
+        'attendance',
+        'error',
+        'work-schedule',
+        schedule.id,
+        '同一人员同一生效日期存在重复固定班次。'
+      )
+    scheduleVersions.add(version)
+  }
   for (const attendance of tables.attendance) {
     inspect('attendance')
     link('attendance', 'attendance', attendance, 'userId', 'users', '考勤员工')

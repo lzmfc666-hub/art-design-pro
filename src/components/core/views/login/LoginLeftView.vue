@@ -3,14 +3,21 @@
   <div
     class="login-left-view"
     :class="{ 'login-left-custom': config.login.background.mode !== 'default' }"
+    :style="displayTextStyle"
   >
     <div class="logo">
       <ArtLogo class="icon" size="46" />
       <h1 class="title">{{ config.studioName }}</h1>
     </div>
 
-    <div v-if="config.login.background.mode === 'default'" class="left-img">
-      <ThemeSvg :src="loginIcon" size="100%" />
+    <div class="left-img" :class="{ 'left-img-custom': illustrationUrl }">
+      <img
+        v-if="illustrationUrl"
+        :src="illustrationUrl"
+        class="custom-illustration"
+        alt="登录页插图"
+      />
+      <ThemeSvg v-else :src="loginIcon" size="100%" />
     </div>
 
     <div class="text-wrap">
@@ -74,10 +81,18 @@
 </template>
 
 <script setup lang="ts">
-  import { useAppearance } from '@/hooks/business/useAppearance'
+  import { useAppearance, appearanceBackgroundTextStyle } from '@/hooks/business/useAppearance'
   import loginIcon from '@imgs/svg/login_icon.svg'
   import { themeAnimation } from '@/utils/ui/animation'
   const { config } = useAppearance()
+  const displayTextStyle = computed(() =>
+    appearanceBackgroundTextStyle(config.value.login.background)
+  )
+  const illustrationUrl = computed(() =>
+    config.value.login.illustration.mode === 'image'
+      ? config.value.login.illustration.image?.url
+      : undefined
+  )
 
   // 定义 props
   defineProps<{
@@ -121,6 +136,7 @@
         margin-left: 10px;
         font-size: 20px;
         font-weight: 400;
+        color: var(--appearance-background-text, var(--art-gray-900));
       }
     }
 
@@ -131,6 +147,20 @@
       width: 40%;
       margin: auto;
       animation: slideInLeft 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+
+      &.left-img-custom {
+        inset: 92px 0 200px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 76%;
+      }
+
+      .custom-illustration {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
     }
 
     .text-wrap {
@@ -145,13 +175,13 @@
       h1 {
         font-size: 24px;
         font-weight: 400;
-        color: var(--art-gray-900) !important;
+        color: var(--appearance-background-text, var(--art-gray-900)) !important;
       }
 
       p {
         margin-top: 10px;
         font-size: 14px;
-        color: var(--art-gray-600) !important;
+        color: var(--appearance-background-muted-text, var(--art-gray-600)) !important;
       }
     }
 
@@ -165,6 +195,7 @@
       }
 
       // 动画 mixin
+      /* stylelint-disable at-rule-empty-line-before -- SCSS @else must remain paired with @if. */
       @mixin fadeAnimation($direction: '', $rotation: 0deg) {
         from {
           opacity: 0;
@@ -190,6 +221,7 @@
           }
         }
       }
+      /* stylelint-enable at-rule-empty-line-before */
 
       // 动画定义
       @keyframes fadeInUp {
@@ -512,6 +544,10 @@
       .left-img,
       .text-wrap,
       .geometric-decorations {
+        display: none;
+      }
+
+      .left-img.left-img-custom {
         display: none;
       }
 

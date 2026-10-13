@@ -44,9 +44,12 @@
           row.status === 'review' ? '待验收' : '取消补偿待确认'
         }}</ElTag></template
       >
-      <template #materials="{ row }"
-        >{{ row.submissions.at(-1)?.screenshots.length || 0 }} 张截图</template
-      >
+      <template #materials="{ row }">{{
+        row.submissions.at(-1)?.source === 'status-correction' &&
+        !row.submissions.at(-1)?.screenshots.length
+          ? '后台登记（免截图）'
+          : (row.submissions.at(-1)?.screenshots.length || 0) + ' 张截图'
+      }}</template>
       <template #actions="{ row }"
         ><ElButton type="primary" link @click="viewOrder(row.id)">{{
           row.status === 'review' ? '核查并验收' : '查看订单 / 确认补偿'
