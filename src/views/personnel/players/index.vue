@@ -1,5 +1,5 @@
 <template>
-  <div class="players-page art-full-height">
+  <div class="players-page">
     <BusinessPageHeader
       title="打手管理"
       description="维护打手档案和三个操作开关，分别管理报酬钱包、独立押金与真实订单历史。"
@@ -45,8 +45,13 @@
         @reset="resetSearch"
       />
       <ElAlert v-if="error" :title="error" type="error" :closable="false" class="my-4" />
-      <ElCard class="art-table-card">
-        <ArtTableHeader v-model:columns="columnChecks" :loading="loading" @refresh="reload">
+      <ElCard class="art-table-card players-table-card">
+        <ArtTableHeader
+          v-model:columns="columnChecks"
+          :loading="loading"
+          full-class="players-table-card"
+          @refresh="reload"
+        >
           <template #left
             ><ElSpace wrap
               ><ElButton
@@ -532,6 +537,16 @@
 </script>
 
 <style scoped lang="scss">
+  .players-page {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .players-table-card {
+    flex: none;
+    height: clamp(420px, 60vh, 680px);
+  }
+
   .players-stats {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
