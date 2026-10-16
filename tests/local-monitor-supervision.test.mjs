@@ -184,6 +184,11 @@ test('本机监控纳管拒绝错环境、错误目标、库或身份范围，�
   rejected({ ...f.config, backups: { enabled: true, intervalMinutes: 35792, retentionCount: 24, directory: '.ops/backups' } })
   rejected({ ...f.config, backups: { enabled: true, intervalMinutes: 60, retentionCount: 0, directory: '.ops/backups' } })
   rejected({ ...f.config, backups: { enabled: true, intervalMinutes: 60, retentionCount: 91, directory: '.ops/backups' } })
+  for (const key of ['maxTotalBytes', 'minFreeBytes']) {
+    for (const value of [-1, 1.5, '1024', Number.MAX_SAFE_INTEGER + 1])
+      rejected({ ...f.config, backups: { enabled: true, intervalMinutes: 60, retentionCount: 3,
+        directory: '.ops/backups', [key]: value } })
+  }
   rejected({ ...f.config, backups: { enabled: true, intervalMinutes: 60, retentionCount: 24, directory: 'dist/backups' } })
   rejected({ ...f.config, backups: { enabled: true, intervalMinutes: 60, retentionCount: 24,
     directory: '.ops/backups', replication: { enabled: true } } })
@@ -198,17 +203,28 @@ test('本机监控纳管拒绝错环境、错误目标、库或身份范围，�
 
 test('只接通明确启用的本机计划备份，关闭时不继承旧外发或异机配置', async t => {
   const f = await fixture(t)
-  assert.deepEqual(localMonitorService(f.helperOptions).backupEnvironment, {
+  assert.deepEqual(localMonitorService({ ...f.helperOptions, env: { ...cleanEnvironment(),
+    STUDIO_BACKUP_MAX_TOTAL_BYTES: '999999999999', STUDIO_BACKUP_MIN_FREE_BYTES: '999999999999',
+    STUDIO_BACKUP_FAILURE_WEBHOOK: 'https://dummy.invalid/no-real-webhook',
+    STUDIO_BACKUP_REPLICATION_CONFIG: 'must-not-inherit' } }).backupEnvironment, {
     STUDIO_BACKUP_INTERVAL_MINUTES: '0', STUDIO_BACKUP_FAILURE_WEBHOOK: '',
+    STUDIO_BACKUP_MAX_TOTAL_BYTES: '0', STUDIO_BACKUP_MIN_FREE_BYTES: '0',
     STUDIO_BACKUP_REPLICATION_CONFIG: ''
   })
   f.writeConfig({ ...f.config, backups: { enabled: true, intervalMinutes: 60,
-    retentionCount: 24, directory: join(f.ops, 'scheduled-backups'), replication: { enabled: false } } })
+    retentionCount: 3, maxTotalBytes: 6 * 1024 ** 3, minFreeBytes: 8 * 1024 ** 3,
+    directory: join(f.ops, 'scheduled-backups'), replication: { enabled: false } } })
   assert.deepEqual(localMonitorService(f.helperOptions).backupEnvironment, {
-    STUDIO_BACKUP_INTERVAL_MINUTES: '60', STUDIO_BACKUP_RETENTION_COUNT: '24',
+    STUDIO_BACKUP_INTERVAL_MINUTES: '60', STUDIO_BACKUP_RETENTION_COUNT: '3',
+    STUDIO_BACKUP_MAX_TOTAL_BYTES: String(6 * 1024 ** 3), STUDIO_BACKUP_MIN_FREE_BYTES: String(8 * 1024 ** 3),
     STUDIO_BACKUP_DIR: join(f.ops, 'scheduled-backups'), STUDIO_BACKUP_FAILURE_WEBHOOK: '',
     STUDIO_BACKUP_REPLICATION_CONFIG: ''
   })
+  f.writeConfig({ ...f.config, backups: { enabled: true, intervalMinutes: 60,
+    retentionCount: 3, directory: join(f.ops, 'scheduled-backups') } })
+  const compatible = localMonitorService(f.helperOptions).backupEnvironment
+  assert.equal(compatible.STUDIO_BACKUP_MAX_TOTAL_BYTES, '0')
+  assert.equal(compatible.STUDIO_BACKUP_MIN_FREE_BYTES, '0')
 })
 
 test('控制口仍响应但首次采样无界挂起会触发恢复，真实新采样即使业务失败仍健康', async t => {

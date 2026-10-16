@@ -107,8 +107,11 @@ export function createOpsMonitor({ config, events, statePath, clock = Date.now, 
         event('api', 'resource', sample.process.rssBytes < thresholds.rssBytes, 'CHECK_SERVICE', 'warning')
         event('api', 'push-backlog', sample.push.pendingDue === 0 || sample.push.oldestDueWaitMs < thresholds.pushDueWaitMs,
           'CHECK_PUSH', 'warning')
-        event('backup', 'backup', sample.backups.enabled ? (!sample.backups.lastFailureAt ||
-          Date.parse(sample.backups.lastCompletedAt) >= Date.parse(sample.backups.lastFailureAt)) : null,
+        const backupCompleted = Date.parse(sample.backups.lastCompletedAt)
+        const backupFailed = Date.parse(sample.backups.lastFailureAt)
+        const backupError = Boolean(sample.backups.lastErrorCode || sample.backups.lastRetentionErrorCode)
+        event('backup', 'backup', sample.backups.enabled ? (!sample.backups.lastFailureAt ? !backupError :
+          backupCompleted > backupFailed || (backupCompleted === backupFailed && !backupError)) : null,
           'CHECK_BACKUP')
         if (sample.backups.enabled) {
           state.backupEnabledAt ??= now - Math.max(0, sample.backups.ageMs)

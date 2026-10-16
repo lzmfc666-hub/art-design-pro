@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { gzipSync } from 'node:zlib'
@@ -12,13 +12,18 @@ import {
   rmSync,
   writeFileSync,
   readdirSync,
-  symlinkSync
+  symlinkSync,
+  existsSync,
+  realpathSync,
+  lstatSync,
+  copyFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { runPreflight } from '../scripts/studio-preflight.mjs'
 import { buildFingerprint } from '../scripts/studio-release.mjs'
 import { backupStudioDatabase } from '../scripts/studio-backup.mjs'
+import { createBackupScheduler } from '../server/backup-scheduler.mjs'
 
 const timestamp = Date.parse('2026-10-15T00:00:00.000Z')
 const iso = new Date(timestamp).toISOString()
@@ -559,7 +564,7 @@ test('configured enabled is distinct from runtime/evidence: boot, backup runtime
 test('backup coverage is explicit nominal hours and actual recent completion hash must match bytes', async (t) => {
   const f = await fixture(t),
     valid = await f.run()
-  assert.equal(check(valid, 'BACKUP_SCHEDULE_CONFIGURED').facts.nominalCoverageHours, 24)
+  assert.equal(check(valid, 'BACKUP_SCHEDULE_CONFIGURED').facts.nominalCoverageHours, 22)
   assert.equal(
     check(valid, 'BACKUP_SCHEDULE_CONFIGURED').facts.coverageAssumesConsecutiveSuccesses,
     true
@@ -574,6 +579,160 @@ test('backup coverage is explicit nominal hours and actual recent completion has
   const corrupted = await f.run()
   assert.equal(check(corrupted, 'LATEST_BACKUP_SHA_VERIFIED').status, 'FAIL')
   assert.equal(corrupted.ready, false)
+})
+
+const managedMetadata = (path) => JSON.parse(readFileSync(path + '.json', 'utf8'))
+const managedFiles = (directory) => readdirSync(directory)
+  .filter((name) => /^studio-backup-.*\.sqlite$/.test(name))
+  .map((name) => join(directory, name))
+  .sort((a, b) => Date.parse(managedMetadata(a).completedAt) - Date.parse(managedMetadata(b).completedAt))
+const unchangedFiles = (paths) => Object.fromEntries(paths.map((path) => [path, hash(readFileSync(path))]))
+async function scheduledCopies(f, count = 2) {
+  const directory = f.config.storage.backupDir
+  let now = timestamp - 60000
+  const scheduler = createBackupScheduler({ dbPath: f.dbPath, directory, intervalMinutes: 60,
+    retentionCount: 3, maxTotalBytes: 0, minFreeBytes: 0, failureWebhook: '', replication: {},
+    applicationRelease: f.current.id, clock: () => now })
+  const created = []
+  try {
+    for (let index = 0; index < count; index++) {
+      now += 1000
+      assert.deepEqual(await scheduler.run(), { ok: true })
+      created.push(managedFiles(directory).at(-1))
+    }
+    f.config.backups.intervalMinutes = 60
+    f.config.backups.retentionCount = 3
+    f.evidence('service', { backupIntervalMinutes: 60, backupRetentionCount: 3 })
+    return { created, retained: managedFiles(directory), metrics: scheduler.metrics() }
+  } finally { scheduler.close() }
+}
+async function extraManagedCopy(f, { directory = f.config.storage.backupDir, at = timestamp + 1000,
+  sourceId = hash(realpathSync(f.dbPath)), releaseId = f.current.id, matchingId = true } = {}) {
+  const backupId = randomUUID(), stamp = new Date(at).toISOString().replace(/[-:.]/g, '')
+  const path = join(directory, `studio-backup-${stamp}-${backupId}.sqlite`)
+  await backupStudioDatabase(f.dbPath, path, { applicationRelease: releaseId, clock: () => at,
+    ownership: { sourceId, backupId: matchingId ? backupId : randomUUID() } })
+  return path
+}
+
+test('受管备份实际轮换四次后只读发现最新同源副本，不因三份保留删除固定指针而误报', async (t) => {
+  const f = await fixture(t), copies = await scheduledCopies(f, 4)
+  assert.equal(copies.retained.length, 3)
+  assert.equal(copies.metrics.removedBackups, 1)
+  assert.equal(existsSync(copies.created[0]), false)
+  f.config.backups.latestMetadata = copies.created[0] + '.json'
+  const paths = [f.dbPath, f.backupPath, f.backupPath + '.json',
+    ...copies.retained.flatMap((path) => [path, path + '.json'])]
+  const before = unchangedFiles(paths), configBefore = JSON.stringify(f.config)
+  const report = await f.run()
+  assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').status, 'PASS')
+  assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').facts.selection, 'latest-managed-source-copy')
+  assert.equal(check(report, 'BACKUP_SCHEDULE_CONFIGURED').facts.nominalCoverageHours, 2)
+  assert.equal(report.ready, true)
+  assert.deepEqual(unchangedFiles(paths), before)
+  assert.equal(JSON.stringify(f.config), configBefore)
+  assert.equal(existsSync(copies.created[0] + '.json'), false)
+})
+
+test('没有固定清单仍可发现受管副本，更晚他源或文件编号不匹配的清单不能取代本人源库', async (t) => {
+  const f = await fixture(t), copies = await scheduledCopies(f)
+  delete f.config.backups.latestMetadata
+  const foreign = await extraManagedCopy(f, { sourceId: 'e'.repeat(64), releaseId: 'f'.repeat(64) })
+  const mismatched = await extraManagedCopy(f, { at: timestamp + 2000,
+    releaseId: 'f'.repeat(64), matchingId: false })
+  const paths = [f.dbPath, ...[...copies.retained, foreign, mismatched].flatMap((path) => [path, path + '.json'])]
+  const before = unchangedFiles(paths)
+  const report = await f.run()
+  assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').status, 'PASS')
+  assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').facts.selection, 'latest-managed-source-copy')
+  assert.equal(report.ready, true)
+  assert.deepEqual(unchangedFiles(paths), before)
+})
+
+test('先选择最新声明完成的同源副本再验证，坏SHA及旧发布均不能退回旧好副本冒报通过', async (t) => {
+  const f = await fixture(t), copies = await scheduledCopies(f)
+  const oldest = copies.retained[0], newest = copies.retained.at(-1)
+  f.config.backups.latestMetadata = oldest + '.json'
+  const original = managedMetadata(newest)
+  for (const patch of [{ sha256: '0'.repeat(64) }, { applicationRelease: 'f'.repeat(64) }]) {
+    writeFileSync(newest + '.json', JSON.stringify({ ...original, ...patch }))
+    const paths = [f.dbPath, oldest, oldest + '.json', newest, newest + '.json']
+    const before = unchangedFiles(paths)
+    const report = await f.run()
+    assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').status, 'FAIL')
+    assert.equal(report.ready, false)
+    assert.deepEqual(unchangedFiles(paths), before)
+    assert.equal(managedMetadata(oldest).applicationRelease, f.current.id)
+  }
+})
+
+test('受管候选及完成清单链接、备份目录junction和静态目录不能成为已验证备份', async (t) => {
+  const f = await fixture(t)
+  delete f.config.backups.latestMetadata
+  const outside = join(f.root, '.data', 'outside-backups')
+  mkdirSync(outside)
+  const source = await extraManagedCopy(f, { directory: outside })
+  const name = source.split(sep).at(-1), directory = f.config.storage.backupDir
+  const publicDirectory = join(f.root, 'dist', 'backups')
+  mkdirSync(publicDirectory)
+  copyFileSync(source, join(publicDirectory, name))
+  copyFileSync(source + '.json', join(publicDirectory, name) + '.json')
+  f.config.storage.backupDir = publicDirectory
+  f.config.backups.directory = publicDirectory
+  let report = await f.run()
+  assert.equal(check(report, 'OPS_BACKUP_DIRECTORIES_PRIVATE').status, 'FAIL')
+  assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').status, 'FAIL')
+  f.config.storage.backupDir = directory
+  f.config.backups.directory = directory
+  for (const linkedManifest of [false, true]) {
+    const target = join(directory, name)
+    try {
+      if (linkedManifest) {
+        copyFileSync(source, target)
+        symlinkSync(source + '.json', target + '.json', 'file')
+      } else {
+        symlinkSync(source, target, 'file')
+        copyFileSync(source + '.json', target + '.json')
+      }
+    } catch (error) {
+      if (!['EPERM', 'EACCES'].includes(error.code)) throw error
+      t.diagnostic('文件symlink权限不可用，目录junction和公开目录保护仍实际验证')
+      for (const path of [target, target + '.json']) rmSync(path, { force: true })
+      break
+    }
+    const before = unchangedFiles([f.dbPath, source, source + '.json'])
+    report = await f.run()
+    assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').status, 'FAIL')
+    assert.deepEqual(unchangedFiles([f.dbPath, source, source + '.json']), before)
+    assert.equal(lstatSync(linkedManifest ? target + '.json' : target).isSymbolicLink(), true)
+    for (const path of [target, target + '.json']) rmSync(path, { force: true })
+  }
+  const linkedDirectory = join(f.root, '.data', 'linked-backups')
+  symlinkSync(outside, linkedDirectory, 'junction')
+  f.config.storage.backupDir = linkedDirectory
+  f.config.backups.directory = linkedDirectory
+  report = await f.run()
+  assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').status, 'FAIL')
+  assert.equal(lstatSync(linkedDirectory).isSymbolicLink(), true)
+})
+
+test('空预约或未完成清单不冒充成功且不妨碍最近完成副本，发现扫描超限不截断后判通过', async (t) => {
+  const f = await fixture(t), copies = await scheduledCopies(f, 1)
+  delete f.config.backups.latestMetadata
+  const directory = f.config.storage.backupDir
+  const empty = join(directory, 'studio-backup-20261015T000001000Z-' + randomUUID() + '.sqlite.json')
+  const unfinished = join(directory, 'studio-backup-20261015T000002000Z-' + randomUUID() + '.sqlite.json')
+  writeFileSync(empty, '')
+  writeFileSync(unfinished, JSON.stringify({ status: 'incomplete' }))
+  const paths = [f.dbPath, copies.retained[0], copies.retained[0] + '.json', empty, unfinished]
+  const before = unchangedFiles(paths)
+  assert.equal(check(await f.run(), 'LATEST_BACKUP_SHA_VERIFIED').status, 'PASS')
+  assert.deepEqual(unchangedFiles(paths), before)
+  for (let index = 0; index < 1025; index++) writeFileSync(join(directory, `unmanaged-padding-${index}`), '')
+  const report = await f.run()
+  assert.equal(check(report, 'LATEST_BACKUP_SHA_VERIFIED').status, 'FAIL')
+  assert.equal(report.ready, false)
+  assert.deepEqual(unchangedFiles(paths), before)
 })
 
 test('memory/test/public paths and credential-bearing endpoint, broad origins/proxy and exposed private ports never pass', async (t) => {

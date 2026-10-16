@@ -41,7 +41,7 @@ const pngChunk = (type, data) => {
   trailer.writeUInt32BE(crc32(Buffer.concat([header.subarray(4), data])))
   return Buffer.concat([header, data, trailer])
 }
-function largePng(width = 1440) {
+export function largePng(width = 1440) {
   const height = width,
     rowSize = width * 4 + 1,
     raw = randomBytes(rowSize * height)
@@ -838,5 +838,7 @@ async function main() {
   }
 }
 
-if (process.argv.includes('--isolated-worker')) await worker()
-else await main()
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv.includes('--isolated-worker')) await worker()
+  else await main()
+}

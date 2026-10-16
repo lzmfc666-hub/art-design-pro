@@ -89,6 +89,8 @@ export interface Attachment {
   mime: string
   size: number
   url: string
+  retentionStatus?: 'deleted'
+  deletedAt?: string
 }
 export interface Submission {
   id: string

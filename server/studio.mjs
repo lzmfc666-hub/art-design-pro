@@ -21,6 +21,7 @@ import { buildPeriodExportSnapshot, exportPeriod } from './export-period.mjs'
 import { buildDiagnosticsReport } from './diagnostics.mjs'
 import { createFundsStore } from './funds-store.mjs'
 import { readPlayerOperationResult } from './operation-results.mjs'
+import { createImageArchive, archivedImageRecord, readArchivedImage, deletedImageRecord } from './image-archive.mjs'
 import {
   normalizeOrderIdentity,
   advanceOrderIdentity,
@@ -456,6 +457,7 @@ export function createStudioService({
   clock = () => new Date(),
   onTransaction,
   playerExtraMutate,
+  imageArchive = {},
   auditRetentionDays = Number(process.env.STUDIO_AUDIT_RETENTION_DAYS || 90),
   auditHotMaxRows = Number(process.env.STUDIO_AUDIT_HOT_MAX_ROWS || 10000),
   auditArchiveMaxBytes = Number(process.env.STUDIO_AUDIT_ARCHIVE_MAX_BYTES || 500 * 1024 * 1024)
@@ -466,6 +468,7 @@ export function createStudioService({
     'PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS studio_state (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL);'
   )
   const now = () => new Date(clock()).toISOString()
+  const archivedImages = createImageArchive({ db, dbPath, ...imageArchive, clock })
   const auditStore = createAuditStore(db, {
     retentionDays: auditRetentionDays,
     hotMaxRows: auditHotMaxRows,
@@ -672,6 +675,12 @@ export function createStudioService({
     size: record.size,
     url: `/api/studio/uploads/${record.id}`
   })
+  const retainedAttachment = (image) => {
+    const deleted = image && deletedImageRecord(db, image.id)
+    return deleted ? { ...image, retentionStatus: 'deleted', deletedAt: deleted.deleted_at } : image
+  }
+  const imageRetentionVersion = () => db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_deletions'").get()
+    ? db.prepare('SELECT max(rowid) AS version FROM image_deletions').get().version || 0 : 0
   const publicReference = (row) => ({
     id: row.id,
     customerId: row.customer_id,
@@ -959,6 +968,7 @@ export function createStudioService({
     if (!record) fail('附件不存在，请重新上传')
     if (record.owner_id !== user.id && !linkedAttachment(state, user, attachmentId))
       fail('无权使用此附件', 403)
+    if (deletedImageRecord(db, attachmentId)) fail('订单图片已按30天保留规则删除，请重新上传', 410)
     return metadata(record)
   }
   // Only structured attachment fields indicate private use. File names, reasons,
@@ -1107,7 +1117,7 @@ export function createStudioService({
               submittedAt: row.submittedAt,
               leaderId: row.leaderId,
               teammateId: row.teammateId,
-              screenshots: row.screenshots,
+              screenshots: (row.screenshots || []).map(retainedAttachment),
               source: row.source,
               review: row.review,
               reviewedAt: row.reviewedAt,
@@ -1152,6 +1162,8 @@ export function createStudioService({
   function safeOrder(state, user, order) {
     if (user.role === 'player') return playerOrder(state, user, order)
     const clean = clone(order)
+    for (const submission of clean.submissions || [])
+      submission.screenshots = (submission.screenshots || []).map(retainedAttachment)
     if (!can(user, 'salary.all') && !can(user, 'profit.view')) delete clean.commissionSnapshot
     return clean
   }
@@ -1164,7 +1176,7 @@ export function createStudioService({
         keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]])
       )
     const safeAttachment = (value) =>
-      value && typeof value === 'object' ? pick(value, ['id', 'name', 'mime', 'size', 'url']) : null
+      value && typeof value === 'object' ? retainedAttachment(pick(value, ['id', 'name', 'mime', 'size', 'url'])) : null
     const canViewSalaryLog = can(user, 'salary.all') && can(user, 'profit.view')
     if (['salary-plan', 'payroll'].includes(log.entity) && !canViewSalaryLog) return null
     const visibleOrderId = (orderId) => {
@@ -2671,13 +2683,14 @@ export function createStudioService({
           previous?.leaderId === order.leaderId &&
           (previous?.teammateId ?? null) === order.teammateId
         if (!previous || previous.review || !sameParticipants || !previous.screenshots.length) {
-          const reuseMaterials = sameParticipants && previous.screenshots.length > 0
+          const retainedMaterials = (previous?.screenshots || []).filter(image => !deletedImageRecord(db, image.id))
+          const reuseMaterials = sameParticipants && retainedMaterials.length > 0
           order.submissions.push({
             id: id(),
             submittedAt: reuseMaterials ? previous.submittedAt : now(),
             leaderId: order.leaderId,
             teammateId: order.teammateId,
-            screenshots: reuseMaterials ? clone(previous.screenshots) : [],
+            screenshots: reuseMaterials ? clone(retainedMaterials) : [],
             source: 'status-correction',
             correctedBy: user.id,
             correctionReason: reason,
@@ -4402,6 +4415,8 @@ export function createStudioService({
           if (
             referenced.has(row.id) ||
             [...referenced].some((value) => value.includes(row.id)) ||
+            deletedImageRecord(db, row.id) ||
+            archivedImageRecord(db, row.id) ||
             db.prepare('SELECT 1 FROM player_private_uploads WHERE attachment_id=?').get(row.id)
           )
             continue
@@ -4448,6 +4463,8 @@ export function createStudioService({
         throw error
       }
     },
+    archiveCompletedOrderImages: (options) => archivedImages.run(options),
+    deleteCompletedOrderImages: (options) => archivedImages.remove(options),
     ordersPage(userId, input = {}) {
       const { state, user } = activeState(userId)
       if (user.role === 'player') fail('打手请使用本人订单接口', 403)
@@ -4524,7 +4541,8 @@ export function createStudioService({
             permissionsFor(user),
             playerAccess(user),
             user.levelId,
-            user.maxActiveOrders
+            user.maxActiveOrders,
+            imageRetentionVersion()
           ])
         )
         .digest('hex')
@@ -4547,7 +4565,7 @@ export function createStudioService({
       const { state, user } = activeState(userId)
       if (user.role === 'player') fail('该摘要仅供后台使用', 403)
       const version = `${state.dataVersion || 1}:${createHash('sha256')
-        .update(JSON.stringify([user.id, permissionsFor(user)]))
+        .update(JSON.stringify([user.id, permissionsFor(user), imageRetentionVersion()]))
         .digest('hex')
         .slice(0, 16)}`
       const orders = state.orders.filter((row) => visibleOrder(state, user, row))
@@ -5517,6 +5535,14 @@ export function createStudioService({
         !appearanceReadable
       )
         fail('无权查看此附件', 403)
+      if (deletedImageRecord(db, attachmentId)) fail('订单完成满30天，图片已删除', 410)
+      const archived = archivedImageRecord(db, attachmentId)
+      if (archived) {
+        if (archived.size !== row.size || row.data.length !== 0) fail('归档图片元数据不一致，请联系管理员核对', 503)
+        try { return { ...metadata(row), data: readArchivedImage(archived) } }
+        catch { fail('归档图片暂时不可读取，请联系管理员核对存储及备份', 503) }
+      }
+      if (row.data.length !== row.size) fail('图片内容不完整，请联系管理员核对存储及备份', 503)
       return { ...metadata(row), data: Buffer.from(row.data) }
     }
   }

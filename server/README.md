@@ -1,5 +1,44 @@
 # 工作室本地服务
 
+## 40GB硬盘本机备份配置（2026-10-17）
+
+继续使用原一致性备份和同源保留器，显式本机配置为每60分钟、最多3份、备份目录总容量4GiB、磁盘预留8GiB。私有运维配置 `backups` 的 `retentionCount:3,maxTotalBytes:4294967296,minFreeBytes:8589934592` 由原本机监管器传入API；对应环境变量 `STUDIO_BACKUP_RETENTION_COUNT`、`STUDIO_BACKUP_MAX_TOTAL_BYTES`、`STUDIO_BACKUP_MIN_FREE_BYTES`。后两项默认0，未配置不得称已有限额。
+
+只在原目录锁内清理本工具、同源、完成且SHA/完整性可核验的超额旧副本；不删手工/他源/损坏/未完成文件或链接。它们仍计入目录容量，不能满足上限时停止备份并报告，不删最后可恢复副本。3份并非3天，连续小时恢复点通常跨度约2小时。
+
+每次先处理已有超额文件，预留主库+WAL+旧归档原图估算值3倍及64MiB工作空间，再加8GiB安全余量；源卷/目标卷分别探测。复制、图片物化、备份副本整理、清单发布前后再核对，新副本过大或余量不足失败回收本次预约文件，保留最近好副本。4GiB限制保留目录，不是瞬时硬盘配额，作业仍需临时空间；其他进程写盘也可能消耗空间。源库空闲页较多时估算保守，可能提前拒绝，须由运维核对后调整配置，不能删除业务数据凑空间。
+
+容量模式的实际快照和完整性验证在工作线程执行；清理失败进入原备份故障事件和监控，不会被同毫秒的“副本完成”误判恢复。指标增加 `maxTotalBytes,minFreeBytes,retainedCount,retainedBytes,directoryBytes,removedBackups,lastCapacityCheck`。计划任务失败不停止订单API，不重启业务来处理磁盘不足，不触碰图片删除规则。
+
+专项入口：`node --test tests/backup-capacity.test.mjs tests/backup-operations.test.mjs tests/maintenance-isolation.test.mjs tests/local-monitor-supervision.test.mjs tests/ops-monitor.test.mjs`。原文件与既有手工/回滚备份按各自职责保留，不因本轮政策扩大清理范围。
+
+## 当前规则：打手完成单截图满30天删除（2026-10-17）
+
+用户最新确认覆盖下方同日归档方案。仅普通打手上报截图按订单 `completedAt` 满30天删除原图内容，不再同盘转存；订单、资金、账号和历史材料元数据保留。进行中、未足额收款、退款/差额/更正待核对、收付款凭证、私人收款码、人工争议保留清单及未知/活跃共享引用继续保护。不存在自动识别线下争议的能力，仍须登记原 `image-retention-holds.json`。
+
+- 显式 `STUDIO_IMAGE_DELETE_ENABLED=true`、`STUDIO_IMAGE_DELETE_RETENTION_DAYS=30`，并保留 `STUDIO_UPLOAD_GC_ENABLED=true`；原 `STUDIO_IMAGE_ARCHIVE_ENABLED=false`，两种模式不能同时开启。
+- 复用原每60分钟任务，首轮启动一周期后执行；候选先筛已完成且满30天的材料，每轮扫描/删除最多50张，积压按游标分轮推进。未满30天图片不提前删除。
+- 原图内容清除，原附件编号保留到期标记，已有旧归档按精确映射删除文件；失败保留待重试映射。原鉴权后返回410，两端历史材料显示“订单完成满30天，图片已删除”，旧编号不能重新作为材料。
+- 运行指标 `uploadCleanup`：`completedDeletionEnabled`、`completedRetentionDays`、`deletionBatchLimit`、`deletionRunning`、`lastDeletionResult`、`deletionFailed`、`lastDeletionErrorCode`。结果包含删除数/图片字节、待删除文件数及主库可复用空间；不把可复用空间称为已归还操作系统空间。
+ - 主库空闲页由后续上传复用，不在营业定时任务中VACUUM。仅新备份副本在独立工作线程整理空闲页，避免后续多份备份重复复制已删图片形成的空洞；旧备份仍按当前保留策略轮换，不追删既有恢复点。需立即缩小主库文件时另安排离线维护。
+
+验证：`node --test tests/image-deletion.test.mjs`；真实磁盘大图删除、双端HTTP及空间复用负载：`node scripts/studio-image-retention-pressure.mjs --delete`。以下归档说明保留历史版本语义，不代表当前已启用模式。
+
+## 图片30天保留与归档（2026-10-17）
+
+废弃临时图片沿原回收器，必须超过保留期且没有业务/历史/资金/私人引用。完成单仅对普通上报截图做可读归档，不永久删除：完成时间及最后通过验收时间取较晚值，至少保留30天；进行中、待处理退单/退款、未处理报酬差额、更正待核对、收付款凭证、收款码和不明确用途不归档。订单、资金、账号、原附件ID和权限不变，后台及打手仍通过原 `/api/studio/uploads/:id` 读取。
+
+- `STUDIO_UPLOAD_GC_ENABLED=true`、`STUDIO_UPLOAD_GC_RETENTION_DAYS=30`：启用原废弃图片回收。
+- `STUDIO_IMAGE_ARCHIVE_ENABLED=true`、`STUDIO_IMAGE_ARCHIVE_RETENTION_DAYS=30`：在同一定时器中启用完成单归档，默认每60分钟；每轮归档至多5张，先保存/核验原图，再短事务重新核验资格及引用证明的数据库版本后释放主库BLOB。历史扫描和原图写入均在写事务外；写入余量不足（原图大小加64MiB保留空间）或失败则保留主库原图。
+- `STUDIO_IMAGE_ARCHIVE_DIR`：默认业务库旁 `image-archive/`，应为私有目录，可配置独立数据卷；禁止静态目录和符号链接。默认同盘归档不降低整盘累计占用，不自动压缩/删除原图或VACUUM。
+- `STUDIO_IMAGE_ARCHIVE_HOLDS_FILE`：默认业务库旁 `image-retention-holds.json`。线下争议尚无业务状态时，运维可将内部订单ID写入 `{ "format":"studio-image-retention-holds-v1", "orderIds":["ID"] }`；配置错误会停止归档。此清单不修改订单状态，也不替代实际争议处理。
+
+完整备份继续调用 `node scripts/studio-backup.mjs 源库 新备份.sqlite`。备份副本会从归档文件核验并写回原图，完成后是可独立离线恢复的完整SQLite；缺图/损坏失败，不发布成功清单，不覆盖旧备份。归档文件仍需受控保存，不能手动删；完整备份仍包含全部图片，容量应按完整库计算。离线副本与正式切换规则沿原说明。
+
+老板/超管原运行指标的 `uploadCleanup` 增加 `archivingEnabled`、`completedRetentionDays`、`archiveBatchLimit`、`archiveRunning`、`lastArchiveResult`、`archiveFailed`、`lastArchiveErrorCode`，不暴露路径或图片身份。首轮在服务启动一个周期后执行，不自动补做一次；隔离测试不继承本机归档开关。
+
+针对性验证：`node --test tests/image-retention.test.mjs`；真实磁盘大图/双端HTTP混合负载：`node scripts/studio-image-retention-pressure.mjs`，只使用新的QA库、随机回环端口和隔离账号。当前本机激活与完整回归证据以本轮验收记录为准。
+
 ## 系统任务承载与监控纳管（2026-10-15）
 
 Windows正式常驻应复用 `studio-service-windows.ps1` 的 Install/Start/Status/Stop/Uninstall，以明确项目归属的系统任务承载guardian。只使用隐藏窗口、detached或看到父终端退出后仍活着，不能证明脱离上层工具的Windows Job；实际任务启动后还需核对祖先、Job归属和健康状态。新任务不接管未知进程，也不替代物理开机验证。

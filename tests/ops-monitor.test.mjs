@@ -498,6 +498,23 @@ test('disk/WAL/log/resource/push/backup/stale/replica/supervisor indicators alar
   for (const key of keys) assert.equal(incident(events, key), undefined, key)
 })
 
+test('同毫秒备份完成后容量清理失败仍告警，后续真实成功才能恢复', async t => {
+  const f = await fixture(t), { monitor, events } = f.open(), metrics = f.controls.summary
+  const stamp = new Date(f.now()).toISOString()
+  metrics.backups.lastCompletedAt = stamp
+  metrics.backups.lastFailureAt = stamp
+  metrics.backups.lastErrorCode = 'BACKUP_RETENTION_FAILED'
+  metrics.backups.lastRetentionErrorCode = 'BACKUP_RETENTION_FAILED'
+  await f.cycle(monitor, 3)
+  assert.ok(incident(events, 'backup.backup'))
+  assert.equal(monitor.snapshot().observations['backup.backup'].healthy, false)
+  metrics.backups.lastCompletedAt = new Date(f.now()).toISOString()
+  metrics.backups.lastErrorCode = null
+  metrics.backups.lastRetentionErrorCode = null
+  await f.cycle(monitor, 2)
+  assert.equal(incident(events, 'backup.backup'), undefined)
+})
+
 test('API/monitor restart cannot reset durable backup age after a known success or a never-successful first observation', async (t) => {
   for (const hadSuccess of [true, false]) {
     const f = await fixture(t),

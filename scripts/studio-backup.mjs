@@ -5,9 +5,24 @@ import { createReadStream, existsSync, mkdirSync, writeFileSync, openSync, close
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readReleaseManifest } from './studio-release.mjs'
+import { materializeArchivedImages } from '../server/image-archive.mjs'
+import { Worker } from 'node:worker_threads'
 
 export const MAX_BACKUP_SCHEMA_VERSION = 2
 const coded = (code, message) => Object.assign(new Error(message), { code })
+const compactExpiredImageBackup = path => new Promise((resolve, reject) => {
+  const worker = new Worker(new URL('../server/image-backup-compact-worker.mjs', import.meta.url), { workerData: { path } })
+  let result, settled = false
+  const fail = () => { if (!settled) { settled = true; clearTimeout(timer); reject(coded('BACKUP_CORRUPT', '备份副本空间整理未完成')) } }
+  const timer = setTimeout(() => { void worker.terminate().then(fail) }, 60000)
+  worker.on('message', value => { result = value })
+  worker.on('error', fail)
+  worker.on('exit', code => {
+    if (settled) return
+    if (code !== 0 || !result?.ok) return fail()
+    settled = true; clearTimeout(timer); resolve(result)
+  })
+})
 const timestamp = clock => new Date(clock()).toISOString()
 const release = value => {
   if (value == null) return null
@@ -97,14 +112,28 @@ export async function backupStudioDatabase(sourcePath, targetPath, options = {})
   const reserve = path => {
     const handle = openSync(path, 'wx', 0o600), info = fstatSync(handle)
     owned.push({ path, dev: info.dev, ino: info.ino })
+    options.onReserved?.({ path, dev: info.dev, ino: info.ino })
     return handle
   }
   let sourceDb, manifestHandle
   try {
+    options.checkCapacity?.()
     closeSync(reserve(target))
     manifestHandle = reserve(`${target}.json`)
     sourceDb = new DatabaseSync(source, { readOnly: true })
     await backup(sourceDb, target)
+    options.checkCapacity?.()
+    const archiveCopy = new DatabaseSync(target)
+    let materialized, expiredImages = 0
+    try {
+      materialized = materializeArchivedImages(archiveCopy)
+      if (archiveCopy.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_deletions'").get())
+        expiredImages = archiveCopy.prepare('SELECT count(*) AS count FROM image_deletions').get().count
+    }
+    finally { archiveCopy.close() }
+    options.checkCapacity?.()
+    const compaction = expiredImages ? await compactExpiredImageBackup(target) : { compacted: false }
+    options.checkCapacity?.()
     const copied = new DatabaseSync(target, { readOnly: true })
     let schemaVersion
     try {
@@ -117,6 +146,7 @@ export async function backupStudioDatabase(sourcePath, targetPath, options = {})
         throw coded('BACKUP_SCHEMA_UNSUPPORTED', '备份数据版本无效')
     } finally { copied.close() }
     const digest = await backupFileDigest(target), completedAt = timestamp(clock)
+    options.checkCapacity?.()
     if (options.expectedSourceDigest) {
       const current = await backupFileDigest(source)
       if (current.sha256 !== options.expectedSourceDigest.sha256 || current.bytes !== options.expectedSourceDigest.bytes ||
@@ -127,7 +157,8 @@ export async function backupStudioDatabase(sourcePath, targetPath, options = {})
     const metadata = { format: 'studio-sqlite-backup-v1', generatedAt: completedAt, startedAt, completedAt,
       status: 'complete', schemaVersion, applicationRelease,
       // Compatibility only, not an application release identifier.
-      playerVersion: '1.0', integrity: 'ok', containsPrivateBusinessData: true, ...digest,
+      playerVersion: '1.0', integrity: 'ok', containsPrivateBusinessData: true,
+      archivedImagesMaterialized: materialized.count, expiredImages, compactedExpiredImagePages: compaction.compacted, ...digest,
       ...(ownership ? { ownership: { managedBy: 'studio-backup-scheduler-v1', ...ownership } } : {}) }
     writeFileSync(manifestHandle, JSON.stringify(metadata, null, 2))
     fsyncSync(manifestHandle); closeSync(manifestHandle); manifestHandle = undefined

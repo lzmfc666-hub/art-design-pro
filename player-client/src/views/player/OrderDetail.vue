@@ -193,13 +193,13 @@
             submission.correctionReason || '后台已登记订单状态，此记录无需完成截图。'
           }}</p
           ><div v-if="submission.screenshots?.length" class="p-image-grid"
-            ><a
-              v-for="image in submission.screenshots"
-              :key="image.id"
-              :href="image.url"
-              target="_blank"
-              rel="noopener"
-              ><img :src="image.url" :alt="image.name || '完成截图'" loading="lazy" /></a></div
+            ><template v-for="image in submission.screenshots" :key="image.id">
+              <div v-if="image.retentionStatus === 'deleted'" class="p-hint"
+                >订单完成满30天，图片已删除</div
+              >
+              <a v-else :href="image.url" target="_blank" rel="noopener"
+                ><img :src="image.url" :alt="image.name || '完成截图'" loading="lazy" /></a>
+            </template></div
           ><p v-if="submission.review" class="p-hint"
             >验收：{{
               ['approved', 'passed'].includes(submission.review)

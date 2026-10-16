@@ -1262,15 +1262,21 @@
                 },
                 { label: '审核时间', value: formatTime(submission.reviewedAt) }
               ]" /><ElSpace wrap
-              ><ElImage
-                v-for="image in submission.screenshots"
-                :key="image.id"
-                :src="image.url"
-                :preview-src-list="submission.screenshots.map((s) => s.url)"
-                :alt="image.name"
-                fit="cover"
-                class="w-32 h-24 rounded-lg"
-                preview-teleported /></ElSpace
+              ><template v-for="image in submission.screenshots" :key="image.id">
+                <div
+                  v-if="image.retentionStatus === 'deleted'"
+                  class="w-32 h-24 rounded-lg flex items-center justify-center border border-dashed p-2 text-center text-xs text-gray-500"
+                  >订单完成满30天，图片已删除</div
+                >
+                <ElImage
+                  v-else
+                  :src="image.url"
+                  :preview-src-list="submission.screenshots.filter((s) => s.retentionStatus !== 'deleted').map((s) => s.url)"
+                  :alt="image.name"
+                  fit="cover"
+                  class="w-32 h-24 rounded-lg"
+                  preview-teleported />
+              </template></ElSpace
             ><ElAlert
               v-if="submission.reason"
               :title="submission.reason"

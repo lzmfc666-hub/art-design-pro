@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 import { currentReleaseFacts, readReleaseManifest } from './studio-release.mjs'
 import { verifyStudioBackup } from './studio-backup.mjs'
+import { BACKUP_FILE_NAME } from '../server/backup-replication.mjs'
 import { createReadinessProbe } from '../server/health-probe.mjs'
 import { normalizeOpsConfig } from '../server/ops-config.mjs'
 
@@ -112,6 +113,37 @@ function privatePath(value, root, { database = false } = {}) {
   )
     return null
   return path
+}
+// Discover completion manifests without modifying the scheduler or a rotating configuration pointer.
+// Select first, verify afterwards: a corrupt newest completed copy must not be hidden by an older one.
+function latestManagedBackupMetadata(directory, dbPath) {
+  const directoryInfo = lstatSync(directory)
+  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink())
+    throw new Error('PREFLIGHT_BACKUP_INVALID')
+  const canonical = realpathSync(directory), sourceId = hash(realpathSync(dbPath))
+  const entries = readdirSync(canonical, { withFileTypes: true })
+  if (entries.length > 1024) throw new Error('PREFLIGHT_BACKUP_SCAN_LIMIT')
+  const candidates = []
+  for (const entry of entries) {
+    if (!entry.name.endsWith('.sqlite.json')) continue
+    const match = entry.name.slice(0, -5).match(BACKUP_FILE_NAME)
+    if (!match) continue
+    if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('PREFLIGHT_BACKUP_INVALID')
+    const path = join(canonical, entry.name), info = lstatSync(path)
+    // A new worker reserves its empty manifest before writing the completed snapshot.
+    if (info.size === 0) continue
+    const metadata = boundedJSON(path)
+    if (metadata.status !== 'complete' ||
+        metadata.ownership?.managedBy !== 'studio-backup-scheduler-v1' ||
+        metadata.ownership.sourceId !== sourceId || metadata.ownership.backupId !== match[1]) continue
+    if (metadata.format !== 'studio-sqlite-backup-v1' ||
+        !Number.isFinite(Date.parse(metadata.completedAt))) throw new Error('PREFLIGHT_BACKUP_INVALID')
+    candidates.push({ path, completedAt: Date.parse(metadata.completedAt), modifiedAt: info.mtimeMs })
+  }
+  if (realpathSync(directory) !== canonical || lstatSync(directory).isSymbolicLink())
+    throw new Error('PREFLIGHT_BACKUP_INVALID')
+  candidates.sort((a, b) => b.completedAt - a.completedAt || b.modifiedAt - a.modifiedAt || b.path.localeCompare(a.path))
+  return candidates[0]?.path || null
 }
 function dateFresh(value, timestamp, maxAgeMs) {
   if (
@@ -790,7 +822,7 @@ export async function runPreflight({
       intervalMinutes: integer(backups.intervalMinutes, 0, 525600) ? backups.intervalMinutes : null,
       retentionCount: integer(backups.retentionCount, 1, 90) ? backups.retentionCount : null,
       nominalCoverageHours: backupConfigured
-        ? (backups.retentionCount * backups.intervalMinutes) / 60
+        ? ((backups.retentionCount - 1) * backups.intervalMinutes) / 60
         : null,
       coverageAssumesConsecutiveSuccesses: true
     }
@@ -811,19 +843,27 @@ export async function runPreflight({
     'operator-evidence'
   )
   let backupVerified = false
-  if (nonempty(backups.latestMetadata)) {
+  if (nonempty(backups.latestMetadata) || backupConfigured) {
     try {
-      const metadataPath = privatePath(backups.latestMetadata, root)
-      if (
-        !metadataPath ||
-        !backupDir ||
-        !within(metadataPath, backupDir) ||
-        !metadataPath.endsWith('.sqlite.json')
-      )
+      const explicitPath = nonempty(backups.latestMetadata) ? privatePath(backups.latestMetadata, root) : null
+      if (nonempty(backups.latestMetadata) && (!explicitPath || !backupDir ||
+          !within(explicitPath, backupDir) || !explicitPath.endsWith('.sqlite.json')))
         throw new Error('PREFLIGHT_BACKUP_INVALID')
-      const metadata = boundedJSON(metadataPath)
-      const source = metadataPath.slice(0, -5)
-      const verification = await verifyStudioBackup(source)
+      let metadata, verification, selection
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const discovered = backupConfigured && dbPath ? latestManagedBackupMetadata(backupDir, dbPath) : null
+          const metadataPath = discovered || explicitPath
+          if (!metadataPath) break
+          selection = discovered ? 'latest-managed-source-copy' : 'explicit-metadata'
+          metadata = boundedJSON(metadataPath)
+          verification = await verifyStudioBackup(metadataPath.slice(0, -5))
+          break
+        } catch (error) {
+          if (error.code !== 'ENOENT' || attempt !== 0) throw error
+        }
+      }
+      if (!verification) throw new Error('PREFLIGHT_BACKUP_MISSING')
       backupVerified =
         metadata.status === 'complete' &&
         verification.hashVerification === 'verified' &&
@@ -841,6 +881,7 @@ export async function runPreflight({
         'VERIFY_LATEST_BACKUP',
         {
           completed: metadata.status === 'complete',
+          selection,
           shaVerified: verification.hashVerification === 'verified',
           schemaCompatible: verification.schemaVersion <= 2,
           releaseMatches: verification.applicationRelease === manifest?.id,

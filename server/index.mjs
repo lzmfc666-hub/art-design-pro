@@ -125,6 +125,8 @@ export function createStudioServer(options = {}) {
           options.backups?.directory ??
           (databasePath === ':memory:' ? '' : resolve(dirname(databasePath), 'backups')),
         retentionCount: options.backups?.retentionCount ?? 7,
+        maxTotalBytes: options.backups?.maxTotalBytes ?? 0,
+        minFreeBytes: options.backups?.minFreeBytes ?? 0,
         failureWebhook: options.backups?.failureWebhook ?? ''
       }
   const cleanupOptions = maintenanceFromEnv
@@ -136,6 +138,16 @@ export function createStudioServer(options = {}) {
         retentionDays: options.uploadCleanup?.retentionDays ?? 7,
         limit: options.uploadCleanup?.limit ?? 50
       }
+  const imageArchiveOptions = {
+    enabled: maintenanceFromEnv && process.env.STUDIO_IMAGE_ARCHIVE_ENABLED === 'true',
+    deletionEnabled: maintenanceFromEnv && process.env.STUDIO_IMAGE_DELETE_ENABLED === 'true',
+    directory: maintenanceFromEnv ? process.env.STUDIO_IMAGE_ARCHIVE_DIR : undefined,
+    holdsFile: maintenanceFromEnv ? process.env.STUDIO_IMAGE_ARCHIVE_HOLDS_FILE : undefined,
+    retentionDays: maintenanceFromEnv ? Number(process.env.STUDIO_IMAGE_DELETE_RETENTION_DAYS || process.env.STUDIO_IMAGE_ARCHIVE_RETENTION_DAYS || 30) : 30,
+    ...options.imageArchive
+  }
+  if (imageArchiveOptions.enabled && imageArchiveOptions.deletionEnabled)
+    throw new Error('完成单图片归档与到期删除不能同时开启')
   const notificationOptions = maintenanceFromEnv
     ? options.notifications || { clock: options.clock }
     : {
@@ -182,10 +194,14 @@ export function createStudioServer(options = {}) {
   const uploadCleanup = createUploadCleanup({
     ...cleanupOptions,
     clock: options.clock,
+    completedRetentionDays: imageArchiveOptions.retentionDays,
+    archive: imageArchiveOptions.enabled ? input => service.archiveCompletedOrderImages(input) : undefined,
+    removeCompleted: imageArchiveOptions.deletionEnabled ? input => service.deleteCompletedOrderImages(input) : undefined,
     collect: (input) => service.collectAbandonedUploads(input)
   })
   const service = createStudioService({
     ...options,
+    imageArchive: { directory: imageArchiveOptions.directory, holdsFile: imageArchiveOptions.holdsFile },
     password: maintenanceFromEnv ? options.password : (options.password ?? null),
     onTransaction(context) {
       notifications?.onTransaction(context)

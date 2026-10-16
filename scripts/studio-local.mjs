@@ -135,16 +135,22 @@ export function localMonitorService({
       dbPath: database, required: true })
     if (env.STUDIO_MONITOR_TOKEN && env.STUDIO_MONITOR_TOKEN !== binding.token) throw invalid()
     backupEnvironment = { STUDIO_BACKUP_INTERVAL_MINUTES: '0',
+      STUDIO_BACKUP_MAX_TOTAL_BYTES: '0', STUDIO_BACKUP_MIN_FREE_BYTES: '0',
       STUDIO_BACKUP_FAILURE_WEBHOOK: '', STUDIO_BACKUP_REPLICATION_CONFIG: '' }
     if (config.backups?.enabled === true) {
-      const { intervalMinutes, retentionCount, directory: backupDirectory } = config.backups
+      const { intervalMinutes, retentionCount, directory: backupDirectory,
+        maxTotalBytes = 0, minFreeBytes = 0 } = config.backups
       if (!Number.isSafeInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 35791 ||
         !Number.isSafeInteger(retentionCount) || retentionCount < 1 || retentionCount > 90 ||
+        !Number.isSafeInteger(maxTotalBytes) || maxTotalBytes < 0 ||
+        !Number.isSafeInteger(minFreeBytes) || minFreeBytes < 0 ||
         typeof backupDirectory !== 'string' || !backupDirectory ||
         config.backups.replication?.enabled === true) throw invalid()
       backupEnvironment = { ...backupEnvironment,
         STUDIO_BACKUP_INTERVAL_MINUTES: String(intervalMinutes),
         STUDIO_BACKUP_RETENTION_COUNT: String(retentionCount),
+        STUDIO_BACKUP_MAX_TOTAL_BYTES: String(maxTotalBytes),
+        STUDIO_BACKUP_MIN_FREE_BYTES: String(minFreeBytes),
         STUDIO_BACKUP_DIR: privateOpsDirectory(backupDirectory, projectRoot) }
     }
   } catch { throw invalid() }

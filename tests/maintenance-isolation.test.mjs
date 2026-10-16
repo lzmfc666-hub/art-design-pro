@@ -20,7 +20,7 @@ function runIsolatedChild(t, { fromEnvironment = false } = {}) {
       ...( ${fromEnvironment} ? {maintenanceFromEnv: true} : {})
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const result = { backupsEnabled: server.backups.metrics().enabled, cleanupEnabled: server.uploadCleanup.metrics().enabled, backupCompleted: server.backups.metrics().completed, cleanupNeverRun: server.uploadCleanup.metrics().lastRunAt === null, ambientDirectoryCreated: existsSync(${JSON.stringify(join(directory, 'ambient-backups'))}) };
+    const result = { backupsEnabled: server.backups.metrics().enabled, backupMaxTotalBytes: server.backups.metrics().maxTotalBytes, backupMinFreeBytes: server.backups.metrics().minFreeBytes, cleanupEnabled: server.uploadCleanup.metrics().enabled, backupCompleted: server.backups.metrics().completed, cleanupNeverRun: server.uploadCleanup.metrics().lastRunAt === null, ambientDirectoryCreated: existsSync(${JSON.stringify(join(directory, 'ambient-backups'))}) };
     await new Promise(resolve => server.close(resolve));
     console.log(JSON.stringify(result));
   `
@@ -34,6 +34,8 @@ function runIsolatedChild(t, { fromEnvironment = false } = {}) {
     STUDIO_BACKUP_DIR: join(directory, 'ambient-backups'),
     STUDIO_BACKUP_INTERVAL_MINUTES: fromEnvironment ? '60' : '1',
     STUDIO_BACKUP_RETENTION_COUNT: fromEnvironment ? '2' : '999',
+    STUDIO_BACKUP_MAX_TOTAL_BYTES: fromEnvironment ? String(6 * 1024 ** 3) : 'invalid-capacity',
+    STUDIO_BACKUP_MIN_FREE_BYTES: fromEnvironment ? String(8 * 1024 ** 3) : 'invalid-free-space',
     STUDIO_BACKUP_FAILURE_WEBHOOK: 'https://dummy.invalid/no-real-webhook',
     STUDIO_UPLOAD_GC_ENABLED: 'true',
     STUDIO_UPLOAD_GC_INTERVAL_MINUTES: fromEnvironment ? '60' : '0',
@@ -55,6 +57,8 @@ function runIsolatedChild(t, { fromEnvironment = false } = {}) {
 test('显式测试数据库忽略环境备份/回收/推送配置，畸形假密钥也不会读取或触发外发', (t) => {
   assert.deepEqual(runIsolatedChild(t), {
     backupsEnabled: false,
+    backupMaxTotalBytes: 0,
+    backupMinFreeBytes: 0,
     cleanupEnabled: false,
     backupCompleted: 0,
     cleanupNeverRun: true,
@@ -65,6 +69,8 @@ test('显式测试数据库忽略环境备份/回收/推送配置，畸形假密
 test('只有显式maintenanceFromEnv=true才接受计划配置，关闭服务器不执行待到期任务', (t) => {
   assert.deepEqual(runIsolatedChild(t, { fromEnvironment: true }), {
     backupsEnabled: true,
+    backupMaxTotalBytes: 6 * 1024 ** 3,
+    backupMinFreeBytes: 8 * 1024 ** 3,
     cleanupEnabled: true,
     backupCompleted: 0,
     cleanupNeverRun: true,
