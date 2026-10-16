@@ -1,3 +1,5 @@
+import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
+import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -20,7 +22,7 @@ function fixture(t, options = {}) {
     ...options
   })
   t.after(() => service.close())
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const level = mutate('/levels', { name: '测试级别', delaySeconds: 0 })
   const users = {}
   for (const role of ['support', 'support_lead', 'manager', 'finance', 'admin', 'hr', 'player'])
@@ -208,10 +210,18 @@ test('扣款只扣可用额，超额独立待追回，补款入钱包且不更�
   const pending = f.order()
   assert.ok(f.service.playerOrders(f.users.player.id).some((row) => row.id === pending.id))
   f.complete(pending)
-  const paid = f.mutate('/player/withdrawals', { amount: 3000 }, f.users.player.id)
+  const paid = f.mutate(
+    '/player/withdrawals',
+    withdrawalBody(f.service, f.users.player.id, 3000),
+    f.users.player.id
+  )
   f.mutate(`/withdrawals/${paid.id}/action`, { action: 'approve' })
   f.mutate(`/withdrawals/${paid.id}/action`, { action: 'pay', receipt: f.upload() })
-  f.mutate('/player/withdrawals', { amount: 2000 }, f.users.player.id)
+  f.mutate(
+    '/player/withdrawals',
+    withdrawalBody(f.service, f.users.player.id, 2000),
+    f.users.player.id
+  )
   const adjustment = f.mutate(
     '/player-adjustments',
     {
@@ -230,7 +240,15 @@ test('扣款只扣可用额，超额独立待追回，补款入钱包且不更�
   assert.equal(wallet.available, 0)
   assert.equal(wallet.paid, 3000)
   assert.equal(wallet.occupied, 2000)
-  rejected(() => f.mutate('/player/withdrawals', { amount: 1 }, f.users.player.id), 409)
+  rejected(
+    () =>
+      f.mutate(
+        '/player/withdrawals',
+        withdrawalBody(f.service, f.users.player.id, 1),
+        f.users.player.id
+      ),
+    409
+  )
   f.mutate(`/player-adjustments/${adjustment.id}/action`, {
     action: 'resolve',
     resolution: 'recovered',
@@ -471,7 +489,11 @@ test('已提现且已发佣金订单的跨月状态冲正创建待追回，恢�
   const completed = f.complete(f.order())
   const payroll = f.mutate('/payrolls', { month: '2026-10' })
   assert.equal(payroll.lines.find((row) => row.userId === f.users.support.id).commission, 880)
-  const withdrawal = f.mutate('/player/withdrawals', { amount: 7000 }, f.users.player.id)
+  const withdrawal = f.mutate(
+    '/player/withdrawals',
+    withdrawalBody(f.service, f.users.player.id, 7000),
+    f.users.player.id
+  )
   f.mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'approve' })
   f.mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'pay', receipt: f.upload() })
   f.time('2026-11-02T02:00:00Z')
@@ -611,19 +633,19 @@ test('归档达到容量时事务503不部分保存；备份确认与原因缺�
     auditArchiveMaxBytes: 10000
   })
   t.after(() => service.close())
-  service.mutate('admin', '/profile', { name: '首次名称' })
-  service.mutate('admin', '/profile', { name: '第二次名称' })
+  testMutate(service, 'admin', '/profile', { name: '首次名称' })
+  testMutate(service, 'admin', '/profile', { name: '第二次名称' })
   const old = service.db.prepare('SELECT id,payload FROM audit_logs_archive LIMIT 1').get()
   service.db
     .prepare('UPDATE audit_logs_archive SET payload=? WHERE id=?')
     .run(old.payload + ' '.repeat(10000 - Buffer.byteLength(old.payload)), old.id)
   const before = service.bootstrap('admin').user.name
-  rejected(() => service.mutate('admin', '/profile', { name: '不能部分保存' }), 503)
+  rejected(() => testMutate(service, 'admin', '/profile', { name: '不能部分保存' }), 503)
   assert.equal(service.bootstrap('admin').user.name, before)
   assert.equal(service.logStorage('admin').warning, true)
   rejected(
     () =>
-      service.mutate('admin', '/logs/maintenance', {
+      testMutate(service, 'admin', '/logs/maintenance', {
         action: 'purge-archive',
         beforeDate: '2099-01-01',
         reason: '缺备份确认'
@@ -632,7 +654,7 @@ test('归档达到容量时事务503不部分保存；备份确认与原因缺�
   )
   rejected(
     () =>
-      service.mutate('admin', '/logs/maintenance', {
+      testMutate(service, 'admin', '/logs/maintenance', {
         action: 'purge-archive',
         beforeDate: '2099-01-01',
         backupConfirmed: true,
@@ -643,7 +665,7 @@ test('归档达到容量时事务503不部分保存；备份确认与原因缺�
   const backup = service.prepareArchiveBackup('admin', '2099-01-01')
   assert.equal([...backup.records].length, 1)
   service.completeArchiveBackup('admin', backup.backupToken, backup.beforeDate)
-  service.mutate('admin', '/logs/maintenance', {
+  testMutate(service, 'admin', '/logs/maintenance', {
     action: 'purge-archive',
     beforeDate: '2099-01-01',
     backupConfirmed: true,
@@ -733,7 +755,7 @@ test('HTTP匿名只公开登录外观与指定公开图片，品牌与私有背�
     mime: 'image/png',
     data: PNG
   })
-  service.mutate('admin', '/appearance', {
+  testMutate(service, 'admin', '/appearance', {
     revision: 0,
     config: {
       ...defaultAppearance(),
@@ -749,7 +771,7 @@ test('HTTP匿名只公开登录外观与指定公开图片，品牌与私有背�
   )
   assert.equal((await fetch(`${base}/public-assets/${privateImage.id}`)).status, 404)
   assert.equal((await fetch(`${base}/uploads/${logo.id}`)).status, 401)
-  const actor = service.mutate('admin', '/users', {
+  const actor = testMutate(service, 'admin', '/users', {
     username: 'http-support',
     name: '客服',
     role: 'support',
@@ -789,7 +811,7 @@ test('HTTP完整备份流包含原始财务审计，普通管理员403，下载�
   t.after(() => new Promise((resolve) => server.close(resolve)))
   const base = `http://127.0.0.1:${server.address().port}/api/studio`
   const service = server.service
-  const ordinary = service.mutate('admin', '/users', {
+  const ordinary = testMutate(service, 'admin', '/users', {
     username: 'raw-backup-admin',
     name: '普通管理员',
     role: 'admin',
@@ -798,7 +820,7 @@ test('HTTP完整备份流包含原始财务审计，普通管理员403，下载�
     permissionOverrides: {},
     password: PASSWORD
   })
-  const finance = service.mutate('admin', '/users', {
+  const finance = testMutate(service, 'admin', '/users', {
     username: 'raw-backup-finance',
     name: '财务',
     role: 'finance',
@@ -807,7 +829,7 @@ test('HTTP完整备份流包含原始财务审计，普通管理员403，下载�
     permissionOverrides: {},
     password: PASSWORD
   })
-  service.mutate('admin', '/salary-plans', {
+  testMutate(service, 'admin', '/salary-plans', {
     userId: finance.id,
     mode: 'fixed',
     base: 12345,
@@ -816,7 +838,7 @@ test('HTTP完整备份流包含原始财务审计，普通管理员403，下载�
     effectiveFrom: '2026-10-01',
     hourlyEnabled: false
   })
-  service.mutate('admin', '/profile', { name: '完整备份管理员' })
+  testMutate(service, 'admin', '/profile', { name: '完整备份管理员' })
   const login = async (username) => {
     const response = await fetch(`${base}/login`, {
       method: 'POST',
@@ -879,7 +901,7 @@ test('HTTP归档满时完整维护账号可安全登录备份清理，失败登�
   t.after(() => new Promise((resolve) => server.close(resolve)))
   const base = `http://127.0.0.1:${server.address().port}/api/studio`
   const service = server.service
-  const ordinary = service.mutate('admin', '/users', {
+  const ordinary = testMutate(service, 'admin', '/users', {
     username: 'capacity-admin',
     name: '普通管理员',
     role: 'admin',
@@ -1016,3 +1038,5 @@ test('应急登录安全日志最多1000条并保留30天，不将业务或凭�
     1
   )
 })
+
+installTestClientFetch()

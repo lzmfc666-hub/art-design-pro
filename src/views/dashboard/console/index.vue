@@ -122,6 +122,7 @@
       <OverviewMetrics
         :report="overview.ready.value ? overview.report.value : null"
         :loading="overview.loading.value"
+        @refreshed="overview.report.value = $event"
       />
       <ElCollapse class="scope-collapse mb-5" v-if="overview.report.value?.scopeNotes.length"
         ><ElCollapseItem title="查看统计口径与数据范围" name="scope"
@@ -153,7 +154,7 @@
 
 <script setup lang="ts">
   import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-  import { useRouter } from 'vue-router'
+  import { useRoute, useRouter } from 'vue-router'
   import { useAppearance } from '@/hooks/business/useAppearance'
   import { useStudio, roleLabels } from '@/hooks/business/useStudio'
   import { useOverviewReport, dateInShanghai, shiftDate } from '@/hooks/business/useOverviewReport'
@@ -168,7 +169,18 @@
 
   defineOptions({ name: 'Console' })
   const { data, user, can, refresh } = useStudio()
+  const routerRoute = useRoute()
   const overview = useOverviewReport()
+  const restoredStart = routerRoute.query.overviewStart
+  const restoredEnd = routerRoute.query.overviewEnd
+  if (
+    typeof restoredStart === 'string' &&
+    typeof restoredEnd === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(restoredStart) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(restoredEnd)
+  ) {
+    overview.range.value = [restoredStart, restoredEnd]
+  }
   const pickedRange = computed({
     get: () => overview.range.value,
     set: (value: unknown) => {

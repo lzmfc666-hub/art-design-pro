@@ -1,3 +1,4 @@
+import { installTestClientFetch } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioServer } from '../server/index.mjs'
@@ -165,7 +166,17 @@ test('真实HTTP跨模块：人员来源→储值订单→免图验收→钱包�
     order.id
   )
   assert.equal((await call('/player/wallet', undefined, 'player')).available, 7000)
-  const withdrawal = await call('/player/withdrawals', { amount: 7000 }, 'player')
+  const qrCode = await call(
+    '/uploads',
+    { name: '本人收款码.png', mime: 'image/png', data: png },
+    'player'
+  )
+  await call('/player/payment-methods', { method: 'wechat', qrCode }, 'player')
+  const withdrawal = await call(
+    '/player/withdrawals',
+    { amount: 7000, paymentMethod: 'wechat', requestId: 'business-flow-withdrawal-1' },
+    'player'
+  )
   await call(`/withdrawals/${withdrawal.id}/action`, { action: 'approve' }, 'finance')
   const receipt = await call(
     '/uploads',
@@ -324,3 +335,5 @@ test('固定班次检查发现损坏和重复版本，旧数据无此字段兼�
     report.issues.some((row) => row.entity === 'work-schedule' && row.message.includes('重复'))
   )
 })
+
+installTestClientFetch()

@@ -91,6 +91,7 @@ export function defaultAppearance() {
   return {
     studioName: '电竞工作室',
     logo: null,
+    playerOrderCardImage: null,
     page: { mode: 'default', color: '#f5f8fc', image: null, overlay: 50 },
     hero: { mode: 'default', color: '#80b7ff', image: null, overlay: 35, showDecoration: true },
     login: {
@@ -157,6 +158,7 @@ export function normalizeAppearance(config, attachmentResolver) {
   object(config, '外观', [
     'studioName',
     'logo',
+    'playerOrderCardImage',
     'page',
     'hero',
     'login',
@@ -191,12 +193,12 @@ export function normalizeAppearance(config, attachmentResolver) {
   object(loginConfig.background, '登录背景', ['mode', 'color', 'image', 'overlay'])
   object(glassConfig, '毛玻璃', ['enabled'])
   if (typeof glassConfig.enabled !== 'boolean') throw new ApiError('请选择是否启用毛玻璃效果')
-  const image = (value) => {
+  const image = (value, purpose) => {
     if (value == null) return null
     object(value, '图片附件', ['id', 'name', 'mime', 'size', 'url'])
     if (typeof value.id !== 'string' || !value.id || value.id.length > 128)
       throw new ApiError('图片附件 ID 无效')
-    return attachmentResolver(value)
+    return attachmentResolver(value, purpose)
   }
   const page = {
     mode: mode(config.page.mode),
@@ -252,6 +254,7 @@ export function normalizeAppearance(config, attachmentResolver) {
   return {
     studioName: config.studioName.trim(),
     logo: image(config.logo),
+    playerOrderCardImage: image(config.playerOrderCardImage, 'player-order-card'),
     page,
     hero,
     login,
@@ -263,6 +266,7 @@ export function normalizeAppearance(config, attachmentResolver) {
 export function appearanceAttachments(config, { activeOnly = false } = {}) {
   return [
     config?.logo,
+    config?.playerOrderCardImage,
     !activeOnly || config?.page?.mode === 'image' ? config?.page?.image : null,
     !activeOnly || config?.hero?.mode === 'image' ? config?.hero?.image : null,
     !activeOnly || config?.login?.background?.mode === 'image'

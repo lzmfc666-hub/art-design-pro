@@ -13,4 +13,7 @@ src/types/import/components.d.ts
 # Local studio database, sessions, uploads and initial administrator password
 .data/
 .qa/
+.ops/
+ops-private/
+backups/
 playwright-report/

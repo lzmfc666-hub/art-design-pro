@@ -1,3 +1,4 @@
+import { testMutate } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ApiError, createStudioService } from '../server/studio.mjs'
@@ -15,10 +16,10 @@ function fixture(t) {
     clock: () => clock
   })
   t.after(() => service.close())
-  const level = service.mutate('admin', '/levels', { name: '班次测试等级', delaySeconds: 0 })
+  const level = testMutate(service, 'admin', '/levels', { name: '班次测试等级', delaySeconds: 0 })
   const people = {}
   for (const role of ['hr', 'support', 'finance', 'admin', 'player']) {
-    people[role] = service.mutate('admin', '/users', {
+    people[role] = testMutate(service, 'admin', '/users', {
       username: `schedule-${role}`,
       name: `班次测试${role}`,
       role,
@@ -30,7 +31,7 @@ function fixture(t) {
     })
   }
   const set = (changes = {}, actor = people.hr.id) =>
-    service.mutate(actor, '/work-schedules', {
+    testMutate(service, actor, '/work-schedules', {
       userId: people.support.id,
       effectiveFrom: '2026-10-13',
       enabled: true,
@@ -82,7 +83,7 @@ test('当天班次可更正，历史班次拒绝回写，已登记日考勤及�
   const updated = f.set({ start: '10:00', end: '19:00' })
   assert.equal(updated.id, first.id)
   assert.equal(f.service.bootstrap('admin').workSchedules.length, 1)
-  const attendance = f.service.mutate(f.people.hr.id, '/attendance', {
+  const attendance = testMutate(f.service, f.people.hr.id, '/attendance', {
     userId: f.people.support.id,
     date: '2026-10-13',
     status: 'normal',
@@ -118,7 +119,7 @@ test('班次服务拒绝无效日期、时钟、同起止时间和停用人员�
   ])
     rejects(() => f.set(changes))
   rejects(() => f.set({ userId: 'missing-user' }), 404)
-  f.service.mutate('admin', '/users', { ...f.people.support, status: 'disabled' })
+  testMutate(f.service, 'admin', '/users', { ...f.people.support, status: 'disabled' })
   rejects(() => f.set())
   assert.equal(f.service.bootstrap('admin').workSchedules.length, 0)
   assert.equal(f.service.logs('admin', { entity: 'work-schedule', source: 'all' }).total, 0)
@@ -140,7 +141,7 @@ test('固定班次按考勤权限管理，其他人员仅能看本人，授权�
   assert.deepEqual(f.service.bootstrap(f.people.player.id).workSchedules, [])
   const audit = f.service.logs(f.people.admin.id, { entity: 'work-schedule', source: 'all' })
   assert.ok(audit.records.every((item) => item.before === null && item.after === null))
-  f.service.mutate('admin', '/users', {
+  testMutate(f.service, 'admin', '/users', {
     ...f.people.hr,
     permissionOverrides: { 'attendance.manage': false }
   })

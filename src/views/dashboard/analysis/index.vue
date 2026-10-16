@@ -102,6 +102,11 @@
             ><ElTag v-if="row.incomplete" type="warning">配置未齐</ElTag
             ><strong v-else>{{ money(row.profit) }}</strong></template
           >
+          <template #operation="{ row }"
+            ><ElButton link type="primary" @click="openReportDetail('days', row)"
+              >查看日报详情</ElButton
+            ></template
+          >
         </ArtTable>
       </template>
       <template v-else-if="tab === 'channels'">
@@ -134,6 +139,11 @@
           ><template #net="{ row }"
             ><strong>{{ money(row.net) }}</strong></template
           >
+          <template #operation="{ row }"
+            ><ElButton link type="primary" @click="openReportDetail('channels', row)"
+              >查看渠道详情</ElButton
+            ></template
+          >
         </ArtTable>
       </template>
       <template v-else>
@@ -156,19 +166,64 @@
           empty-height="260px"
           @pagination:size-change="performanceTable.handleSizeChange"
           @pagination:current-change="performanceTable.handleCurrentChange"
-          ><template #net="{ row }">{{ money(row.net) }}</template></ArtTable
+          ><template #net="{ row }">{{ money(row.net) }}</template
+          ><template #operation="{ row }"
+            ><ElButton link type="primary" @click="openReportDetail('performance', row)"
+              >查看业绩详情</ElButton
+            ></template
+          ></ArtTable
         >
       </template>
     </ElCard>
+    <BusinessDetailPanel
+      v-model="reportDetailOpen"
+      page-key="analysis-record"
+      :record-id="`${selectedMonth}:${reportDetailType}:${reportDetailKey}`"
+      :restore-error="reportRestoreError"
+      @restore="restoreReportDetail($event)"
+      title="经营报表记录详情"
+      class="business-detail-dialog"
+      width="min(1040px,96vw)"
+    >
+      <template v-if="reportDetailRow">
+        <BusinessDetailHeader
+          :title="
+            reportDetailType === 'days'
+              ? `${reportDetailKey} 日报`
+              : String(reportDetailRow.name || '业务记录')
+          "
+          description="核对当前服务端报表中这一条记录的金额构成及归属，查看不新增结算或调整。"
+          icon="ri:bar-chart-box-line"
+          :context="`${selectedMonth} 核算月份 · 更新于 ${formatTime(lastUpdatedAt)}`"
+        />
+        <BusinessDetailSummary :items="reportDetailItems" />
+        <BusinessDetailSection title="归属与统计说明">
+          <p v-if="reportDetailType === 'days'" class="text-sm text-g-500 leading-7"
+            >订单收入、退款及成本归原付款日，日报不扣员工月度底薪；打手成本已包含预计报酬，预计部分不再次扣除。费用保持原登记及报酬人工净调整口径，缺配置或取消补偿未确认时利润待核实。</p
+          >
+          <p v-else-if="reportDetailType === 'channels'" class="text-sm text-g-500 leading-7"
+            >当前行是该平台或店铺的授权汇总。平台已包含所属店铺；父级和子级不能相加重复统计。退款归原客户付款日。</p
+          >
+          <p v-else class="text-sm text-g-500 leading-7"
+            >仅服务端当前授权的员工完成业绩；按完成月份归属，运营按原提成归属，其他员工按创建人归属。净业绩扣除该订单已支付退款，不等于工资或已发金额。</p
+          >
+        </BusinessDetailSection>
+      </template>
+      <template #footer><ElButton @click="reportDetailOpen = false">关闭</ElButton></template>
+    </BusinessDetailPanel>
   </div>
 </template>
 
 <script setup lang="ts">
-  import { computed, ref, watch } from 'vue'
+  import { computed, onActivated, onMounted, ref, watch } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import { ElMessage } from 'element-plus'
   import { useStudio, money, formatTime } from '@/hooks/business/useStudio'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import type { ChannelReport, DayReport, Performance } from '@/types/studio'
@@ -181,6 +236,102 @@
   const route = useRoute()
   const router = useRouter()
   const tab = ref('days')
+  const reportDetailType = ref<'days' | 'channels' | 'performance'>('days')
+  const reportDetailKey = ref('')
+  const reportRestoreError = ref('')
+  async function restoreReportDetail({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    reportRestoreError.value = '该记录在当前授权报表中不可见，请返回报表重新选择。'
+    const month = recordId?.slice(0, 7) || ''
+    const separator = recordId?.indexOf(':', 8) ?? -1
+    const kind = separator < 0 ? '' : recordId!.slice(8, separator)
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return
+    if (!['days', 'channels', 'performance'].includes(kind)) return
+    if (!data.value || selectedMonth.value !== month) {
+      try {
+        await refresh(month)
+      } catch {
+        return
+      }
+    }
+    if (isCurrent?.() === false || data.value?.reports.month !== month) return
+    reportDetailType.value = kind as 'days' | 'channels' | 'performance'
+    reportDetailKey.value = recordId!.slice(separator + 1)
+    if (reportDetailRow.value) reportRestoreError.value = ''
+  }
+  const reportDetailRow = computed(() => {
+    const reports = data.value?.reports
+    if (!reports) return undefined
+    const row =
+      reportDetailType.value === 'days'
+        ? reports.days.find((row) => row.date === reportDetailKey.value)
+        : reportDetailType.value === 'channels'
+          ? reports.channels.find(
+              (row) => `${row.platformId}/${row.shopId || ''}` === reportDetailKey.value
+            )
+          : reports.performance.find((row) => row.userId === reportDetailKey.value)
+    return row as unknown as Record<string, string | number | boolean | null> | undefined
+  })
+  const reportDetailOpen = computed({
+    get: () => Boolean(reportDetailRow.value),
+    set: (value) => {
+      if (!value) reportDetailKey.value = ''
+    }
+  })
+  function openReportDetail(
+    kind: 'days' | 'channels' | 'performance',
+    row: DayReport | ChannelReport | Performance
+  ) {
+    reportDetailType.value = kind
+    reportDetailKey.value =
+      kind === 'days'
+        ? (row as DayReport).date
+        : kind === 'channels'
+          ? `${(row as ChannelReport).platformId}/${(row as ChannelReport).shopId || ''}`
+          : (row as Performance).userId
+  }
+  const reportDetailItems = computed(() => {
+    const row = reportDetailRow.value
+    if (!row) return []
+    const fields =
+      reportDetailType.value === 'days'
+        ? [
+            ['received', '客户收款'],
+            ['refunds', '累计退款'],
+            ['net', '净收入'],
+            ['otherIncome', '其他收入'],
+            ['reward', '打手成本（含预计）'],
+            ['estimatedReward', '其中预计成本'],
+            ['supportCommission', '客服提成'],
+            ['operationsCommission', '运营提成'],
+            ['expenses', '费用及人工净调整'],
+            ['profit', '日报利润（不扣底薪）']
+          ]
+        : reportDetailType.value === 'channels'
+          ? [
+              ['received', '客户收款'],
+              ['refunds', '累计退款'],
+              ['net', '净收入']
+            ]
+          : [['net', '完成订单净业绩']]
+    return [
+      ...(reportDetailType.value === 'days'
+        ? []
+        : [{ label: '完成订单 / 渠道订单', value: Number(row.orders || 0) }]),
+      ...fields.map(([key, label]) => ({
+        label,
+        value:
+          key === 'profit' && row.incomplete
+            ? '配置未齐 / 待核实'
+            : money(typeof row[key] === 'number' ? (row[key] as number) : null)
+      }))
+    ]
+  })
   const days = computed(() => data.value?.reports.days || [])
   const channels = computed(() => {
     const rows = data.value?.reports.channels || []
@@ -238,19 +389,22 @@
     { prop: 'supportCommission', label: '客服提成', minWidth: 130, useSlot: true },
     { prop: 'operationsCommission', label: '运营提成', minWidth: 130, useSlot: true },
     { prop: 'expenses', label: '其他费用', minWidth: 130, useSlot: true },
-    { prop: 'profit', label: '日报利润（不扣底薪）', minWidth: 190, useSlot: true, fixed: 'right' }
+    { prop: 'profit', label: '日报利润（不扣底薪）', minWidth: 190, useSlot: true, fixed: 'right' },
+    { prop: 'operation', label: '操作', width: 140, fixed: 'right', useSlot: true }
   ])
   const channelColumns = useTableColumns<ChannelReport>(() => [
     { prop: 'name', label: '平台 / 店铺', minWidth: 240, useSlot: true },
     { prop: 'orders', label: '订单数', minWidth: 120 },
     { prop: 'received', label: '收款', minWidth: 150, useSlot: true },
     { prop: 'refunds', label: '累计退款', minWidth: 150, useSlot: true },
-    { prop: 'net', label: '净收入', minWidth: 155, useSlot: true }
+    { prop: 'net', label: '净收入', minWidth: 155, useSlot: true },
+    { prop: 'operation', label: '操作', width: 140, fixed: 'right', useSlot: true }
   ])
   const performanceColumns = useTableColumns<Performance>(() => [
     { prop: 'name', label: '员工', minWidth: 180 },
     { prop: 'orders', label: '完成订单', minWidth: 140 },
-    { prop: 'net', label: '完成订单净收入', minWidth: 180, useSlot: true }
+    { prop: 'net', label: '完成订单净收入', minWidth: 180, useSlot: true },
+    { prop: 'operation', label: '操作', width: 140, fixed: 'right', useSlot: true }
   ])
   async function reloadMonth() {
     try {
@@ -259,6 +413,18 @@
       ElMessage.error(cause instanceof Error ? cause.message : '查询失败')
     }
   }
+  function refreshActiveReport() {
+    if (route.path === '/dashboard/analysis' && can('profit.view')) void reloadMonth()
+  }
+  let firstActivation = true
+  onMounted(refreshActiveReport)
+  onActivated(() => {
+    if (firstActivation) {
+      firstActivation = false
+      return
+    }
+    refreshActiveReport()
+  })
   watch(selectedMonth, () => {
     dayTable.resetPage()
     channelTable.resetPage()

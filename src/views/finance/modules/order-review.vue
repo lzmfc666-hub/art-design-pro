@@ -56,22 +56,27 @@
         }}</ElButton></template
       >
     </ArtTable>
-    <ElDrawer
+    <BusinessDetailPanel
+      page-key="finance-order-review"
+      :record-id="detailId || undefined"
+      @restore="queueRestore($event)"
+      :restore-error="restoreError"
       :model-value="!!detailId"
       title="订单核查"
-      size="min(1100px, 96vw)"
       :close-on-click-modal="false"
       :close-on-press-escape="!detailBusy"
       :show-close="!detailBusy"
       destroy-on-close
+      @update:model-value="!$event && !detailBusy && (detailId = '')"
       @close="detailId = ''"
     >
       <OrderDetail v-if="detailId" :order-id="detailId" @busy="detailBusy = $event" />
-    </ElDrawer>
+    </BusinessDetailPanel>
   </div>
 </template>
 
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
@@ -85,6 +90,28 @@
   const emit = defineEmits<{ busy: [value: boolean] }>()
   const detailId = ref('')
   const detailBusy = ref(false)
+  const restoreError = ref('')
+  const pendingRestore = ref<{ recordId?: string; isCurrent?: () => boolean } | null>(null)
+  function queueRestore(payload: { recordId?: string; isCurrent?: () => boolean }) {
+    restoreError.value = ''
+    pendingRestore.value = payload
+    resumeRestore()
+  }
+  function resumeRestore() {
+    if (pendingRestore.value?.isCurrent?.() === false) {
+      pendingRestore.value = null
+      return
+    }
+    if (pendingRestore.value === null || loading.value || !data.value) return
+    const id = pendingRestore.value.recordId || ''
+    pendingRestore.value = null
+    if (!id || !can('finance.review')) {
+      restoreError.value = '当前账号没有可核查的订单，请返回财务列表重新选择。'
+      return
+    }
+    viewOrder(id)
+  }
+  watch([data, loading], resumeRestore)
   watch(detailBusy, (busy) => emit('busy', busy), { immediate: true })
   const { reload } = useFinanceActions()
   const router = useRouter()

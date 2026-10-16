@@ -49,6 +49,9 @@
         >
         <template #permissions="{ row }"
           ><ElSpace wrap
+            ><ElTag v-if="row.permissions.length" effect="plain" size="small">{{
+              row.permissionMode === 'all' ? '全部满足' : '满足任一'
+            }}</ElTag
             ><ElTag v-for="permission in row.permissions" :key="permission" type="info">{{
               permissionLabels[permission] || permission
             }}</ElTag
@@ -62,13 +65,89 @@
             row.access ? '可访问' : '无权限'
           }}</ElTag></template
         >
+        <template #operation="{ row }"
+          ><ElButton type="primary" link @click="selectedPath = row.path"
+            >查看准入详情</ElButton
+          ></template
+        >
       </ArtTable>
     </ElCard>
+    <BusinessDetailPanel
+      v-model="detailOpen"
+      page-key="menu-access"
+      :record-id="selectedPath"
+      :restore-error="
+        selectedPath && !selectedMenu ? '当前没有这条可见路由定义，请返回菜单列表。' : ''
+      "
+      @restore="selectedPath = $event.recordId || ''"
+      title="菜单准入详情"
+      width="min(880px, 96vw)"
+      class="business-detail-dialog"
+    >
+      <template v-if="selectedMenu">
+        <BusinessDetailHeader
+          :title="title(selectedMenu.title)"
+          description="查看这条路由的原准入条件和当前账号结果。菜单说明不替代接口权限核验。"
+          icon="ri:menu-search-line"
+          :context="selectedMenu.path"
+          badge="只读路由定义"
+        />
+        <BusinessDetailSummary
+          :items="[
+            { label: '当前账户', value: user ? roleLabels[user.role] : '未登录' },
+            {
+              label: '准入结果',
+              value: selectedMenu.access ? '可访问' : '无权限',
+              tone: selectedMenu.access ? 'success' : 'warning'
+            },
+            {
+              label: '权限规则',
+              value: selectedMenu.permissionMode === 'all' ? '全部满足' : '满足任一'
+            }
+          ]"
+        />
+        <BusinessDetailSection title="页面与菜单信息">
+          <ElDescriptions :column="1" border
+            ><ElDescriptionsItem label="页面范围">{{
+              selectedMenu.business ? '工作室业务' : '原框架示例'
+            }}</ElDescriptionsItem
+            ><ElDescriptionsItem label="路由地址">{{ selectedMenu.path }}</ElDescriptionsItem
+            ><ElDescriptionsItem label="菜单展示">{{
+              selectedMenu.hidden ? '隐藏入口，仍按路由权限裁决' : '普通菜单入口'
+            }}</ElDescriptionsItem
+            ><ElDescriptionsItem label="子菜单"
+              >{{ selectedMenu.children?.length || 0 }} 条直属子菜单</ElDescriptionsItem
+            ></ElDescriptions
+          >
+        </BusinessDetailSection>
+        <BusinessDetailSection
+          title="访问条件"
+          description="有多个条件时按此路由定义判定任一或全部；个人权限允许/禁止由服务器核验。"
+        >
+          <ElSpace wrap
+            ><ElTag v-for="key in selectedMenu.permissions" :key="key" effect="plain">{{
+              permissionLabels[key] || key
+            }}</ElTag
+            ><span v-if="!selectedMenu.permissions.length">{{
+              selectedMenu.business
+                ? '登录后访问，目录还需有可访问的子页'
+                : '仅超级管理员可访问原框架示例'
+            }}</span></ElSpace
+          >
+        </BusinessDetailSection>
+      </template>
+      <template #footer><ElButton @click="detailOpen = false">关闭</ElButton></template>
+    </BusinessDetailPanel>
   </div>
 </template>
 
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
+  import { canAccessStudioPage } from '@/utils/auth/studio-access'
   import { computed, ref, nextTick, onMounted } from 'vue'
   import { useI18n } from 'vue-i18n'
   import { ElMessage } from 'element-plus'
@@ -86,10 +165,11 @@
     hidden: boolean
     business: boolean
     permissions: string[]
+    permissionMode: 'all' | 'any'
     access: boolean
     children?: MenuRow[]
   }
-  const { user, can } = useStudio()
+  const { user } = useStudio()
   const { t, te } = useI18n()
   const search = ref({ title: '', path: '', kind: '' })
   const applied = ref({ title: '', path: '', kind: '' })
@@ -140,9 +220,10 @@
         hidden: !!route.meta.isHide,
         business,
         permissions,
+        permissionMode: route.meta.studioPermissionMode === 'all' ? 'all' : 'any',
         access:
           (business || user.value?.role === 'super_admin') &&
-          (!permissions.length || permissions.some(can))
+          canAccessStudioPage(permissions, route.meta.studioPermissionMode)
       }
       if (route.children?.length) row.children = mapMenus(route.children, path, business)
       if (row.children?.length)
@@ -151,6 +232,23 @@
     })
   }
   const menuRows = computed(() => mapMenus(source.value))
+  const selectedPath = ref('')
+  const selectedMenu = computed(() => {
+    const find = (rows: MenuRow[]): MenuRow | undefined => {
+      for (const row of rows) {
+        if (row.path === selectedPath.value) return row
+        const child = row.children && find(row.children)
+        if (child) return child
+      }
+    }
+    return find(menuRows.value)
+  })
+  const detailOpen = computed({
+    get: () => Boolean(selectedMenu.value),
+    set: (value) => {
+      if (!value) selectedPath.value = ''
+    }
+  })
   function filterRows(rows: MenuRow[]): MenuRow[] {
     return rows.flatMap((row) => {
       const children = row.children ? filterRows(row.children) : []
@@ -170,9 +268,10 @@
     { prop: 'title', label: '菜单名称', minWidth: 240, useSlot: true },
     { prop: 'path', label: '路由路径', minWidth: 230 },
     { prop: 'kind', label: '范围', width: 140, useSlot: true },
-    { prop: 'permissions', label: '访问权限（满足其中一项）', minWidth: 290, useSlot: true },
+    { prop: 'permissions', label: '访问权限与组合规则', minWidth: 290, useSlot: true },
     { prop: 'access', label: '当前账户', width: 120, useSlot: true },
-    { prop: 'component', label: '源码页面', minWidth: 200, checked: false }
+    { prop: 'component', label: '源码页面', minWidth: 200, checked: false },
+    { prop: 'operation', label: '操作', width: 150, fixed: 'right', useSlot: true }
   ])
   function applySearch() {
     applied.value = {

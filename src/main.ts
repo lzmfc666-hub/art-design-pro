@@ -5,6 +5,7 @@ import { initRouter, router } from './router'
 import language from './locales'
 import '@styles/core/tailwind.css'
 import '@styles/index.scss'
+import '@styles/business-detail.scss'
 import '@utils/sys/console.ts'
 import { setupGlobDirectives } from './directives'
 import { setupErrorHandle } from './utils/sys/error-handle'
@@ -14,6 +15,9 @@ import { toFrameworkUser } from './utils/auth/studio-user'
 import { resetRouterState } from './router/guards/beforeEach'
 import { useAppearanceStore } from './store/modules/appearance'
 import { setPageTitle } from './utils/router'
+import { studioRequest } from './api/studio'
+import type { Staff } from './types/studio'
+import { adminSessionUser } from './utils/auth/admin-entry'
 
 document.addEventListener('touchstart', function () {}, { passive: false })
 // 默认不显示开发工具，不从浏览器缓存推断超管身份。
@@ -30,7 +34,9 @@ async function bootstrap() {
   userStore.setLoginStatus(false)
   userStore.setToken('', '')
   try {
-    await studio.init()
+    const session = await studioRequest<{ user: Staff | null }>('session')
+    studio.user.value = adminSessionUser(session.user)
+    if (studio.user.value) await studio.refresh()
     if (studio.user.value) {
       userStore.setUserInfo(toFrameworkUser(studio.user.value))
       userStore.setLoginStatus(true)
@@ -93,7 +99,7 @@ async function bootstrap() {
     },
     { immediate: true }
   )
-  if (!studio.user.value) {
+  if (!studio.user.value || studio.user.value.role === 'player') {
     try {
       await appearance.loadPublic()
     } catch {

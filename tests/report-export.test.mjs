@@ -1,3 +1,4 @@
+import { testMutate } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -7,13 +8,13 @@ const password = 'report-export-test-password-123'
 function fixture(t) {
   const service = createStudioService({ dbPath: ':memory:', password, seed: true })
   t.after(() => service.close())
-  const customer = service.mutate('admin', '/customers', {
+  const customer = testMutate(service, 'admin', '/customers', {
     name: '=1+1',
     contact: '+861234567',
     gameId: '00007',
     remark: '导出测试'
   })
-  const template = service.mutate('admin', '/templates', {
+  const template = testMutate(service, 'admin', '/templates', {
     name: '导出项目',
     game: '测试游戏',
     description: '完整投影验证',
@@ -23,7 +24,7 @@ function fixture(t) {
     remark: '测试',
     active: true
   })
-  const order = service.mutate('admin', '/orders', {
+  const order = testMutate(service, 'admin', '/orders', {
     templateId: template.id,
     customerId: customer.id,
     platformId: 'xianyu',
@@ -39,7 +40,7 @@ function fixture(t) {
     dispatchMode: 'pool'
   })
   const staff = (role, permissionOverrides = {}) =>
-    service.mutate('admin', '/users', {
+    testMutate(service, 'admin', '/users', {
       username: `export-${role}`,
       name: `测试${role}`,
       role,
@@ -173,8 +174,9 @@ test('批量覆盖业务模块，空配置保持待配置而非零，静态配�
   const f = fixture(t)
   const data = f.snapshot()
   const catalog = getExportCatalog(data)
-  assert.equal(catalog.modules.length, 35)
+  assert.equal(catalog.modules.length, 37)
   assert.ok(catalog.modules.some((module) => module.id === 'workSchedules'))
+  assert.ok(catalog.modules.some((module) => module.id === 'orderReturns'))
   const result = buildExportSheets(data, {
     modules: catalog.modules.map((module) => ({
       id: module.id,
@@ -221,7 +223,7 @@ test('界面外观导出只投影所选配置和站内图片地址，普通账�
   const page = image('页面背景.png')
   const hero = image('欢迎横幅.png')
   const previous = f.snapshot().appearance
-  f.service.mutate('admin', '/appearance', {
+  testMutate(f.service, 'admin', '/appearance', {
     revision: previous.revision,
     config: {
       ...previous,
@@ -282,9 +284,9 @@ test('界面外观导出只投影所选配置和站内图片地址，普通账�
 function largeReferenceFixture(t) {
   const service = createStudioService({ dbPath: ':memory:', password, seed: false })
   t.after(() => service.close())
-  const customer = service.mutate('admin', '/customers', { name: '旧客户 ÉTHAN' })
-  const other = service.mutate('admin', '/customers', { name: '其他客户' })
-  const platform = service.mutate('admin', '/platforms', {
+  const customer = testMutate(service, 'admin', '/customers', { name: '旧客户 ÉTHAN' })
+  const other = testMutate(service, 'admin', '/customers', { name: '其他客户' })
+  const platform = testMutate(service, 'admin', '/platforms', {
     name: '独立来源É',
     rules: {
       requiresShop: true,
@@ -293,8 +295,8 @@ function largeReferenceFixture(t) {
       allowPayOnArrival: false
     }
   })
-  const shop = service.mutate('admin', '/shops', { platformId: platform.id, name: '旧店铺É' })
-  const target = service.mutate('admin', '/customer-order-references', {
+  const shop = testMutate(service, 'admin', '/shops', { platformId: platform.id, name: '旧店铺É' })
+  const target = testMutate(service, 'admin', '/customer-order-references', {
     customerId: customer.id,
     platformId: platform.id,
     shopId: shop.id,

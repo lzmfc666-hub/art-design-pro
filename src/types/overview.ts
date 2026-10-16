@@ -80,3 +80,38 @@ export interface OverviewReport {
     { known: number; unknown: number; inRange: number }
   >
 }
+
+export interface OverviewDetailColumn {
+  key: string
+  label: string
+  type: 'text' | 'money' | 'datetime' | 'number' | 'status'
+}
+export interface OverviewDetails {
+  metric: string
+  view: string
+  range: OverviewRange
+  comparisonRange: OverviewRange
+  generatedAt: string
+  summary: OverviewMetrics
+  overview: OverviewReport
+  columns: OverviewDetailColumn[]
+  records: Record<string, string | number | boolean | null>[]
+  total: number
+  current: number
+  size: number
+  groups: { key: string; label: string; count: number; amount: number | null }[]
+  groupsInfo: {
+    dimension: string
+    total: number
+    returned: number
+    truncated: boolean
+    amountLabel: string
+    countLabel: string
+  }
+  notes: string[]
+  capabilities: {
+    views: { id: string; label: string; allowed: boolean }[]
+    terminal: { supported: boolean; reason: string }
+    game: { supported: boolean; label: string }
+  }
+}

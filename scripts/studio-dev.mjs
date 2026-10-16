@@ -1,35 +1,15 @@
-import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import path from 'node:path'
+import { dirname, resolve, join } from 'node:path'
+import { runGuardian } from './studio-guardian.mjs'
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const children = [
-  spawn(process.execPath, ['--watch', 'server/index.mjs'], {
-    cwd: root,
-    stdio: 'inherit',
-    windowsHide: true
-  }),
-  spawn(
-    process.execPath,
-    ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '3006', '--strictPort'],
-    { cwd: root, stdio: 'inherit', windowsHide: true }
-  )
-]
-let stopping = false
-function stop(code = 0) {
-  if (stopping) return
-  stopping = true
-  for (const child of children) child.kill()
-  process.exitCode = code
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+// The same OS locks and Windows Job boundary protect development's watcher grandchildren.
+const directory = join(root, '.qa/dev-service')
+const guardian = await runGuardian({ directory, mode: 'development' })
+console.log(`开发服务日志：${directory}；与稳定运行共用独占管理锁，已有服务不会被接管`)
+const stop = async () => {
+  await guardian.stop()
+  process.exit(0)
 }
-children.forEach((child) => {
-  child.on('error', (error) => {
-    console.error(error.message)
-    stop(1)
-  })
-  child.on('exit', (code) => {
-    if (!stopping) stop(code || 0)
-  })
-})
-process.on('SIGINT', () => stop())
-process.on('SIGTERM', () => stop())
+process.once('SIGINT', stop)
+process.once('SIGTERM', stop)

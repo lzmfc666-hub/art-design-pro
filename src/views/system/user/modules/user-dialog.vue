@@ -1,5 +1,9 @@
 <template>
-  <ElDialog
+  <BusinessDetailPanel
+    :page-key="accountKind === 'player' ? 'player-editor' : 'employee-editor'"
+    :record-id="row?.id || 'new'"
+    @restore="emit('restore', $event)"
+    class="business-detail-dialog"
     v-model="visible"
     :title="
       accountKind === 'player'
@@ -10,76 +14,111 @@
           ? '编辑人员档案'
           : '新增人员账号'
     "
-    width="min(820px, 94vw)"
+    width="min(1040px, 94vw)"
     destroy-on-close
     :close-on-click-modal="!saving"
     :close-on-press-escape="!saving"
     :show-close="!saving"
   >
+    <BusinessDetailHeader
+      :title="form.name || (accountKind === 'player' ? '新打手账号' : '新员工账号')"
+      description="维护档案、账号状态与个人授权，保存时继续核对原岗位和权限规则。"
+      icon="ri:user-settings-line"
+      :badge="row ? '编辑档案' : '新增账号'"
+      :context="
+        row?.createdAt
+          ? `创建于 ${formatTime(row.createdAt)}`
+          : '密码仅在设置或重置时填写，不展示已有密码'
+      "
+    />
+    <BusinessDetailSummary
+      :items="[
+        { label: '登录账号', value: form.username || '待填写' },
+        { label: '岗位角色', value: roleLabels[form.role] },
+        {
+          label: '账号状态',
+          value: form.status === 'active' ? '启用' : '停用',
+          hint: '此处为当前表单，保存后生效'
+        }
+      ]"
+    />
     <ElForm
       ref="formRef"
       :model="form"
       :rules="rules"
       label-position="top"
-      :disabled="saving"
+      :disabled="saving || !canManage"
       @submit.prevent="submit"
     >
       <ElTabs>
         <ElTabPane label="基本资料">
-          <ElRow :gutter="20">
-            <ElCol :xs="24" :sm="12"
-              ><ElFormItem label="姓名 / 称呼" prop="name"
-                ><ElInput v-model="form.name" maxlength="100" /></ElFormItem
-            ></ElCol>
-            <ElCol :xs="24" :sm="12"
-              ><ElFormItem label="登录账号" prop="username"
-                ><ElInput v-model="form.username" :disabled="!isAdmin" maxlength="64" /></ElFormItem
-            ></ElCol>
-            <ElCol v-if="accountKind !== 'player'" :xs="24" :sm="12"
-              ><ElFormItem label="角色" prop="role"
-                ><ElSelect v-model="form.role" :disabled="row?.id === user?.id"
-                  ><ElOption
-                    v-for="(label, role) in selectableRoles"
-                    :key="role"
-                    :value="role"
-                    :label="label" /></ElSelect></ElFormItem
-            ></ElCol>
-            <ElCol :xs="24" :sm="12"
-              ><ElFormItem label="账号状态"
-                ><ElSwitch
-                  v-model="form.status"
-                  active-value="active"
-                  inactive-value="disabled"
-                  active-text="启用"
-                  inactive-text="停用"
-                  :disabled="row?.id === user?.id" /></ElFormItem
-            ></ElCol>
-            <template v-if="form.role === 'player'">
+          <BusinessDetailSection
+            title="档案与账号设置"
+            description="姓名与账号用于识别人员，角色和状态按原权限控制；密码留空时保持原密码。"
+          >
+            <ElRow :gutter="20">
               <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="打手等级" prop="levelId"
-                  ><ElSelect v-model="form.levelId"
+                ><ElFormItem label="姓名 / 称呼" prop="name"
+                  ><ElInput v-model="form.name" maxlength="100" /></ElFormItem
+              ></ElCol>
+              <ElCol :xs="24" :sm="12"
+                ><ElFormItem label="登录账号" prop="username"
+                  ><ElInput
+                    v-model="form.username"
+                    :disabled="!isAdmin"
+                    maxlength="64" /></ElFormItem
+              ></ElCol>
+              <ElCol v-if="accountKind !== 'player'" :xs="24" :sm="12"
+                ><ElFormItem label="角色" prop="role"
+                  ><ElSelect v-model="form.role" :disabled="row?.id === user?.id"
                     ><ElOption
-                      v-for="level in data?.levels"
-                      :key="level.id"
-                      :value="level.id"
-                      :label="`${level.name}（接单延迟 ${level.delaySeconds} 秒）`" /></ElSelect></ElFormItem
+                      v-for="(label, role) in selectableRoles"
+                      :key="role"
+                      :value="role"
+                      :label="label" /></ElSelect></ElFormItem
               ></ElCol>
               <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="同时接单上限"
-                  ><ElInputNumber v-model="form.maxActiveOrders" :min="1" :max="100" /></ElFormItem
+                ><ElFormItem label="账号状态"
+                  ><ElSwitch
+                    v-model="form.status"
+                    active-value="active"
+                    inactive-value="disabled"
+                    active-text="启用"
+                    inactive-text="停用"
+                    :disabled="row?.id === user?.id" /></ElFormItem
               ></ElCol>
-            </template>
-            <ElCol v-if="isAdmin" :span="24"
-              ><ElFormItem :label="row ? '重置密码（留空保持原密码）' : '初始密码'" prop="password"
-                ><ElInput
-                  v-model="form.password"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  maxlength="128"
-                  placeholder="8 至 128 位" /></ElFormItem
-            ></ElCol>
-          </ElRow>
+              <template v-if="form.role === 'player'">
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="打手等级" prop="levelId"
+                    ><ElSelect v-model="form.levelId"
+                      ><ElOption
+                        v-for="level in data?.levels"
+                        :key="level.id"
+                        :value="level.id"
+                        :label="`${level.name}（接单延迟 ${level.delaySeconds} 秒）`" /></ElSelect></ElFormItem
+                ></ElCol>
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="同时接单上限"
+                    ><ElInputNumber
+                      v-model="form.maxActiveOrders"
+                      :min="1"
+                      :max="100" /></ElFormItem
+                ></ElCol>
+              </template>
+              <ElCol v-if="isAdmin" :span="24"
+                ><ElFormItem
+                  :label="row ? '重置密码（留空保持原密码）' : '初始密码'"
+                  prop="password"
+                  ><ElInput
+                    v-model="form.password"
+                    type="password"
+                    show-password
+                    autocomplete="new-password"
+                    maxlength="128"
+                    placeholder="8 至 128 位" /></ElFormItem
+              ></ElCol>
+            </ElRow>
+          </BusinessDetailSection>
           <template v-if="form.role === 'player'">
             <ElDivider content-position="left">打手操作权限</ElDivider>
             <ElAlert
@@ -114,6 +153,10 @@
           </template>
         </ElTabPane>
         <ElTabPane label="个人权限">
+          <BusinessDetailHeader
+            description="先核对角色默认，再决定是否设置个人覆盖；继承角色不会新增个人授权。"
+            icon="ri:shield-check-line"
+          />
           <ElAlert
             :closable="false"
             :title="
@@ -154,22 +197,33 @@
     </ElForm>
     <template #footer
       ><ElButton :disabled="saving" @click="visible = false">取消</ElButton
-      ><ElButton type="primary" :loading="saving" @click="submit">保存档案</ElButton></template
+      ><ElButton type="primary" :loading="saving" :disabled="!canManage" @click="submit"
+        >保存档案</ElButton
+      ></template
     >
-  </ElDialog>
+  </BusinessDetailPanel>
 </template>
 
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, reactive, ref, watch, nextTick } from 'vue'
   import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-  import { roleLabels, useStudio } from '@/hooks/business/useStudio'
+  import { roleLabels, useStudio, formatTime } from '@/hooks/business/useStudio'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import type { Role, Staff } from '@/types/studio'
   import { permissionLabels } from './permissions'
 
   const visible = defineModel<boolean>('visible', { required: true })
   const props = defineProps<{ row?: Staff; defaultRole?: Role; accountKind?: 'staff' | 'player' }>()
-  const emit = defineEmits<{ saved: []; busy: [value: boolean] }>()
-  const { data, user, mutate } = useStudio()
+  const emit = defineEmits<{
+    saved: []
+    busy: [value: boolean]
+    restore: [value: { recordId?: string; isCurrent?: () => boolean }]
+  }>()
+  const { data, user, can, mutate } = useStudio()
+  const canManage = computed(() => can('users.manage'))
   const isAdmin = computed(() => ['super_admin', 'admin'].includes(user.value?.role || ''))
   const selectableRoles = computed(() =>
     Object.fromEntries(
@@ -230,6 +284,7 @@
   )
   watch(visible, (open) => {
     if (!open) return
+    if (!canManage.value) return clearPrivateEditor()
     Object.assign(
       form,
       {
@@ -249,6 +304,28 @@
     if (props.accountKind === 'player') form.role = 'player'
     nextTick(() => formRef.value?.clearValidate())
   })
+  function clearPrivateEditor() {
+    visible.value = false
+    Object.assign(form, {
+      username: '',
+      name: '',
+      role: props.accountKind === 'player' ? 'player' : 'support',
+      status: 'active',
+      levelId: '',
+      maxActiveOrders: 1,
+      password: '',
+      permissionOverrides: {},
+      playerAccess: { login: true, claim: true, withdraw: true }
+    })
+    formRef.value?.clearValidate()
+  }
+  watch(
+    [canManage, () => user.value?.id],
+    ([allowed, owner], [, previousOwner]) => {
+      if (!allowed || owner !== previousOwner) clearPrivateEditor()
+    },
+    { flush: 'sync' }
+  )
   function overrideValue(key: string) {
     return form.permissionOverrides[key] == null
       ? 'default'
@@ -262,7 +339,7 @@
     else form.permissionOverrides[key] = value === 'allow'
   }
   async function submit() {
-    if (saving.value) return
+    if (saving.value || !canManage.value) return
     saving.value = true
     try {
       if (!(await formRef.value?.validate().catch(() => false))) return
@@ -280,6 +357,7 @@
       ElMessage.success('人员档案已保存')
       emit('saved')
     } catch (error) {
+      if ([401, 403].includes((error as { status?: number }).status || 0)) clearPrivateEditor()
       ElMessage.error(error instanceof Error ? error.message : '保存失败')
     } finally {
       saving.value = false

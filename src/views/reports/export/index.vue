@@ -38,7 +38,7 @@
         :description="
           previewResult && !previewStale
             ? '已按当前选择预览 · 下载时读取最新数据'
-            : '筛选前记录数 · 可先预览核对导出范围'
+            : '目录仅加载模块与字段，预览后显示筛选行数'
         "
       />
     </div>
@@ -246,7 +246,7 @@
               :value="item.id"
               class="module-option"
               ><span class="module-label">{{ item.label }}</span
-              ><span class="module-record-count">{{ item.rowCount }} 条</span></ElCheckbox
+              ><span class="module-record-count">{{ moduleRowCountLabel(item) }}</span></ElCheckbox
             >
           </ElCheckboxGroup>
         </section>
@@ -364,6 +364,25 @@
         class="mb-4"
       />
       <template v-if="previewResult">
+        <BusinessDetailHeader
+          title="本次报表预览"
+          description="按当前账号允许导出的模块和字段读取。这里只展示每表前 20 条，下载会重新核验并读取全部匹配记录。"
+          icon="ri:file-search-line"
+          :badge="previewStale ? '范围已变化，待重新预览' : '预览已生成'"
+          :context="previewRange"
+        />
+        <BusinessDetailSummary
+          :items="[
+            { label: '已预览模块', value: previewResult.sheets.length + ' 个' },
+            {
+              label: '本次匹配记录',
+              value: previewResult.sheets.reduce((sum, sheet) => sum + sheet.rowCount, 0) + ' 条',
+              hint: '各工作表记录数合计，不代表去重实体数'
+            },
+            { label: '读取时间', value: formatTime(previewResult.generatedAt) },
+            { label: '预览上限', value: '每表 20 条', hint: '不限制完整下载记录数' }
+          ]"
+        />
         <ElTabs v-model="previewTab" :before-leave="() => !busy"
           ><ElTabPane
             v-for="sheet in previewResult.sheets"
@@ -373,15 +392,27 @@
             :disabled="busy"
         /></ElTabs>
         <template v-if="previewSheet"
-          ><ArtTable
-            :data="previewSheet.rows"
-            :columns="previewColumns"
-            height="420"
-            empty-height="220px"
-            empty-text="该范围内没有记录，Excel 将保留所选表头"
-          /><p class="text-sm text-g-500 mt-3"
-            >共 {{ previewSheet.rowCount }} 条记录，预览 {{ previewSheet.rows.length }} 条 ·
-            数据读取于 {{ formatTime(previewResult.generatedAt) }}</p
+          ><BusinessDetailSection
+            :title="previewSheet.name + ' · 所选字段明细'"
+            description="金额单位为元，比例单位为 %；凭证按原授权投影展示名称和地址。"
+            ><ArtTable
+              :data="previewSheet.rows"
+              :columns="previewColumns"
+              height="420"
+              empty-height="220px"
+              empty-text="该范围内没有记录，Excel 将保留所选表头"
+              ><template #detail="{ row }"
+                ><ElButton
+                  link
+                  type="primary"
+                  @click="previewRowIndex = previewSheet.rows.indexOf(row)"
+                  >查看行详情</ElButton
+                ></template
+              ></ArtTable
+            ><p class="text-sm text-g-500 mt-3"
+              >共 {{ previewSheet.rowCount }} 条记录，预览 {{ previewSheet.rows.length }} 条 ·
+              数据读取于 {{ formatTime(previewResult.generatedAt) }}</p
+            ></BusinessDetailSection
           ></template
         >
       </template>
@@ -393,16 +424,59 @@
         ></div
       >
     </ElCard>
+    <BusinessDetailPanel
+      page-key="report-preview-row"
+      :record-id="previewRowRecordId"
+      @restore="restorePreviewRow($event)"
+      :restore-error="restoreError"
+      :model-value="previewRowIndex !== null"
+      title="报表行详情"
+      @update:model-value="!$event && (previewRowIndex = null)"
+      @close="previewRowIndex = null"
+    >
+      <template v-if="previewRow && previewSheet && previewResult">
+        <BusinessDetailHeader
+          :title="previewSheet.name"
+          description="查看本次预览中这一行已选择且允许导出的字段，不改变业务记录。"
+          icon="ri:file-list-3-line"
+          badge="只读预览"
+          :context="previewRange"
+        />
+        <BusinessDetailSummary
+          :items="[
+            { label: '预览行位置', value: previewRowIndex! + 1 + ' / ' + previewSheet.rows.length },
+            { label: '所选字段', value: previewSheet.fields.length + ' 项' },
+            { label: '数据读取时间', value: formatTime(previewResult.generatedAt) }
+          ]"
+        />
+        <BusinessDetailSection
+          title="所选字段原值"
+          description="未选择的字段不会补读；来源对象的最新状态以业务页面重新读取为准。"
+          ><ElDescriptions :column="1" border
+            ><ElDescriptionsItem
+              v-for="field in previewSheet.fields"
+              :key="field.key"
+              :label="field.label"
+              >{{ previewRow[field.key] ?? '—' }}</ElDescriptionsItem
+            ></ElDescriptions
+          ></BusinessDetailSection
+        > </template
+      ><ElEmpty v-else description="预览已变化，请关闭后重新查看" />
+    </BusinessDetailPanel>
   </div>
 </template>
 
 <script setup lang="ts">
-  import { computed, onMounted, reactive, ref, watch } from 'vue'
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
+  import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import { ElMessage } from 'element-plus'
   import { useStudio, formatTime } from '@/hooks/business/useStudio'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import BusinessStatCard from '@/components/business/BusinessStatCard.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import {
     getExportCatalog,
     previewReports,
@@ -417,7 +491,7 @@
   defineOptions({ name: 'ReportExport' })
   const route = useRoute()
   const router = useRouter()
-  const { data, selectedMonth } = useStudio()
+  const { data, user, selectedMonth } = useStudio()
   const month = ref(selectedMonth.value)
   const reportType = ref<ReportPeriodType>(
     ['daily', 'weekly', 'monthly', 'total'].includes(String(route.query.periodType))
@@ -477,7 +551,62 @@
   const previewResult = ref<ReportResult | null>(null)
   const previewTab = ref('')
   const previewStale = ref(false)
+  const previewRange = ref('')
+  const previewRowIndex = ref<number | null>(null)
+  const restoreError = ref('')
+  const previewRowRecordId = computed(() =>
+    previewResult.value && previewSheet.value && previewRowIndex.value !== null
+      ? JSON.stringify([
+          previewSheet.value.id,
+          previewResult.value.generatedAt,
+          previewRowIndex.value
+        ])
+      : undefined
+  )
+  async function restorePreviewRow({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    if (isCurrent?.() === false) return
+    restoreError.value = ''
+    let parts: unknown
+    try {
+      parts = JSON.parse(recordId || '')
+    } catch {
+      /* Invalid/expired preview remains closed. */
+    }
+    if (
+      Array.isArray(parts) &&
+      parts.length === 3 &&
+      typeof parts[0] === 'string' &&
+      typeof parts[1] === 'string' &&
+      Number.isSafeInteger(parts[2]) &&
+      parts[2] >= 0 &&
+      previewResult.value?.generatedAt === parts[1]
+    ) {
+      const [sheetId, generatedAt, index] = parts as [string, string, number]
+      const sheet = previewResult.value.sheets.find((entry) => entry.id === sheetId)
+      if (sheet?.rows[index]) {
+        previewTab.value = sheetId
+        await nextTick()
+        if (isCurrent?.() === false) return
+        if (
+          previewResult.value?.generatedAt === generatedAt &&
+          previewSheet.value?.id === sheetId
+        ) {
+          previewRowIndex.value = index
+          return
+        }
+      }
+    }
+    restoreError.value =
+      '这份临时报表预览已失效，无法恢复原筛选、字段和生成时点。请返回导出页重新预览，再选择记录。'
+  }
   let catalogVersion = 0
+  let previewVersion = 0
   const statusOptions = [
     { value: 'pending', label: '待接单 / 待审核' },
     { value: 'active', label: '接单中 / 账号启用' },
@@ -528,11 +657,19 @@
   const missingFields = computed(
     () => selectedModules.value.filter((item) => !selectedFields[item.id]?.length).length
   )
-  const visibleRecordCount = computed(() =>
-    previewResult.value && !previewStale.value
-      ? previewResult.value.sheets.reduce((sum, item) => sum + item.rowCount, 0)
-      : selectedModules.value.reduce((sum, item) => sum + item.rowCount, 0)
-  )
+  const visibleRecordCount = computed(() => {
+    if (previewResult.value && !previewStale.value)
+      return previewResult.value.sheets.reduce((sum, item) => sum + item.rowCount, 0)
+    if (selectedModules.value.some((item) => item.rowCount === null)) return '待预览'
+    return selectedModules.value.reduce((sum, item) => sum + (item.rowCount || 0), 0)
+  })
+  function moduleRowCountLabel(item: ReportModule) {
+    const previewCount = !previewStale.value
+      ? previewResult.value?.sheets.find((sheet) => sheet.id === item.id)?.rowCount
+      : undefined
+    const count = previewCount ?? item.rowCount
+    return count == null ? '预览后显示行数' : `${count} 条`
+  }
   const rangeSummary = computed(() => {
     const parts = [
       periodInfo.value
@@ -594,15 +731,18 @@
   const previewSheet = computed(() =>
     previewResult.value?.sheets.find((item) => item.id === previewTab.value)
   )
-  const previewColumns = computed(
-    () =>
-      previewSheet.value?.fields.map((field) => ({
-        prop: field.key,
-        label: field.label,
-        minWidth: field.type === 'number' ? 140 : 180,
-        showOverflowTooltip: true
-      })) || []
+  const previewRow = computed(() =>
+    previewRowIndex.value == null ? undefined : previewSheet.value?.rows[previewRowIndex.value]
   )
+  const previewColumns = computed(() => [
+    ...(previewSheet.value?.fields.map((field) => ({
+      prop: field.key,
+      label: field.label,
+      minWidth: field.type === 'number' ? 140 : 180,
+      showOverflowTooltip: true
+    })) || []),
+    { prop: 'detail', label: '详情', width: 130, fixed: 'right' as const, useSlot: true }
+  ])
   const errorText = (cause: unknown) =>
     cause instanceof Error ? cause.message : '加载失败，请稍后重试'
   function requestBody(): ReportRequest {
@@ -645,6 +785,7 @@
   }
   async function reloadCatalog() {
     const version = ++catalogVersion
+    const accountId = user.value?.id
     catalogLoading.value = true
     pageError.value = ''
     previewResult.value = null
@@ -660,7 +801,7 @@
         },
         filters.archived || 'all'
       )
-      if (version !== catalogVersion) return
+      if (version !== catalogVersion || accountId !== user.value?.id) return
       catalog.value = result.modules
       periodInfo.value = result.period || null
       for (const item of result.modules) {
@@ -687,26 +828,45 @@
   }
   async function preview() {
     if (!ready.value || busy.value) return
+    const version = ++previewVersion
+    const accountId = user.value?.id
+    const body = requestBody()
+    const signature = JSON.stringify(body)
+    const previewScope = rangeSummary.value
     previewLoading.value = true
     try {
-      previewResult.value = await previewReports(requestBody())
+      const result = await previewReports(body)
+      if (
+        version !== previewVersion ||
+        accountId !== user.value?.id ||
+        signature !== JSON.stringify(requestBody())
+      )
+        return
+      previewResult.value = result
+      previewRange.value = previewScope
+      previewRowIndex.value = null
       const preferred = typeof route.query.tab === 'string' ? route.query.tab : ''
       previewTab.value = previewResult.value.sheets.some((item) => item.id === preferred)
         ? preferred
         : previewResult.value.sheets[0]?.id || ''
       previewStale.value = false
     } catch (cause) {
+      if (version !== previewVersion || accountId !== user.value?.id) return
       ElMessage.error(errorText(cause))
       previewResult.value = null
     } finally {
-      previewLoading.value = false
+      if (version === previewVersion) previewLoading.value = false
     }
   }
   async function prepareExport() {
     if (!ready.value || previewLoading.value) throw new Error('请先选择模块与字段')
     exporting.value = true
+    const accountId = user.value?.id
+    const permissionScope = data.value?.permissions.join('|')
     try {
       const result = await downloadReports(requestBody())
+      if (accountId !== user.value?.id || permissionScope !== data.value?.permissions.join('|'))
+        throw new Error('账号或权限已变化，本次导出结果已停止使用，请重新确认导出范围')
       return result.sheets
     } catch (cause) {
       exporting.value = false
@@ -733,6 +893,7 @@
     if (added && !expanded.value.includes(added)) expanded.value.push(added)
   })
   watch(previewTab, (value) => {
+    previewRowIndex.value = null
     if (route.path !== '/reports/export') return
     if (value && route.query.tab !== value)
       void router.replace({ query: { ...route.query, tab: value } })
@@ -754,12 +915,16 @@
   watch([month, reportType, reportDate, () => filters.archived], ([value]) => {
     if (value) void reloadCatalog()
   })
-  watch(
-    () => data.value?.permissions.join('|'),
-    (value, previous) => {
-      if (value !== previous && previous !== undefined) void reloadCatalog()
-    }
-  )
+  watch([() => user.value?.id, () => data.value?.permissions.join('|')], () => {
+    catalogVersion++
+    previewVersion++
+    catalog.value = []
+    previewResult.value = null
+    selectedIds.value = []
+    previewLoading.value = false
+    pageError.value = ''
+    if (user.value) void reloadCatalog()
+  })
   watch([() => route.query.module, () => route.query.modules], () => {
     if (route.path !== '/reports/export' || busy.value) return
     const preferred = routeSelection()

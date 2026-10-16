@@ -44,7 +44,19 @@ export const useStudioStore = defineStore('studio', () => {
     loading.value = true
     error.value = ''
     try {
-      const result = await request<StudioData>(`bootstrap?month=${selectedMonth.value}`)
+      const path =
+        typeof window === 'undefined' ? '' : window.location.hash.replace(/^#/, '').split('?')[0]
+      const lightOrders = path.startsWith('/orders/')
+      const needsReports = [
+        '/finance/salary',
+        '/dashboard/console',
+        '/dashboard/analysis',
+        '/system/user-center',
+        '/reports/export'
+      ].includes(path)
+      const result = await request<StudioData>(
+        `bootstrap?month=${selectedMonth.value}&includeOrders=${!lightOrders}&includeReports=${needsReports}`
+      )
       if (version === refreshVersion) {
         data.value = result
         user.value = result.user

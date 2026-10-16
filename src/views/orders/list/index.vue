@@ -4,8 +4,49 @@
       title="订单管理"
       description="查看履约进度、收款情况与历史处理记录，按状态快速定位需要处理的订单。"
       icon="ri:file-list-3-line"
-      :badge="`${data?.orders.length || 0} 笔可见订单`"
+      :badge="`${pagination.total} 笔符合筛选订单`"
     />
+    <ElAlert
+      v-if="noticesError && can('orders.edit')"
+      :title="noticesError"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="mb-4"
+    >
+      <ElButton link type="primary" @click="loadNotices">重新读取提醒</ElButton>
+    </ElAlert>
+    <ElCard v-if="timeoutTotal && can('orders.edit')" class="mb-4" shadow="never">
+      <template #header
+        ><ElSpace
+          ><strong>指定订单待客服处理</strong
+          ><ElTag type="warning">{{ timeoutTotal }} 条有效未读提醒</ElTag></ElSpace
+        ></template
+      >
+      <div
+        v-for="notice in pendingTimeoutNotices"
+        :key="notice.id"
+        class="flex items-center justify-between gap-3 mb-3"
+      >
+        <div
+          ><p>{{ notice.title }}</p
+          ><p class="text-xs text-g-500"
+            >{{ notice.body }} · {{ formatTime(notice.createdAt) }}</p
+          ></div
+        >
+        <ElButton type="primary" plain :disabled="detailBusy" @click="openNotice(notice)"
+          >查看并处理</ElButton
+        >
+      </div>
+      <ElPagination
+        v-if="timeoutTotal > timeoutPagination.size"
+        v-model:current-page="timeoutPagination.current"
+        :page-size="timeoutPagination.size"
+        :total="timeoutTotal"
+        layout="prev, pager, next, total"
+        @current-change="loadNotices"
+      />
+    </ElCard>
     <ArtSearchBar
       v-show="showSearchBar"
       v-model="search"
@@ -27,7 +68,7 @@
       <ArtTableHeader
         v-model:columns="columnChecks"
         v-model:showSearchBar="showSearchBar"
-        :loading="loading"
+        :loading="ordersLoading"
         @refresh="reload"
       >
         <template #left
@@ -39,12 +80,12 @@
               @click="$router.push('/orders/create')"
               >新增订单</ElButton
             ><ElTag type="warning">待验收 {{ reviewCount }}</ElTag
-            ><ElTag type="info">共 {{ filtered.length }} 笔</ElTag></ElSpace
+            ><ElTag type="info">共 {{ pagination.total }} 笔</ElTag></ElSpace
           ></template
         >
       </ArtTableHeader>
       <ArtTable
-        :loading="loading"
+        :loading="ordersLoading"
         :data="tableData"
         :columns="columns"
         :pagination="pagination"
@@ -70,12 +111,19 @@
           ><p class="text-xs text-g-500">打手 {{ money(row.reward) }}</p></template
         >
         <template #status="{ row }"
-          ><ElTag :type="tagType(row.status)">{{ statusLabels[row.status as OrderStatus] }}</ElTag
+          ><ElTag :type="tagType(row.status)">{{
+            row.dispatchState === 'unassigned' ? '待分配' : statusLabels[row.status as OrderStatus]
+          }}</ElTag
+          ><p v-if="hasPendingReturn(row)" class="text-xs text-warning">退单待处理</p
           ><p v-if="row.compensationPending" class="text-xs text-warning">报酬待确认</p></template
         >
         <template #receivedAmount="{ row }"
-          ><ElTag :type="row.receivedAmount ? 'success' : 'warning'">{{
-            row.receivedAmount ? '已收款' : '未收款'
+          ><ElTag :type="row.receivedAmount === row.amount ? 'success' : 'warning'">{{
+            row.receivedAmount === row.amount
+              ? '足额收款'
+              : row.receivedAmount
+                ? '未足额'
+                : '未收款'
           }}</ElTag
           ><p v-if="row.receivedAmount" class="text-xs mt-1">{{
             money(row.receivedAmount)
@@ -87,7 +135,9 @@
               ? staffName(row.leaderId)
               : row.assignedTo
                 ? staffName(row.assignedTo) + '（待接单）'
-                : '抢单池'
+                : row.dispatchState === 'unassigned'
+                  ? '待客服分配'
+                  : '抢单池'
           }}<p v-if="row.teammateId" class="text-xs text-g-500"
             >队友 {{ staffName(row.teammateId) }}</p
           ></template
@@ -101,30 +151,37 @@
         ></template>
       </ArtTable>
     </ElCard>
-    <ElDrawer
+    <BusinessDetailPanel
+      page-key="order-detail"
+      :record-id="selectedId"
+      @restore="restoreOrder"
+      @closed="orderDetailClosed"
+      class="business-detail-drawer"
       v-model="drawer"
       title="订单详情"
-      size="min(960px, 96vw)"
+      size="min(1120px, 96vw)"
       destroy-on-close
       :close-on-click-modal="!detailBusy"
       :close-on-press-escape="!detailBusy"
       :show-close="!detailBusy"
       :before-close="closeDrawer"
       ><OrderDetail v-if="selectedId" :order-id="selectedId" @busy="detailBusy = $event"
-    /></ElDrawer>
+    /></BusinessDetailPanel>
   </div>
 </template>
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { useStudio, money, formatTime, statusLabels } from '@/hooks/business/useStudio'
-  import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
-  import type { Order, OrderStatus } from '@/types/studio'
+  import type { Order, OrderPage, OrderStatus } from '@/types/studio'
   import OrderDetail from '../modules/order-detail.vue'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
-  import { onBeforeRouteLeave, useRouter } from 'vue-router'
+  import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
+  import type { LocationQuery, LocationQueryRaw } from 'vue-router'
   import { ElMessage } from 'element-plus'
+  import { studioRequest } from '@/api/studio'
   defineOptions({ name: 'OrderList' })
-  const { data, can, loading, refresh } = useStudio()
+  const { data, user, can, clearSession } = useStudio()
   const route = useRoute()
   const router = useRouter()
   const initial = () => ({
@@ -150,8 +207,145 @@
   const selectedId = ref('')
   const drawer = ref(false)
   const detailBusy = ref(false)
+  const orderClosing = ref(false)
+  const ordersLoading = ref(false)
+  const tableData = ref<Order[]>([])
+  const counts = ref<Record<string, number>>({})
+  const pagination = reactive({ current: 1, size: 20, total: 0 })
+  let ordersVersion = 0
+  let ordersController: AbortController | null = null
+  async function loadOrders() {
+    if (!can('orders.view')) {
+      ordersVersion++
+      ordersController?.abort()
+      tableData.value = []
+      counts.value = {}
+      pagination.total = 0
+      ordersLoading.value = false
+      return
+    }
+    const version = ++ordersVersion
+    const accountId = user.value?.id
+    ordersController?.abort()
+    ordersController = new AbortController()
+    ordersLoading.value = true
+    const query = new URLSearchParams({
+      current: String(pagination.current),
+      size: String(pagination.size)
+    })
+    for (const [key, value] of Object.entries(applied.value)) {
+      if (key !== 'dates' && value) query.set(key, String(value))
+    }
+    if (applied.value.dates) {
+      query.set('start', applied.value.dates[0])
+      query.set('end', applied.value.dates[1])
+    }
+    try {
+      const result = await studioRequest<OrderPage>(
+        `orders?${query}`,
+        undefined,
+        'GET',
+        ordersController.signal
+      )
+      if (version !== ordersVersion || accountId !== user.value?.id) return
+      tableData.value = result.records
+      counts.value = result.counts || {}
+      Object.assign(pagination, { current: result.current, size: result.size, total: result.total })
+    } catch (cause) {
+      if (version !== ordersVersion || (cause as Error).name === 'AbortError') return
+      if ((cause as { status?: number }).status === 401) clearSession()
+      ElMessage.error(cause instanceof Error ? cause.message : '订单读取失败')
+    } finally {
+      if (version === ordersVersion) ordersLoading.value = false
+    }
+  }
+  function handleSizeChange(size: number) {
+    pagination.size = size
+    pagination.current = 1
+    void loadOrders()
+  }
+  function handleCurrentChange(current: number) {
+    pagination.current = current
+    void loadOrders()
+  }
+  interface TimeoutNotice {
+    id: string
+    type: string
+    title: string
+    body: string
+    orderId: string
+    createdAt: string
+    readAt?: string | null
+  }
+  const timeoutNotices = ref<TimeoutNotice[]>([])
+  const timeoutTotal = ref(0)
+  const timeoutPagination = reactive({ current: 1, size: 10 })
+  const noticesError = ref('')
+  const pendingTimeoutNotices = computed(() => timeoutNotices.value)
+  let notificationTimer: ReturnType<typeof setInterval> | undefined
+  let noticesLoading = false
+  let noticesDisposed = false
+  async function loadNotices() {
+    if (!can('orders.edit')) {
+      timeoutNotices.value = []
+      timeoutTotal.value = 0
+      return
+    }
+    if (noticesLoading || noticesDisposed) return
+    const accountId = data.value?.user.id
+    noticesLoading = true
+    try {
+      const result = await studioRequest<{
+        records: TimeoutNotice[]
+        total: number
+        current: number
+        size: number
+      }>(
+        `notifications/timeouts?current=${timeoutPagination.current}&size=${timeoutPagination.size}`
+      )
+      if (!noticesDisposed && accountId === data.value?.user.id && can('orders.edit')) {
+        timeoutNotices.value = result.records
+        timeoutTotal.value = result.total
+        Object.assign(timeoutPagination, { current: result.current, size: result.size })
+        noticesError.value = ''
+      }
+    } catch (cause) {
+      if (!noticesDisposed && accountId === data.value?.user.id)
+        noticesError.value = cause instanceof Error ? cause.message : '提醒读取失败，请重试'
+    } finally {
+      noticesLoading = false
+    }
+  }
+  watch(
+    () => data.value?.user.id,
+    () => {
+      timeoutNotices.value = []
+      timeoutTotal.value = 0
+      timeoutPagination.current = 1
+      tableData.value = []
+      counts.value = {}
+      pagination.total = 0
+      ordersVersion++
+      ordersController?.abort()
+      noticesError.value = ''
+    }
+  )
+  async function openNotice(notice: TimeoutNotice) {
+    if (detailBusy.value) return
+    openOrder({ id: notice.orderId })
+    try {
+      await studioRequest(`notifications/${encodeURIComponent(notice.id)}/read`, {}, 'POST')
+      await loadNotices()
+      await loadOrders()
+    } catch (cause) {
+      ElMessage.warning(cause instanceof Error ? cause.message : '提醒处理失败，请刷新后重试')
+    }
+  }
   function validStatus(value: unknown) {
-    return typeof value === 'string' && value in statusLabels ? value : ''
+    return typeof value === 'string' &&
+      (value in statusLabels || value === 'unassigned' || value === 'return-pending')
+      ? value
+      : ''
   }
   const activeStatus = computed({
     get: () => search.value.status || 'all',
@@ -162,15 +356,17 @@
   const statusTabs = computed(() =>
     [
       { value: 'all', label: '全部订单' },
+      { value: 'unassigned', label: '待分配' },
+      { value: 'return-pending', label: '退单待办' },
       ...Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
     ].map((item) => ({
       ...item,
-      count: (data.value?.orders || []).filter(
-        (order) => item.value === 'all' || order.status === item.value
-      ).length
+      count: counts.value[item.value] || 0
     }))
   )
   const staffName = (id: string | null) => data.value?.users.find((u) => u.id === id)?.name || '—'
+  const hasPendingReturn = (order: Order) =>
+    order.returnRequests?.some((row) => row.status === 'pending')
   const customerName = (id: string) => data.value?.customers.find((c) => c.id === id)?.name || '—'
   const platformName = (id: string) => data.value?.platforms.find((p) => p.id === id)?.name || '—'
   const shopName = (id: string | null) => data.value?.shops.find((s) => s.id === id)?.name || ''
@@ -184,9 +380,7 @@
         canceled: 'danger'
       }) as const
     )[s]
-  const reviewCount = computed(
-    () => (data.value?.orders || []).filter((o) => o.status === 'review').length
-  )
+  const reviewCount = computed(() => counts.value.review || 0)
   const searchItems = computed(() => [
     {
       key: 'dateKey',
@@ -231,7 +425,11 @@
       type: 'select',
       props: {
         clearable: true,
-        options: Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
+        options: [
+          ...Object.entries(statusLabels).map(([value, label]) => ({ value, label })),
+          { value: 'unassigned', label: '待分配' },
+          { value: 'return-pending', label: '退单待办' }
+        ]
       }
     },
     {
@@ -292,35 +490,6 @@
       }
     }
   ])
-  const filtered = computed(() => {
-    const f = applied.value
-    const matches = (value: string | undefined, filter: string | undefined) =>
-      !filter || (value || '').toLowerCase().includes(filter.trim().toLowerCase())
-    return [...(data.value?.orders || [])]
-      .filter(
-        (o) =>
-          matches(o.orderNo, f.orderNo) &&
-          matches(o.externalOrderNo, f.externalOrderNo) &&
-          matches(o.title, f.title) &&
-          matches(customerName(o.customerId), f.customerName) &&
-          matches(data.value?.customers.find((c) => c.id === o.customerId)?.contact, f.contact) &&
-          matches(o.gameId, f.gameId) &&
-          matches(o.roomCode, f.roomCode) &&
-          (!f.shopId || o.shopId === f.shopId) &&
-          (!f.leaderId || o.leaderId === f.leaderId) &&
-          (!f.status || o.status === f.status) &&
-          (!f.platformId || o.platformId === f.platformId) &&
-          (!f.creatorId || o.creatorId === f.creatorId) &&
-          (!f.dates || matchesDate(o, f.dateKey, f.dates)) &&
-          (!f.payment ||
-            (f.payment === 'paid'
-              ? o.receivedAmount > 0
-              : !o.receivedAmount && o.status !== 'canceled'))
-      )
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  })
-  const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =
-    useBusinessTable(filtered)
   watch(
     () => search.value.platformId,
     () => {
@@ -335,6 +504,13 @@
         search.value.shopId = ''
     }
   )
+  watch(
+    () => data.value,
+    () => {
+      void loadOrders()
+      void loadNotices()
+    }
+  )
   const { columns, columnChecks } = useTableColumns<Order>(() => [
     { prop: 'title', label: '订单 / 项目', minWidth: 220, useSlot: true },
     { prop: 'customerId', label: '客户 / 来源', minWidth: 170, useSlot: true },
@@ -347,20 +523,17 @@
   ])
   const applySearch = () => {
     applied.value = { ...search.value }
-    resetPage()
-  }
-  function matchesDate(order: Order, key: string, range: [string, string]) {
-    const value =
-      key === 'paidAt' ? order.paidAt : key === 'completedAt' ? order.completedAt : order.createdAt
-    if (!value) return false
-    const date = new Date(value).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
-    return date >= range[0] && date <= range[1]
+    pagination.current = 1
+    void loadOrders()
   }
   function applyStatus() {
     applySearch()
   }
   function closeDrawer(done: () => void) {
-    if (!detailBusy.value) done()
+    if (!detailBusy.value) {
+      orderClosing.value = true
+      done()
+    }
   }
   onBeforeRouteLeave(() => {
     if (!data.value) return true
@@ -374,12 +547,52 @@
     search.value = { ...initial(), payment: '', status: '' }
     applySearch()
   }
-  const reload = () => refresh().catch(() => {})
-  function openOrder(order: Order) {
+  const reload = () => loadOrders()
+  function parentOrderId(query: LocationQuery) {
+    const keys = Array.isArray(query.secondary) ? query.secondary : [query.secondary]
+    const records = Array.isArray(query.secondaryRecord)
+      ? query.secondaryRecord
+      : [query.secondaryRecord]
+    const index = keys.lastIndexOf('order-detail')
+    const id = records[index]
+    return index >= 0 && typeof id === 'string' && id ? id : ''
+  }
+  function orderPageQuery(id: string, original: LocationQuery = route.query): LocationQueryRaw {
+    const query: LocationQueryRaw = {
+      ...original,
+      secondary: ['order-detail'],
+      secondaryRecord: [id]
+    }
+    delete query.id
+    return query
+  }
+  onBeforeRouteUpdate((to) => {
+    const id = to.query.id
+    if (
+      to.path !== '/orders/list' ||
+      typeof id !== 'string' ||
+      !id ||
+      id.length > 512 ||
+      /[\u0000-\u001f\u007f]/.test(id) ||
+      to.query.secondary !== undefined
+    )
+      return
+    // A panel that has already accepted its close must finish returning to the
+    // list; an external legacy link retains the live model until guards approve.
+    if (!drawer.value && id === selectedId.value && parentOrderId(route.query) === id) return
+    return { path: to.path, query: orderPageQuery(id, to.query), hash: to.hash }
+  })
+  function openOrder(order: Pick<Order, 'id'>) {
     if (detailBusy.value) return
-    selectedId.value = order.id
-    drawer.value = true
-    void router.replace({ query: { ...route.query, id: order.id } })
+    if (parentOrderId(route.query) === order.id && !route.query.id) {
+      selectedId.value = order.id
+      drawer.value = true
+    } else void router.push({ path: '/orders/list', query: orderPageQuery(order.id) })
+  }
+  function restoreOrder({ recordId, isCurrent }: { recordId?: string; isCurrent?: () => boolean }) {
+    if (isCurrent && !isCurrent()) return
+
+    if (recordId && can('orders.view')) openOrder({ id: recordId })
   }
   watch(
     () => route.query.status,
@@ -389,11 +602,23 @@
     }
   )
   watch(
-    () => route.query.id,
-    (id) => {
+    [() => route.query.id, () => route.query.secondary, () => route.query.secondaryRecord],
+    ([legacyId]) => {
       if (route.path !== '/orders/list') return
+      const canonicalId = parentOrderId(route.query)
+      if (typeof legacyId === 'string' && legacyId) {
+        if (canonicalId) {
+          const query = { ...route.query }
+          delete query.id
+          void router.replace({ query })
+        } else void router.replace({ query: orderPageQuery(legacyId) })
+        return
+      }
+      const id = canonicalId
+      // A record switch first closes the previous panel. Reopen through its
+      // closed lifecycle so an old close cannot discard the new target's body.
+      if (orderClosing.value && !drawer.value && id && id !== selectedId.value) return
       if (detailBusy.value && id !== selectedId.value) {
-        void router.replace({ query: { ...route.query, id: selectedId.value } })
         return
       }
       if (typeof id === 'string' && id) {
@@ -405,13 +630,33 @@
     },
     { immediate: true }
   )
-  watch(drawer, (visible) => {
-    if (!visible && route.path === '/orders/list' && route.query.id && !detailBusy.value) {
+  function orderDetailClosed() {
+    orderClosing.value = false
+    const targetId = parentOrderId(route.query)
+    if (
+      !drawer.value &&
+      route.path === '/orders/list' &&
+      targetId &&
+      targetId !== selectedId.value
+    ) {
+      openOrder({ id: targetId })
+      return
+    }
+    if (!drawer.value && route.path === '/orders/list' && !detailBusy.value) {
+      void loadOrders()
+      void loadNotices()
+    }
+    if (
+      !drawer.value &&
+      route.path === '/orders/list' &&
+      route.query.id === selectedId.value &&
+      !detailBusy.value
+    ) {
       const query = { ...route.query }
       delete query.id
       void router.replace({ query })
     }
-  })
+  }
   watch(
     () => route.query.payment,
     (value) => {
@@ -419,5 +664,24 @@
       applySearch()
     }
   )
-  onMounted(reload)
+  onMounted(() => {
+    reload()
+    void loadNotices()
+    notificationTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadNotices()
+        if (!detailBusy.value) reload()
+      }
+    }, 30_000)
+  })
+  onActivated(() => {
+    void loadOrders()
+    void loadNotices()
+  })
+  onUnmounted(() => {
+    noticesDisposed = true
+    ordersVersion++
+    ordersController?.abort()
+    if (notificationTimer) clearInterval(notificationTimer)
+  })
 </script>

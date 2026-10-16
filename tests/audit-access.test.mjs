@@ -1,3 +1,5 @@
+import { testMutate } from './helpers/current-intent.mjs'
+import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -15,7 +17,7 @@ function fixture(t) {
     clock: () => new Date('2026-10-13T04:00:00.000Z')
   })
   t.after(() => service.close())
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const level = mutate('/levels', { name: '审计测试等级', delaySeconds: 0 })
   const staff = (role, overrides = {}, username = `audit-${role}`) =>
     mutate('/users', {
@@ -120,8 +122,16 @@ function fixture(t) {
     users.player.id
   )
   mutate(`/orders/${completed.id}/action`, { action: 'review-pass' })
-  const withdrawal = mutate('/player/withdrawals', { amount: 1200 }, users.player.id)
-  const otherWithdrawal = mutate('/player/withdrawals', { amount: 600 }, users.otherPlayer.id)
+  const withdrawal = mutate(
+    '/player/withdrawals',
+    withdrawalBody(service, users.player.id, 1200),
+    users.player.id
+  )
+  const otherWithdrawal = mutate(
+    '/player/withdrawals',
+    withdrawalBody(service, users.otherPlayer.id, 600),
+    users.otherPlayer.id
+  )
   mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'approve' })
   mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'pay', receipt })
   const attendance = mutate('/attendance', {
@@ -226,19 +236,19 @@ test('老板和默认财务保留授权财务历史，账号投影按人员权�
     )
   }
   const player = f.snapshot(f.users.player.id)
-  const withdrawal = player.logs.find(
-    (row) => row.entityId === f.withdrawal.id && row.action === '提现：pay'
+  assert.deepEqual(player.logs, [])
+  const wallet = f.service.playerWallet(f.users.player.id)
+  assert.equal(wallet.withdrawals.find((row) => row.id === f.withdrawal.id).amount, 1200)
+  assert.equal(
+    wallet.withdrawals.some((row) => row.id === f.otherWithdrawal.id),
+    false
   )
-  assert.equal(withdrawal.after.amount, 1200)
-  assert.equal(withdrawal.after.receipt.url, f.receipt.url)
-  const completed = player.logs.find((row) => row.entityId === f.completed.id)
-  assert.equal(completed.after.amount, 0)
-  assert.equal(completed.after.externalOrderNo, '')
-  assert.equal(completed.after.snapshot.amount, null)
-  assert.equal(Object.hasOwn(completed.after, 'commissionSnapshot'), false)
-  assert.equal(player.logs.find((row) => row.entityId === f.order.id).after.amount, 0)
-  assert.equal(player.logs.find((row) => row.entityId === f.refunded.id).after, null)
-  assert.equal(player.logs.find((row) => row.entityId === f.otherWithdrawal.id).after, null)
+  const completed = f.service
+    .playerOrders(f.users.player.id)
+    .find((row) => row.id === f.completed.id)
+  for (const field of ['amount', 'externalOrderNo', 'customerId', 'commissionSnapshot'])
+    assert.equal(Object.hasOwn(completed, field), false)
+  assert.equal(Object.hasOwn(completed.snapshot, 'amount'), false)
 })
 
 test('审计使用字段白名单并保留历史旧值，导出不重新泄露未知嵌套字段', (t) => {
@@ -412,7 +422,7 @@ test('新增业务审计保留平台规则、客户来源及更正信息，扣�
   assert.equal(correction.after.assignments.at(-1).correctedBy, f.users.finance.id)
   assert.ok(correction.action.includes('确认实际负责人接单状态'))
   assert.equal(ownerLogs.find((row) => row.entityId === attendance.id).after.hoursRegistered, false)
-  for (const actor of [f.users.finance.id, f.users.player.id]) {
+  for (const actor of [f.users.finance.id]) {
     const logs = f.snapshot(actor).logs
     const resolution = logs.find(
       (row) => row.entityId === adjustment.id && row.after?.status === 'resolved'
@@ -427,6 +437,12 @@ test('新增业务审计保留平台规则、客户来源及更正信息，扣�
       )
     )
   }
+  assert.deepEqual(f.snapshot(f.users.player.id).logs, [])
+  assert.ok(
+    f.service
+      .playerWallet(f.users.player.id)
+      .ledger.some((row) => row.kind === 'deduction' && row.status === 'resolved')
+  )
   for (const actor of [f.users.hr.id, f.users.support.id, f.users.admin.id]) {
     const logs = f.snapshot(actor).logs
     const changes = logs.filter((row) => row.entity === 'player-adjustment')

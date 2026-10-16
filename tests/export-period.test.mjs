@@ -1,3 +1,4 @@
+import { testMutate } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -22,7 +23,7 @@ function fixture(t) {
   const time = (value) => {
     clock = new Date(value)
   }
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const level = mutate('/levels', { name: '即时接单', delaySeconds: 0 })
   const users = {}
   for (const role of ['support', 'operations', 'finance', 'player'])
@@ -280,7 +281,7 @@ test('客户编号全量导出超过档案预载20条，字段搜索只匹配所
       (row) => Object.keys(row).length === 1 && row.externalOrderNo.startsWith('000000-')
     )
   )
-  assert.equal(selected.orders.length, 2)
+  assert.equal(selected.orders.length, 0, '未选择订单模块时不加载订单明细')
   assert.equal(
     f.sheet(selected, 'customers', ['name'], { keyword: 'GAME-ONLY', keywordField: 'contact' })
       .rowCount,

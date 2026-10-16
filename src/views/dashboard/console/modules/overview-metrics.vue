@@ -28,12 +28,25 @@
       }}</span></div
     >
 
-    <ElDialog
+    <BusinessDetailPanel
       v-model="dialogOpen"
+      page-key="overview-metric"
+      :record-id="selectedId"
+      :restore-error="metricRestoreError"
+      @restore="restoreMetric($event)"
       :title="activeCard ? activeCard.title + ' · 统计详情' : '统计详情'"
-      width="min(680px, 94vw)"
+      width="min(1120px, 96vw)"
+      class="business-detail-dialog overview-statistics-detail"
       destroy-on-close
     >
+      <template #header="{ titleId }"
+        ><div v-if="activeCard" :id="titleId"
+          ><BusinessDetailHeader
+            :title="`${activeCard.title} · 统计详情`"
+            description="查看分类分布、具体记录和原业务统计口径。"
+            :icon="activeCard.icon"
+            badge="统计与明细" /></div
+      ></template>
       <template v-if="activeCard">
         <div class="detail-period"
           ><ArtSvgIcon icon="ri:calendar-2-line" /><span>{{
@@ -41,22 +54,94 @@
           }}</span
           ><ElTag size="small" effect="plain">{{ activeCard.subtitle }}</ElTag></div
         >
-        <div class="detail-main-value"
-          ><strong>{{
-            detailMasked && activeCard.value !== null ? '••••••' : (activeCard.value ?? '—')
-          }}</strong
-          ><ElButton v-if="activeCard.sensitive" text @click="detailsRevealed = !detailsRevealed"
+        <div v-if="activeCard.sensitive" class="detail-main-value"
+          ><ElButton text @click="detailsRevealed = !detailsRevealed"
             ><ArtSvgIcon :icon="detailMasked ? 'ri:eye-off-line' : 'ri:eye-line'" class="mr-1" />{{
               detailMasked ? '显示金额' : '隐藏金额'
             }}</ElButton
           ></div
         >
-        <div class="detail-summary"
-          ><div v-for="(item, index) in activeCard.details" :key="index"
-            ><span>{{ item.label }}</span
-            ><strong>{{ detailMasked ? '•••' : item.value }}</strong></div
-          ></div
-        >
+        <BusinessDetailSummary
+          :items="[
+            {
+              label: activeCard.title,
+              value: detailMasked ? '••••••' : activeCard.value,
+              tone: 'primary'
+            },
+            ...activeCard.details.map((item) => ({
+              label: item.label,
+              value: detailMasked ? '•••' : item.value
+            }))
+          ]"
+        />
+        <OverviewDetailExplorer
+          v-if="report && !['salary', 'attendance'].includes(activeCard.id)"
+          :key="privacyKey + activeCard.id"
+          :metric="activeCard.id"
+          :range="report.range"
+          :masked="detailMasked"
+          @refreshed="emit('refreshed', $event)"
+          @navigate="dialogOpen = false"
+        />
+        <template v-else-if="!detailMasked && activeCard.id === 'salary'">
+          <BusinessDetailSection
+            title="本人月度核算明细"
+            :description="`${data?.reports.month} 的原工资核算行；已发金额和待补差额按原模块区分，不按当前日期拆分。`"
+          >
+            <ElTable :data="salaryDetailLines" border
+              ><ElTableColumn prop="name" label="员工" min-width="100" /><ElTableColumn
+                label="底薪"
+                min-width="120"
+                ><template #default="{ row }">{{ money(row.base) }}</template></ElTableColumn
+              ><ElTableColumn label="提成" min-width="120"
+                ><template #default="{ row }">{{ money(row.commission) }}</template></ElTableColumn
+              ><ElTableColumn label="扣回差额" min-width="120"
+                ><template #default="{ row }">{{ money(row.deduction) }}</template></ElTableColumn
+              ><ElTableColumn label="合计" min-width="120"
+                ><template #default="{ row }">{{ money(row.total) }}</template></ElTableColumn
+              ><ElTableColumn label="核算状态" min-width="120"
+                ><template #default="{ row }">{{
+                  row.incomplete ? '配置未齐' : '完整'
+                }}</template></ElTableColumn
+              ></ElTable
+            >
+          </BusinessDetailSection>
+          <BusinessDetailSection
+            title="本人已发放快照"
+            description="保留原批次和发放金额，查看不产生重新发放或结算。"
+            ><ElTable :data="salaryPaidLines" border
+              ><ElTableColumn label="发放时间" min-width="180"
+                ><template #default="{ row }">{{ formatTime(row.paidAt) }}</template></ElTableColumn
+              ><ElTableColumn label="发放合计" min-width="120"
+                ><template #default="{ row }">{{ money(row.total) }}</template></ElTableColumn
+              ><ElTableColumn
+                prop="payrollId"
+                label="原批次编号"
+                min-width="220"
+                show-overflow-tooltip /></ElTable
+          ></BusinessDetailSection>
+        </template>
+        <BusinessDetailSection
+          v-else-if="activeCard.id === 'attendance'"
+          title="本人选期考勤记录"
+          description="仅本人已登记记录；班次计划与实际到岗分开，未登记不补造工时。"
+          ><ElTable :data="attendanceDetailRows" border
+            ><ElTableColumn prop="date" label="班次日期" min-width="120" /><ElTableColumn
+              prop="start"
+              label="开始"
+              min-width="100" /><ElTableColumn
+              prop="end"
+              label="结束"
+              min-width="100" /><ElTableColumn label="登记状态" min-width="120"
+              ><template #default="{ row }">{{
+                attendanceLabels[row.status] || row.status
+              }}</template></ElTableColumn
+            ><ElTableColumn prop="actualHours" label="人工登记工时" min-width="140" /><ElTableColumn
+              prop="remark"
+              label="本人考勤说明"
+              min-width="220"
+              show-overflow-tooltip /></ElTable
+        ></BusinessDetailSection>
         <section class="detail-notes"
           ><h4><ArtSvgIcon icon="ri:information-line" />统计口径</h4
           ><p v-for="(note, index) in activeCard.notes" :key="index">{{ note }}</p></section
@@ -69,14 +154,19 @@
           ><ArtSvgIcon icon="ri:arrow-right-up-line" class="mr-1" />进入业务模块</ElButton
         ></template
       >
-    </ElDialog>
+    </BusinessDetailPanel>
   </section>
 </template>
 
 <script setup lang="ts">
   import { computed, ref, watch } from 'vue'
-  import { useRouter } from 'vue-router'
+  import { useRoute, useRouter } from 'vue-router'
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import OverviewMetricCard from '@/components/business/OverviewMetricCard.vue'
+  import OverviewDetailExplorer from './overview-detail-explorer.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import { formatTime, money, useStudio } from '@/hooks/business/useStudio'
   import type { OverviewDay, OverviewMetrics, OverviewReport } from '@/types/overview'
 
@@ -98,6 +188,7 @@
   }
 
   const props = defineProps<{ report: OverviewReport | null; loading: boolean }>()
+  const emit = defineEmits<{ refreshed: [report: OverviewReport] }>()
   const { data, user, can } = useStudio()
   const router = useRouter()
   const permission = (key: string) => Boolean(props.report?.permissions.includes(key) && can(key))
@@ -363,7 +454,7 @@
       result.push({
         id: 'expenses',
         title: '费用统计',
-        subtitle: '按实际发生日期 · 有效支出',
+        subtitle: profitVisible ? '费用登记 + 报酬人工净调整' : '按实际发生日期 · 有效费用登记',
         value: cash(m.expenses),
         icon: 'ri:bill-line',
         color: 'green',
@@ -379,7 +470,9 @@
           { label: '截止日期', value: report.range.end }
         ],
         notes: [
-          '只累计所选区间内按实际发生日期登记、尚未删除的费用，不是储值、存单或押金业务。',
+          profitVisible
+            ? '费用原合计包括有效费用登记及报酬人工净调整。关联订单的调整归原付款日，其他调整按登记日；分项不再次相加扣除。'
+            : '只累计所选区间内按实际发生日期登记、尚未删除的费用，不是储值、存单或押金业务。',
           '日均费用为区间有效支出除以统计天数，显示金额四舍五入到分；主指标保持实际记录汇总。',
           '费用在经营利润中已经扣除，不因查看本卡重复记账。'
         ]
@@ -473,6 +566,35 @@
   })
 
   const selectedId = ref('')
+  const salaryDetailLines = computed(() =>
+    (data.value?.reports.payroll || []).filter((row) => row.userId === user.value?.id)
+  )
+  const salaryPaidLines = computed(() =>
+    (data.value?.payrolls || [])
+      .filter((row) => row.month === data.value?.reports.month)
+      .flatMap((row) =>
+        row.lines
+          .filter((line) => line.userId === user.value?.id)
+          .map((line) => ({ ...line, paidAt: row.paidAt, payrollId: row.id }))
+      )
+  )
+  const attendanceDetailRows = computed(() =>
+    (data.value?.attendance || []).filter(
+      (row) =>
+        row.userId === user.value?.id &&
+        props.report &&
+        row.date >= props.report.range.start &&
+        row.date <= props.report.range.end
+    )
+  )
+  const attendanceLabels: Record<string, string> = {
+    present: '实际到岗',
+    scheduled: '待登记',
+    normal: '已登记正常',
+    rest: '休息',
+    leave: '请假',
+    absent: '缺勤'
+  }
   const detailsRevealed = ref(false)
   const activeCard = computed(() => cards.value.find((card) => card.id === selectedId.value))
   const detailMasked = computed(() =>
@@ -484,18 +606,48 @@
       if (!value) selectedId.value = ''
     }
   })
-  function openDetails(id: string) {
+  const route = useRoute()
+  type RestoreMetric = { recordId?: string; isCurrent?: () => boolean }
+  const pendingMetric = ref<RestoreMetric | null>(null)
+  const metricRestoreError = ref('')
+  function restoreMetric(payload: RestoreMetric) {
+    pendingMetric.value = payload
+    if (!props.loading && props.report) {
+      pendingMetric.value = null
+      if (payload.isCurrent?.() === false) return
+      const target = payload.recordId || ''
+      metricRestoreError.value = cards.value.some((card) => card.id === target && card.href)
+        ? ''
+        : '该统计在当前账号权限下不可见，请返回业务概览。'
+      void openDetails(target, payload.isCurrent)
+    }
+  }
+  watch([() => props.loading, cards], () => {
+    if (!props.loading && props.report && pendingMetric.value) restoreMetric(pendingMetric.value)
+  })
+  async function openDetails(id: string, isCurrent?: () => boolean) {
     if (props.loading) return
     const card = cards.value.find((item) => item.id === id)
     if (!card?.href) return
+    metricRestoreError.value = ''
+    if (props.report)
+      await router.replace({
+        path: route.path,
+        query: {
+          ...route.query,
+          overviewStart: props.report.range.start,
+          overviewEnd: props.report.range.end
+        }
+      })
+    if (isCurrent?.() === false) return
     detailsRevealed.value = !card.sensitive
     selectedId.value = id
   }
-  function goToModule() {
+  async function goToModule() {
     const href = activeCard.value?.href
     if (href) {
-      selectedId.value = ''
-      void router.push(href)
+      const failure = await router.push(href)
+      if (!failure) selectedId.value = ''
     }
   }
   watch(

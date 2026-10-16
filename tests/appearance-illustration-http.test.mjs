@@ -1,3 +1,4 @@
+import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioServer } from '../server/index.mjs'
@@ -22,7 +23,7 @@ test('登录左图只公开当前生效图片，上传、权限、版本与恢�
     assert.equal(response.status, 200)
     return response.headers.get('set-cookie').split(';')[0]
   }
-  const employee = server.service.mutate('admin', '/users', {
+  const employee = testMutate(server.service, 'admin', '/users', {
     username: 'illustration-support',
     name: '插图测试客服',
     role: 'support',
@@ -81,3 +82,5 @@ test('登录左图只公开当前生效图片，上传、权限、版本与恢�
   assert.deepEqual((await reset.json()).login.illustration, { mode: 'default', image: null })
   assert.equal((await call(`/public-assets/${bg.id}`)).status, 404)
 })
+
+installTestClientFetch()

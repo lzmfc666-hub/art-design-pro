@@ -1,3 +1,5 @@
+import { testMutate } from './helpers/current-intent.mjs'
+import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -18,7 +20,7 @@ function fixture(t) {
   const time = (date) => {
     clock = new Date(date)
   }
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const level = mutate('/levels', { name: '即时接单', delaySeconds: 0 })
   const users = {}
   for (const role of ['support', 'operations', 'finance', 'hr', 'player'])
@@ -124,7 +126,11 @@ function fixture(t) {
   })
   time('2026-10-10T02:00:00Z')
   mutate('/refunds', { orderId: first.id, amount: 1000, reason: '十月退款回改九月付款' })
-  const withdrawal = mutate('/player/withdrawals', { amount: 1000 }, users.player.id)
+  const withdrawal = mutate(
+    '/player/withdrawals',
+    withdrawalBody(service, users.player.id, 1000),
+    users.player.id
+  )
   mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'approve' })
   mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'pay', receipt: upload() })
   time('2026-10-13T02:00:00Z')

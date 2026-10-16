@@ -10,6 +10,13 @@ const date = (value) =>
   new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
 const asRows = (value) =>
   Array.isArray(value) ? value.filter((row) => row && typeof row === 'object') : []
+const withdrawalWeek = (value) => {
+  if (!timestamp(value)) return null
+  const local = new Date(Date.parse(value) + 8 * 60 * 60 * 1000)
+  local.setUTCHours(0, 0, 0, 0)
+  local.setUTCDate(local.getUTCDate() - ((local.getUTCDay() + 6) % 7))
+  return local.toISOString().slice(0, 10)
+}
 
 /** Read-only inspection of saved business records. It does not rebuild or repair any ledger. */
 export function buildDiagnosticsReport({
@@ -178,8 +185,6 @@ export function buildDiagnosticsReport({
       issue('orders', 'error', 'order', order.id, '正在执行的负责人不是打手账号。')
     if (order.leaderId && order.teammateId === order.leaderId)
       issue('orders', 'error', 'order', order.id, '负责人和队友是同一人。')
-    if (order.teammateId && money(order.reward) && order.reward % 2)
-      issue('orders', 'error', 'order', order.id, '双人平分报酬存在未处理的分币尾差。')
     if (order.receivedAmount > 0 && !timestamp(order.paidAt))
       issue('orders', 'error', 'order', order.id, '已有实收金额但没有有效原付款时间。')
     if (
@@ -209,8 +214,79 @@ export function buildDiagnosticsReport({
         order.id,
         '待验收订单没有可审核的最新完成材料或后台登记记录。'
       )
-    if (order.status === 'pending' && order.dispatchMode === 'direct' && !order.assignedTo)
+    if (order.dispatchState != null && !['ready', 'unassigned'].includes(order.dispatchState))
+      issue('orders', 'error', 'order', order.id, '订单派单子状态不合法。')
+    if (
+      order.dispatchState === 'unassigned' &&
+      (order.status !== 'pending' || order.assignedTo || order.leaderId || order.teammateId)
+    )
+      issue('orders', 'error', 'order', order.id, '待分配订单仍保留执行人或不是待接单状态。')
+    if (
+      order.status === 'pending' &&
+      order.dispatchState !== 'unassigned' &&
+      order.dispatchMode === 'direct' &&
+      !order.assignedTo
+    )
       issue('orders', 'error', 'order', order.id, '指定待接单订单缺少指定接单人。')
+    const returnRequests = asRows(order.returnRequests)
+    for (const row of asRows(order.rejections)) {
+      inspect('orders')
+      link('references', 'order-rejection', row, 'playerId', 'users', '拒单打手')
+      if (
+        !row.id ||
+        !timestamp(row.rejectedAt) ||
+        typeof row.reason !== 'string' ||
+        !row.reason.trim()
+      )
+        issue('orders', 'error', 'order-rejection', row.id, '拒单历史缺少有效标识、时间或原因。')
+    }
+    if (
+      order.returnRequests != null &&
+      (!Array.isArray(order.returnRequests) ||
+        returnRequests.length !== order.returnRequests.length)
+    )
+      issue('orders', 'error', 'order', order.id, '退单申请集合格式不合法。')
+    const returnIds = new Set()
+    for (const row of returnRequests) {
+      inspect('orders')
+      if (!row.id || returnIds.has(row.id))
+        issue('orders', 'error', 'order', order.id, '退单申请缺少唯一标识或标识重复。')
+      returnIds.add(row.id)
+      link('references', 'order-return', row, 'leaderId', 'users', '退单原负责人')
+      link('references', 'order-return', row, 'processedBy', 'users', '退单处理人', false)
+      if (
+        !['pending', 'approved', 'rejected', 'obsolete'].includes(row.status) ||
+        !timestamp(row.requestedAt) ||
+        typeof row.reason !== 'string' ||
+        !row.reason.trim()
+      )
+        issue('orders', 'error', 'order-return', row.id, '退单申请缺少有效状态、时间或申请原因。')
+      if (
+        row.status === 'pending' &&
+        (order.status !== 'active' || order.leaderId !== row.leaderId)
+      )
+        issue(
+          'orders',
+          'error',
+          'order-return',
+          row.id,
+          '待处理退单申请与当前执行状态或负责人不一致。'
+        )
+      if (
+        ['approved', 'rejected'].includes(row.status) &&
+        (!timestamp(row.processedAt) ||
+          !row.processedBy ||
+          typeof row.processReason !== 'string' ||
+          !row.processReason.trim())
+      )
+        issue('orders', 'error', 'order-return', row.id, '已处理退单申请缺少处理人、时间或说明。')
+    }
+    if (returnRequests.filter((row) => row.status === 'pending').length > 1)
+      issue('orders', 'error', 'order', order.id, '同一订单存在多笔待处理退单申请。')
+    if (order.dispatchState === 'unassigned') {
+      inspect('pending')
+      issue('pending', 'warning', 'order', order.id, '订单待客服重新分配，不在公共抢单池中。')
+    }
   }
   const creditPairs = new Set(),
     creditsByOrder = new Map(),
@@ -321,8 +397,11 @@ export function buildDiagnosticsReport({
     if (settled && money(order.reward)) {
       const allocations = new Map()
       if (order.reward > 0 && order.leaderId) {
-        allocations.set(order.leaderId, order.teammateId ? order.reward / 2 : order.reward)
-        if (order.teammateId) allocations.set(order.teammateId, order.reward / 2)
+        allocations.set(
+          order.leaderId,
+          order.teammateId ? Math.ceil(order.reward / 2) : order.reward
+        )
+        if (order.teammateId) allocations.set(order.teammateId, Math.floor(order.reward / 2))
       }
       const recipients = new Set([...allocations.keys(), ...positive.map((row) => row.userId)])
       const mismatch = [...recipients].some(
@@ -412,13 +491,40 @@ export function buildDiagnosticsReport({
   }
   const occupied = new Map(),
     paid = new Map()
+  const withdrawalWeeks = new Map()
   for (const withdrawal of tables.withdrawals) {
     inspect('wallets')
     link('wallets', 'withdrawal', withdrawal, 'userId', 'users', '提现打手')
     if (!money(withdrawal.amount) || withdrawal.amount === 0)
       issue('wallets', 'error', 'withdrawal', withdrawal.id, '提现金额不是有效正整数分。')
-    if (!['pending', 'approved', 'paid', 'rejected'].includes(withdrawal.status))
+    if (!['pending', 'approved', 'paid', 'rejected', 'canceled'].includes(withdrawal.status))
       issue('wallets', 'error', 'withdrawal', withdrawal.id, '提现状态不合法。')
+    const week = withdrawalWeek(withdrawal.createdAt)
+    if (withdrawal.weekStart != null && withdrawal.weekStart !== week)
+      issue('wallets', 'error', 'withdrawal', withdrawal.id, '提现次数所属自然周与申请时间不一致。')
+    if (week && ['pending', 'approved', 'paid'].includes(withdrawal.status)) {
+      const key = JSON.stringify([withdrawal.userId, week])
+      withdrawalWeeks.set(key, (withdrawalWeeks.get(key) || 0) + 1)
+    }
+    if (withdrawal.status === 'canceled' && !timestamp(withdrawal.canceledAt))
+      issue('wallets', 'error', 'withdrawal', withdrawal.id, '已撤回提现缺少撤回时间。')
+    if (withdrawal.paymentSnapshot) {
+      const snapshot = withdrawal.paymentSnapshot
+      if (
+        !['wechat', 'alipay'].includes(snapshot.method) ||
+        snapshot.method !== withdrawal.paymentMethod ||
+        !timestamp(snapshot.updatedAt) ||
+        !snapshot.qrCode?.id
+      )
+        issue(
+          'wallets',
+          'error',
+          'withdrawal',
+          withdrawal.id,
+          '提现收款资料快照缺少有效方式、更新时间或收款码。'
+        )
+      attachment('wallets', 'withdrawal', withdrawal, snapshot.qrCode, '提现收款码快照')
+    }
     const target = ['pending', 'approved'].includes(withdrawal.status)
       ? occupied
       : withdrawal.status === 'paid'
@@ -429,6 +535,11 @@ export function buildDiagnosticsReport({
     if (withdrawal.status === 'paid' && (!timestamp(withdrawal.paidAt) || !withdrawal.receipt?.id))
       issue('wallets', 'error', 'withdrawal', withdrawal.id, '已发放提现缺少发放时间或凭证记录。')
     attachment('wallets', 'withdrawal', withdrawal, withdrawal.receipt, '提现凭证')
+  }
+  for (const [key, count] of withdrawalWeeks) {
+    const [userId, week] = JSON.parse(key)
+    if (count > 7)
+      issue('wallets', 'error', 'wallet', userId, `打手在 ${week} 自然周有效提现申请超过7次。`)
   }
   for (const userId of new Set([...balance.keys(), ...occupied.keys(), ...paid.keys()])) {
     inspect('wallets')

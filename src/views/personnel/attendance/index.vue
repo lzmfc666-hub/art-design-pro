@@ -116,6 +116,7 @@
           registered(row) ? row.actualHours.toFixed(2) + ' h' : '未登记'
         }}</template>
         <template #operation="{ row }"
+          ><ElButton link type="primary" @click="detailId = row.id">查看详情</ElButton
           ><ElButton
             v-if="can('attendance.manage')"
             link
@@ -127,15 +128,39 @@
         >
       </ArtTable>
     </ElCard>
-    <ElDialog
+    <BusinessDetailPanel
+      page-key="attendance-editor"
+      :record-id="form.id || (form.userId ? `unregistered:${form.date}:${form.userId}` : 'new')"
+      @restore="restoreAttendanceEditor"
+      class="business-detail-dialog"
       v-model="open"
       :title="form.id ? '编辑考勤记录' : '新增排班与考勤'"
-      width="min(620px, 94vw)"
+      width="min(940px, 94vw)"
       destroy-on-close
       :close-on-click-modal="!saving"
       :close-on-press-escape="!saving"
       :show-close="!saving"
     >
+      <BusinessDetailHeader
+        :title="data?.users.find((person) => person.id === form.userId)?.name || '排班与考勤登记'"
+        description="核对人员、班次和人工工时，正常状态不会自动登记实际工时。"
+        icon="ri:calendar-check-line"
+        :context="form.date || '请选择班次开始日期'"
+      />
+      <BusinessDetailSummary
+        :items="[
+          { label: '当前表单状态', value: labels[form.status] },
+          { label: '应出勤', value: `${plannedHours.toFixed(2)} 小时` },
+          {
+            label: '人工登记工时',
+            value:
+              canRegisterHours && form.actualHours !== null
+                ? `${form.actualHours.toFixed(2)} 小时`
+                : '未登记',
+            hint: '核对后保存，不按工时自动计薪'
+          }
+        ]"
+      />
       <ElForm
         ref="formRef"
         :model="form"
@@ -144,119 +169,139 @@
         label-position="top"
         @submit.prevent="save"
       >
-        <ElFormItem label="人员" prop="userId"
-          ><ElSelect v-model="form.userId" :disabled="!!form.id" filterable class="w-full"
-            ><ElOption
-              v-for="item in data?.users.filter(
-                (item) => item.status === 'active' || item.id === form.userId
-              )"
-              :key="item.id"
-              :value="item.id"
-              :label="item.name" /></ElSelect
-        ></ElFormItem>
-        <ElFormItem label="班次开始日期" prop="date"
-          ><ElDatePicker
-            v-model="form.date"
-            :disabled="!!form.id"
-            type="date"
-            value-format="YYYY-MM-DD"
-            style="width: 100%"
-        /></ElFormItem>
-        <ElRow :gutter="16">
-          <ElCol :xs="24" :sm="12"
-            ><ElFormItem label="上班时间" prop="start"
-              ><ElTimePicker
-                v-model="form.start"
-                format="HH:mm"
-                value-format="HH:mm"
-                style="width: 100%" /></ElFormItem
-          ></ElCol>
-          <ElCol :xs="24" :sm="12"
-            ><ElFormItem label="下班时间" prop="end"
-              ><ElTimePicker
-                v-model="form.end"
-                format="HH:mm"
-                value-format="HH:mm"
-                style="width: 100%" /></ElFormItem
-          ></ElCol>
-        </ElRow>
-        <p class="mb-4 text-sm text-g-500"
-          >应出勤 {{ plannedHours.toFixed(2) }} 小时{{
-            form.end < form.start ? '，下班时间归属次日' : ''
-          }}。</p
+        <BusinessDetailSection
+          title="人员与班次"
+          description="日期归属班次开始日，跨夜下班属于次日。"
         >
-        <ElFormItem label="出勤状态"
-          ><ElSelect v-model="form.status" class="w-full"
-            ><ElOption
-              v-for="(label, key) in labels"
-              :key="key"
-              :value="key"
-              :label="label"
-              :disabled="futureDate && key === 'present'" /></ElSelect
-        ></ElFormItem>
-        <ElAlert
-          v-if="futureDate"
-          title="未来日期可安排正常、休息或排班，实际工时需到当天或之后另行登记。"
-          type="info"
-          :closable="false"
-          class="mb-4"
-        />
-        <ElFormItem label="实际工作时长（小时）">
-          <ElSpace wrap
-            ><ElInputNumber
-              :model-value="canRegisterHours ? form.actualHours : undefined"
-              :disabled="!canRegisterHours"
-              :min="0"
-              :precision="2"
-              :step="0.01"
-              controls-position="right"
-              @update:model-value="changeActualHours"
-            /><ElButton
-              v-if="canRegisterHours && plannedHours > 0"
-              link
-              type="primary"
-              @click="usePlannedHours"
-              >按班次时长填入</ElButton
-            ></ElSpace
+          <ElFormItem label="人员" prop="userId"
+            ><ElSelect v-model="form.userId" :disabled="!!form.id" filterable class="w-full"
+              ><ElOption
+                v-for="item in data?.users.filter(
+                  (item) => item.status === 'active' || item.id === form.userId
+                )"
+                :key="item.id"
+                :value="item.id"
+                :label="item.name" /></ElSelect
+          ></ElFormItem>
+          <ElFormItem label="班次开始日期" prop="date"
+            ><ElDatePicker
+              v-model="form.date"
+              :disabled="!!form.id"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+          /></ElFormItem>
+          <ElRow :gutter="16">
+            <ElCol :xs="24" :sm="12"
+              ><ElFormItem label="上班时间" prop="start"
+                ><ElTimePicker
+                  v-model="form.start"
+                  format="HH:mm"
+                  value-format="HH:mm"
+                  style="width: 100%" /></ElFormItem
+            ></ElCol>
+            <ElCol :xs="24" :sm="12"
+              ><ElFormItem label="下班时间" prop="end"
+                ><ElTimePicker
+                  v-model="form.end"
+                  format="HH:mm"
+                  value-format="HH:mm"
+                  style="width: 100%" /></ElFormItem
+            ></ElCol>
+          </ElRow>
+        </BusinessDetailSection>
+        <BusinessDetailSection
+          title="出勤状态与实际工时"
+          description="单独登记的当日考勤优先于固定班次，实际工时采用人工登记。"
+        >
+          <p class="mb-4 text-sm text-g-500"
+            >应出勤 {{ plannedHours.toFixed(2) }} 小时{{
+              form.end < form.start ? '，下班时间归属次日' : ''
+            }}。</p
           >
-          <p class="mt-2 text-xs text-g-500 w-full">{{
-            !canRegisterHours
-              ? '未来日期、休息、待登记、请假与缺勤不计实际工时。'
-              : form.actualHours === null
-                ? '留空表示未登记，正常状态不会自动计入实际工时。'
-                : '采用人工登记工时，调整班次不会覆盖此值。'
-          }}</p>
-        </ElFormItem>
-        <ElAlert
-          v-if="canRegisterHours && form.actualHours !== null && shiftChanged"
-          title="班次已变更，人工工时已保留。请核对后保存，或重新按班次时长填入。"
-          type="warning"
-          :closable="false"
-          class="mb-4"
-        />
-        <ElFormItem label="备注"
-          ><ElInput
-            v-model="form.remark"
-            type="textarea"
-            :rows="3"
-            maxlength="1000"
-            show-word-limit
-        /></ElFormItem>
+          <ElFormItem label="出勤状态"
+            ><ElSelect v-model="form.status" class="w-full"
+              ><ElOption
+                v-for="(label, key) in labels"
+                :key="key"
+                :value="key"
+                :label="label"
+                :disabled="futureDate && key === 'present'" /></ElSelect
+          ></ElFormItem>
+          <ElAlert
+            v-if="futureDate"
+            title="未来日期可安排正常、休息或排班，实际工时需到当天或之后另行登记。"
+            type="info"
+            :closable="false"
+            class="mb-4"
+          />
+          <ElFormItem label="实际工作时长（小时）">
+            <ElSpace wrap
+              ><ElInputNumber
+                :model-value="canRegisterHours ? form.actualHours : undefined"
+                :disabled="!canRegisterHours"
+                :min="0"
+                :precision="2"
+                :step="0.01"
+                controls-position="right"
+                @update:model-value="changeActualHours"
+              /><ElButton
+                v-if="canRegisterHours && plannedHours > 0"
+                link
+                type="primary"
+                @click="usePlannedHours"
+                >按班次时长填入</ElButton
+              ></ElSpace
+            >
+            <p class="mt-2 text-xs text-g-500 w-full">{{
+              !canRegisterHours
+                ? '未来日期、休息、待登记、请假与缺勤不计实际工时。'
+                : form.actualHours === null
+                  ? '留空表示未登记，正常状态不会自动计入实际工时。'
+                  : '采用人工登记工时，调整班次不会覆盖此值。'
+            }}</p>
+          </ElFormItem>
+          <ElAlert
+            v-if="canRegisterHours && form.actualHours !== null && shiftChanged"
+            title="班次已变更，人工工时已保留。请核对后保存，或重新按班次时长填入。"
+            type="warning"
+            :closable="false"
+            class="mb-4"
+          />
+          <ElFormItem label="备注"
+            ><ElInput
+              v-model="form.remark"
+              type="textarea"
+              :rows="3"
+              maxlength="1000"
+              show-word-limit
+          /></ElFormItem>
+        </BusinessDetailSection>
       </ElForm>
       <template #footer
         ><ElButton :disabled="saving" @click="open = false">取消</ElButton
         ><ElButton type="primary" :loading="saving" @click="save">保存记录</ElButton></template
       >
-    </ElDialog>
-    <ElDialog
+    </BusinessDetailPanel>
+    <BusinessDetailPanel
+      page-key="work-schedule-editor"
+      :record-id="`${scheduleForm.userId}:${scheduleForm.effectiveFrom}`"
+      @restore="restoreWorkSchedule"
+      class="business-detail-dialog"
       v-model="scheduleOpen"
       title="设置个人上班时间"
-      width="min(640px, 94vw)"
+      width="min(940px, 94vw)"
       destroy-on-close
       :close-on-click-modal="!scheduleSaving"
       :close-on-press-escape="!scheduleSaving"
       :show-close="!scheduleSaving"
     >
+      <BusinessDetailHeader
+        :title="data?.users.find((person) => person.id === scheduleForm.userId)?.name || '固定班次'"
+        description="按生效日期维护个人固定班次，历史版本和已有人工考勤继续保留。"
+        icon="ri:calendar-check-line"
+        :context="`当前表单生效日：${scheduleForm.effectiveFrom}`"
+      />
       <ElForm
         ref="scheduleFormRef"
         :model="scheduleForm"
@@ -265,78 +310,86 @@
         label-position="top"
         @submit.prevent="saveSchedule"
       >
-        <ElFormItem label="人员"
-          ><span>{{
-            data?.users.find((person) => person.id === scheduleForm.userId)?.name
-          }}</span></ElFormItem
+        <BusinessDetailSection
+          title="生效日期与固定班次"
+          description="设置仅作用于生效日起未单独登记的日期，不自动登记实际工时。"
         >
-        <ElFormItem label="生效日期" prop="effectiveFrom">
-          <ElDatePicker
-            v-model="scheduleForm.effectiveFrom"
-            type="date"
-            value-format="YYYY-MM-DD"
-            :disabled-date="disablePastDate"
-            :clearable="false"
-            class="w-full"
-            @change="loadScheduleVersion"
+          <ElFormItem label="人员"
+            ><span>{{
+              data?.users.find((person) => person.id === scheduleForm.userId)?.name
+            }}</span></ElFormItem
+          >
+          <ElFormItem label="生效日期" prop="effectiveFrom">
+            <ElDatePicker
+              v-model="scheduleForm.effectiveFrom"
+              type="date"
+              value-format="YYYY-MM-DD"
+              :disabled-date="disablePastDate"
+              :clearable="false"
+              class="w-full"
+              @change="loadScheduleVersion"
+            />
+          </ElFormItem>
+          <ElFormItem label="固定班次">
+            <ElSwitch
+              v-model="scheduleForm.enabled"
+              active-text="启用"
+              inactive-text="不安排固定班次"
+            />
+          </ElFormItem>
+          <ElRow v-if="scheduleForm.enabled" :gutter="16">
+            <ElCol :xs="24" :sm="12"
+              ><ElFormItem label="上班时间" prop="start">
+                <ElTimePicker
+                  v-model="scheduleForm.start"
+                  format="HH:mm"
+                  value-format="HH:mm"
+                  class="w-full"
+                /> </ElFormItem
+            ></ElCol>
+            <ElCol :xs="24" :sm="12"
+              ><ElFormItem label="下班时间" prop="end">
+                <ElTimePicker
+                  v-model="scheduleForm.end"
+                  format="HH:mm"
+                  value-format="HH:mm"
+                  class="w-full"
+                /> </ElFormItem
+            ></ElCol>
+          </ElRow>
+          <p v-if="scheduleForm.enabled" class="mb-4 text-sm text-g-500">
+            班次时长 {{ hours(scheduleForm.start, scheduleForm.end).toFixed(2) }} 小时{{
+              scheduleForm.end && scheduleForm.start && scheduleForm.end < scheduleForm.start
+                ? '，下班时间归属次日'
+                : ''
+            }}。
+          </p>
+          <ElFormItem label="备注">
+            <ElInput
+              v-model="scheduleForm.remark"
+              type="textarea"
+              :rows="2"
+              maxlength="1000"
+              show-word-limit
+            />
+          </ElFormItem>
+          <ElAlert
+            title="仅影响生效日起尚未单独登记的日期；历史记录、实际工时和工资不变。休息、请假等仍在当天考勤中编辑。"
+            type="info"
+            :closable="false"
           />
-        </ElFormItem>
-        <ElFormItem label="固定班次">
-          <ElSwitch
-            v-model="scheduleForm.enabled"
-            active-text="启用"
-            inactive-text="不安排固定班次"
-          />
-        </ElFormItem>
-        <ElRow v-if="scheduleForm.enabled" :gutter="16">
-          <ElCol :xs="24" :sm="12"
-            ><ElFormItem label="上班时间" prop="start">
-              <ElTimePicker
-                v-model="scheduleForm.start"
-                format="HH:mm"
-                value-format="HH:mm"
-                class="w-full"
-              /> </ElFormItem
-          ></ElCol>
-          <ElCol :xs="24" :sm="12"
-            ><ElFormItem label="下班时间" prop="end">
-              <ElTimePicker
-                v-model="scheduleForm.end"
-                format="HH:mm"
-                value-format="HH:mm"
-                class="w-full"
-              /> </ElFormItem
-          ></ElCol>
-        </ElRow>
-        <p v-if="scheduleForm.enabled" class="mb-4 text-sm text-g-500">
-          班次时长 {{ hours(scheduleForm.start, scheduleForm.end).toFixed(2) }} 小时{{
-            scheduleForm.end && scheduleForm.start && scheduleForm.end < scheduleForm.start
-              ? '，下班时间归属次日'
-              : ''
-          }}。
-        </p>
-        <ElFormItem label="备注">
-          <ElInput
-            v-model="scheduleForm.remark"
-            type="textarea"
-            :rows="2"
-            maxlength="1000"
-            show-word-limit
-          />
-        </ElFormItem>
-        <ElAlert
-          title="仅影响生效日起尚未单独登记的日期；历史记录、实际工时和工资不变。休息、请假等仍在当天考勤中编辑。"
-          type="info"
-          :closable="false"
-        />
-        <p
-          v-if="scheduleHistory.some((item) => item.effectiveFrom > scheduleForm.effectiveFrom)"
-          class="mt-2 text-xs text-g-500"
+          <p
+            v-if="scheduleHistory.some((item) => item.effectiveFrom > scheduleForm.effectiveFrom)"
+            class="mt-2 text-xs text-g-500"
+          >
+            已安排的后续版本仍按各自日期生效；需要修改时，请选择下方对应版本。
+          </p>
+        </BusinessDetailSection>
+        <BusinessDetailSection
+          v-if="scheduleHistory.length"
+          title="班次设置记录"
+          description="该人员全部已授权班次版本；历史版本只读，未来版本沿原入口调整。"
         >
-          已安排的后续版本仍按各自日期生效；需要修改时，请选择下方对应版本。
-        </p>
-        <template v-if="scheduleHistory.length">
-          <h4 class="mt-5 mb-2">班次设置记录</h4>
           <ElTable :data="scheduleHistory" max-height="220" size="small">
             <ElTableColumn prop="effectiveFrom" label="生效日期" width="110" />
             <ElTableColumn label="固定班次" min-width="170"
@@ -354,23 +407,116 @@
                 <span v-else class="text-g-500">历史</span>
               </template></ElTableColumn
             >
+            <ElTableColumn prop="remark" label="备注" min-width="180" show-overflow-tooltip />
+            <ElTableColumn label="更新人" min-width="120"
+              ><template #default="{ row }">{{
+                data?.users.find((person) => person.id === row.updatedBy)?.name || '未提供'
+              }}</template></ElTableColumn
+            >
+            <ElTableColumn label="更新时间" min-width="175"
+              ><template #default="{ row }">{{
+                formatTime(row.updatedAt)
+              }}</template></ElTableColumn
+            >
           </ElTable>
-        </template>
+        </BusinessDetailSection>
       </ElForm>
       <template #footer>
         <ElButton :disabled="scheduleSaving" @click="scheduleOpen = false">取消</ElButton>
         <ElButton type="primary" :loading="scheduleSaving" @click="saveSchedule">保存班次</ElButton>
       </template>
-    </ElDialog>
+    </BusinessDetailPanel>
+    <BusinessDetailPanel
+      page-key="attendance-detail"
+      :record-id="detailId"
+      @restore="restoreAttendanceDetail"
+      :model-value="!!detailId"
+      class="business-detail-dialog"
+      title="考勤详情"
+      width="min(960px,94vw)"
+      @update:model-value="detailId = ''"
+    >
+      <template v-if="attendanceDetail">
+        <BusinessDetailHeader
+          :title="
+            data?.users.find((person) => person.id === attendanceDetail?.userId)?.name || '人员'
+          "
+          description="核对当前记录的班次、出勤状态和人工登记工时。"
+          icon="ri:calendar-check-line"
+          :badge="attendanceDetail.synthetic ? '未单独登记' : labels[attendanceDetail.status]"
+          :context="attendanceDetail.date"
+        />
+        <BusinessDetailSummary
+          :items="[
+            {
+              label: '应出勤工时',
+              value: `${hours(timePart(attendanceDetail.start), timePart(attendanceDetail.end)).toFixed(2)} 小时`
+            },
+            {
+              label: '实际工时',
+              value: registered(attendanceDetail)
+                ? `${attendanceDetail.actualHours.toFixed(2)} 小时`
+                : '未登记',
+              hint: '未登记不能视为已按班次完成'
+            },
+            {
+              label: '记录来源',
+              value: attendanceDetail.synthetic ? '每日展示 / 固定班次' : '单独登记考勤'
+            }
+          ]"
+        />
+        <BusinessDetailSection title="班次与状态">
+          <ElDescriptions :column="2" border>
+            <ElDescriptionsItem label="班次开始日期">{{
+              attendanceDetail.date
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="人员角色">{{
+              personRole(attendanceDetail.userId)
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="上班时间">{{
+              timePart(attendanceDetail.start) || '未安排'
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="下班时间"
+              >{{ timePart(attendanceDetail.end) || '未安排'
+              }}{{
+                timePart(attendanceDetail.end) < timePart(attendanceDetail.start) ? '（次日）' : ''
+              }}</ElDescriptionsItem
+            >
+            <ElDescriptionsItem label="出勤状态">{{
+              labels[attendanceDetail.status]
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="人工工时登记">{{
+              registered(attendanceDetail) ? '已登记' : '未登记'
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="备注" :span="2"
+              ><p class="whitespace-pre-wrap break-all">{{
+                attendanceDetail.remark || '未填写'
+              }}</p></ElDescriptionsItem
+            >
+          </ElDescriptions>
+          <ElAlert
+            v-if="attendanceDetail.synthetic"
+            title="此行为每日展示的未登记记录，不代表实际到岗；请按原登记入口填写真实考勤。"
+            type="info"
+            :closable="false"
+          />
+        </BusinessDetailSection>
+      </template>
+      <ElEmpty v-else description="记录不在当前筛选范围或已无查看权限，请重新选择" />
+    </BusinessDetailPanel>
   </div>
 </template>
 
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import BusinessStatCard from '@/components/business/BusinessStatCard.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import { computed, onMounted, reactive, ref, watch } from 'vue'
   import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-  import { roleLabels, useStudio } from '@/hooks/business/useStudio'
+  import { roleLabels, useStudio, formatTime } from '@/hooks/business/useStudio'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import type { Attendance, WorkSchedule } from '@/types/studio'
@@ -593,6 +739,87 @@
       unit: '次'
     }
   ])
+  const detailId = ref('')
+  const attendanceDetail = computed<AttendanceRow | undefined>(
+    () =>
+      data.value?.attendance.find((row) => row.id === detailId.value) ||
+      rows.value.find((row) => row.id === detailId.value)
+  )
+  function restoredAttendance(recordId?: string): AttendanceRow | undefined {
+    const existing = data.value?.attendance.find((row) => row.id === recordId)
+    if (existing) return existing
+    const match = recordId?.match(/^unregistered:(\d{4}-\d{2}-\d{2}):(.+)$/)
+    if (!match || !data.value?.users.some((person) => person.id === match[2])) return
+    search.value.dates = null
+    search.value.date = match[1]
+    return rows.value.find((row) => row.id === recordId)
+  }
+  async function restoreAttendanceDetail({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      const row = restoredAttendance(recordId)
+      if (row) detailId.value = row.id
+    } catch (cause) {
+      ElMessage.error(cause instanceof Error ? cause.message : '详情读取失败，请返回列表重试')
+    }
+  }
+  async function restoreAttendanceEditor({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      if (!can('attendance.manage')) return
+      if (recordId === 'new') edit()
+      else {
+        const row = restoredAttendance(recordId)
+        if (row) edit(row)
+      }
+    } catch (cause) {
+      ElMessage.error(cause instanceof Error ? cause.message : '详情读取失败，请返回列表重试')
+    }
+  }
+  async function restoreWorkSchedule({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      if (!can('attendance.manage') || !recordId) return
+      const separator = recordId.lastIndexOf(':')
+      const owner = recordId.slice(0, separator),
+        effectiveFrom = recordId.slice(separator + 1)
+      if (
+        separator < 0 ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) ||
+        !data.value?.users.some((person) => person.id === owner)
+      )
+        return
+      schedulePersonId.value = owner
+      editSchedule(effectiveFrom)
+    } catch (cause) {
+      ElMessage.error(cause instanceof Error ? cause.message : '详情读取失败，请返回列表重试')
+    }
+  }
+  function personRole(id: string) {
+    const person = data.value?.users.find((row) => row.id === id)
+    return person ? roleLabels[person.role] : '未提供'
+  }
   const { tableData, pagination, handleSizeChange, handleCurrentChange, resetPage } =
     useBusinessTable(rows)
   const { columns, columnChecks } = useTableColumns<AttendanceRow>(() => [
@@ -603,7 +830,7 @@
     { prop: 'status', label: '出勤状态', width: 110, useSlot: true },
     { prop: 'actualHours', label: '实际工时', width: 120, useSlot: true },
     { prop: 'remark', label: '备注', minWidth: 200, showOverflowTooltip: true },
-    { prop: 'operation', label: '操作', width: 110, fixed: 'right', useSlot: true }
+    { prop: 'operation', label: '操作', width: 205, fixed: 'right', useSlot: true }
   ])
   function resetSearch() {
     search.value = emptySearch()

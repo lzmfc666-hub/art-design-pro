@@ -1,0 +1,29 @@
+请在共用项目 C:/Users/Administrator/Desktop/system 中，仅修改独立 player-client 工程及客户端验证。最终联调核对了你提供的 HANDOFF-V3.md 和 BACKEND-V3-REQUEST.md，现补齐阻断项，接口契约 v3.1 已冻结在 docs/STUDIO-CONTRACT.md 顶部。不要修改 server、根 src、根依赖配置、代理基础设施、数据库、共享契约或后台任务的测试。保留工作区已有修改，不回滚、覆盖、格式化或提交其他任务文件。
+
+先读取共享契约 v3.1。不要猜测接口或使用模拟成功替代真实联调；后台核心接口已实现并完成后台独立验证，可使用隔离数据库和不冲突端口进行客户端真实验证，尚未正式部署。用户要求等手机端完成后由后台统一联调和完整回归；请完成独立页面、稳定请求意图、轻量刷新、代理清理，并提供交接结果，不将双方联合验收标为已经完成。
+
+这次优先只补以下3项，不重复改已完成的订单/分页/图片页面：
+1. 所有关键写入必须发送 X-Studio-Actor，为原操作捕获时的 operation.owner，而非重试时可能变化的当前账号。fetch与XHR都支持该头。抓单/拒绝/退单/上报/提现/撤回的意图、requestId、请求体和owner一起冻结；旧账号意图不能换成新账号发送。上传等其他认证POST也发送其捕获账号。缺头409 PRECONDITION_REQUIRED、Cookie账号不符409 PRINCIPAL_CHANGED均是明确未执行；会话在收到请求后被撤销或过期也会在业务事务内返回401 SESSION_EXPIRED。不能把响应后X-Studio-User核对当原子保护。
+2. 注册原操作结果查询：GET /api/studio/player/operation-results/:requestId?family=claim|reject|return|submit|withdraw|cancel-withdrawal。只能读取当前账号本人。返回{requestId,family,status:'succeeded'|'not-recorded',operationConfirmed,result:'confirmation-only',createdAt:string|null,lateCommitPossible,canCreateNew:false,canRetryWithOriginal,legacy?}。succeeded仅确认原成功，解除限制后再按当前权限刷新现状，不能展示原快照。not-recorded保留未确认和同类操作锁；lateCommitPossible:true不能解锁创建新编号。有原完整body且canRetryWithOriginal:true时才显式重试原编号/原内容/原owner；恢复标记无body不能重试。不要只返回not-recorded而丢弃canRetryWithOriginal，否则关闭资格时会错误展示重试按钮；可扩展当前OperationLookup返回结构以保留这些标志。403查询失权不能视为原操作已失败或解锁。
+3. 修正你工程内 player-client/vite.config.ts：先删除来访者Forwarded、所有X-Forwarded-*、X-Real-IP，再以original.socket.remoteAddress设置X-Forwarded-For；继续仅转发studio_player_session且固定X-Studio-Client:player。根/生产代理已经由后台任务整改，请勿修改那些文件。此处明确为你工程的跨职责需求记录，不是要求改后台共享文件。
+
+请用真实隔离服务复验：实际成功后丢响应→查询succeeded→刷新最新状态；整页刷新恢复标记→查询确认；查询未记录时后续迟到成功不能制造新编号；B Cookie/A头写入409无任何业务副作用；认证后延迟正文期间退出401；关闭资格不可重试；伪造转发头不能覆盖来源。后台已经有9项真实HTTP竞态回归和7项结果读取回归，无需你重复实现服务端。
+
+订单字段：revision、dispatchRound、assignmentId、submissionId、playerRemark、paymentConfirmed、canClaim、canSubmit、claimBlockedReason、submitBlockedReason。内部备注、客户金额及付款凭证不得显示或推测。
+所有关键写入持有稳定 requestId；无响应时重试相同编号与原请求体。新操作才生成新编号，成功后读取最新订单。旧订单版本409需保留输入、刷新并让用户重新确认，不默默换新版本执行。
+接单/接受指定：POST /api/studio/player/orders/:id/claim，{requestId,expectedRevision,dispatchRound}。
+拒绝指定：POST /api/studio/player/orders/:id/reject，{requestId,expectedRevision,dispatchRound,reason}。
+上报：POST /api/studio/player/orders/:id/submit，{requestId,expectedRevision,assignmentId,leaderId,screenshots,teammateId?}。
+退单：POST /api/studio/player/orders/:id/return-request，{requestId,expectedRevision,assignmentId,leaderId,reason}。
+缺字段或过期分别识别 PRECONDITION_REQUIRED、ORDER_REVISION_CONFLICT、DISPATCH_ROUND_CONFLICT、ASSIGNMENT_CONFLICT、SUBMISSION_CONFLICT、REQUEST_ID_CONFLICT；全部409，不自动执行第二次。401/403按授权失败处理，429按Retry-After提示。
+
+列表：GET /api/studio/player/orders?current=1&size=20&scope=all|direct|pool|mine&status=，返回{records,total,current,size,counts}。详情保持 GET /api/studio/player/orders/:id。轻量刷新 GET /api/studio/player/changes?since=VERSION，返回{version,changed,serverTime,unreadCount,activeOrders,maxActiveOrders,pendingAssignments}，15秒及恢复网络/可见时读取，changed时刷新当前分页/详情。摘要与页面缓存不可用于放行资格、名额、余额。
+本人作为有效负责人的接单中订单才占名额；退单待审批仍占，待验收释放，验收后产生报酬。队友及指定待接受不占名额。验收退回或降上限保留已有订单，达到或超过上限禁新接单。落地付可先接，但足额付款后才允许正常上报。不上押金门槛、自动处罚或付款超时取消。
+
+站内消息/推送依据有效派单轮次失效，资金历史消息保留；重新绑定同账号同设备不丢有效待发任务，换账号不可继承。保留退出撤销该账号订阅的现有多设备影响，界面说明发送服务成功不等于手机实际收到。
+
+变更摘要 version 是不透明字符串，包含本人消息版本；异步消息、已读及失效会触发 changed。每次摘要响应更新未读数，changed时重新读取当前分页/详情，不把摘要版本当订单revision。旧负责人失去当前订单查看范围后，旧成功结果也会403，不借成功缓存重新公开私有资料。
+
+另有一个属于你工程的具体跨职责需求：player-client/vite.config.ts 开发代理目前只清理Cookie并固定打手渠道，需要补清理来访者的 Forwarded、X-Forwarded-*、X-Real-IP，再由代理设置从 original.socket.remoteAddress 验证的 X-Forwarded-For。继续只转发 studio_player_session Cookie，固定 X-Studio-Client:player，不能转发后台会话。禁止信任来访者自行提供的转发头；不要直接修改根 Vite、scripts/player-client-server.mjs 或后台可信代理配置。后台任务维护生产代理和 STUDIO_TRUSTED_PROXIES；只有两边代理完成头清理后，部署时才显式信任对应代理IP。请加入伪造头及账号隔离的真实代理回归。
+
+请交付你修改的文件清单、客户端验证结果、尚需后台提供的接口依赖与真实联调记录。测试仅用独立临时数据库和输出目录，不访问正式库或真实秘密，不停止后台任务或另一个任务服务。最终统一联调由后台任务负责。

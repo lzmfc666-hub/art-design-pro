@@ -1,0 +1,73 @@
+后续打手任务提示词：接入统一订单卡片图片 v3.3
+日期：2026-10-14
+
+请继续 C:/Users/Administrator/Desktop/system/player-client 独立打手工程，按共享契约顶部 v3.3 完成统一订单卡片图片的最小客户端适配。
+
+这是后续明确的客户端实施任务。本文件描述待接入工作，不代表当前打手端已经显示后台新图。后台本次提供配置管理及接口；请读取当前源码和后台交付证据后再实施，不依据旧标题重做已完成功能。
+
+一、先读当前基线与职责
+
+优先阅读：
+- C:/Users/Administrator/Desktop/system/docs/STUDIO-CONTRACT.md 顶部“打手订单卡片图片扩展 v3.3”。
+- C:/Users/Administrator/Desktop/system/player-client/BACKEND-ORDER-CARD-IMAGE-REQUEST.txt。
+- C:/Users/Administrator/Desktop/system/player-client/HANDOFF-V3.2.md、HANDOFF-V3.1.md 和 README.md。
+- 当前 src/api/player.ts、src/types/player.ts、src/stores/appearance.ts、src/api/readScheduler.ts、src/api/sessionBoundary.ts、src/views/player/PlayerShell.vue、Lobby.vue、Tasks.vue、OrderCard.vue 和 OrderNumber.vue。
+
+只维护 player-client/ 及本工程独立验证、交接记录。服务端、共享契约、根后台页面和根代理由后台任务维护；遇到真实契约缺陷提供具体请求、响应及权限条件，不在打手工程猜新接口或另建后台。保留现有未提交修改和新增文件；如同一文件还有其他任务写入，先明确归属，继续不冲突部分。
+
+保留当前页面和视觉，不采用此前四版视觉方案。尤其保留近期已完成的订单号顶部位置、点击/长按及键盘复制入口、复制反馈、任务要求/打手备注/时间加粗加黑、展开收起和窄屏布局。不要重写卡片、重新开发业务流程或批量格式化无关文件。
+
+二、采用已定稿读取契约
+
+所有路径前缀为 /api/studio，沿用当前 studioRequest、同源认证 Cookie、账号边界及取消/合并读取机制。
+
+GET /player/appearance
+返回：{revision:number,orderCardImage:Attachment|null}
+Attachment 为：{id,name,mime,size,url}
+orderCardImage.url 为规范站内 /api/studio/uploads/:id；无图返回 null。该字段对应后台 AppearanceConfig.playerOrderCardImage，但打手只读取这份最小投影，不读取完整后台外观配置代替。
+
+只允许当前启用且允许登录的打手读取。无、过期、撤销或关闭登录会话按现有认证返回 401；非打手返回 403；服务层同样核验启用与登录开关。读取不产生业务、资金、审计或通知。
+
+GET /player/changes 新增 appearanceRevision:number，等于全局外观 revision。沿用原 version/changed；保存、替换、移除和恢复默认会推进现有变更版本。appearanceRevision 不是订单 revision、接单资格、钱包版本或操作校验值，不能用于任何业务写入。
+
+JSON 响应为 Cache-Control:no-store。图片使用认证 GET /uploads/:id，响应为 Cache-Control:private,no-store。通过本站原认证图片 URL 显示，不改成匿名 public-assets，不转成 data URL 或持久化 Blob，不引入任意外链。
+
+替换、移除或恢复默认后，旧图不能仅凭旧卡图配置继续共享。原上传人所有权、其他当前外观槽或合法业务权限另行裁决；文件或历史审计仍存在不代表当前共享授权。客户端只显示最新读取中的 orderCardImage，不自行探测旧图或寻找替代图。
+
+三、基于现有协调器和 store 最小接入
+
+在现有 API 和类型中加入真实 PlayerAppearance 读取及 changes.appearanceRevision。在已有 appearance store 中维护与当前账号绑定的认证卡图状态，和 publicSaved 的公开品牌/登录图片分开。不得从 effective.logo、轮播、公告、订单截图、客户付款凭证或私人收款码补图。
+
+复用 PlayerShell 现有摘要 provider、readScheduler 的统一唤醒/退避/取消/合并能力，以及 sessionBoundary 的账号和权限失效通知。需要时增加最小的读取注册或摘要回调；不要再创建第二个 15 秒计时器、每张 OrderCard 的轮询、重复的 focus/online/visibility 监听或通知推送机制。
+
+首次进入大厅或任务页读取；恢复网络或页面重新可见时重新核对；已有摘要发现 appearanceRevision 与认证卡图已确认 revision 不同时重新读取。活跃摘要保持现有约 15 秒节奏，同账号同次唤醒合并读取。仅普通订单/钱包变更而 appearanceRevision 未变化，不新增逐卡片图片配置请求。
+
+读取成功按当前返回的全局图片及 revision 更新所有现有 OrderCard 缩略图。请求捕获账号与会话边界；取消旧读取，或以账号/会话代次和请求代次拒绝迟到响应，防止 A 的响应在切到 B、退出或失效后恢复旧图片。保留既有原 Actor、requestId、未知操作标记、Web Locks 及结果核对机制，本次图片读取不得改变它们。
+
+四、显示与降级
+
+只替换现有 OrderCard 左侧 .p-order-thumb 内的游戏图标占位内容。保持原方形或接近方形尺寸、圆角、间距和响应式布局；图片按现有区域裁切，例如 object-fit:cover，不扩大卡片或改变订单号、文字、报酬及按钮的位置。图片为装饰性缩略图时沿用恰当的无障碍语义，不抢占复制、卡片导航或接单交互。
+
+以下情况均恢复原 PlayerIcon name="game"：orderCardImage 为 null、配置读取失败、图片 onerror、退出、换号、登录失效或访问资格撤销。先清理旧认证图片状态；不要直接沿用普通订单资源“读取失败保留上次数据”的策略继续展示旧卡图。新一次合法读取或图片/revision 更新可重新尝试加载，但不能在 onerror 内无限重试，也不能让旧图片迟到的 load/error 事件覆盖新图状态。
+
+不自动取 Logo、轮播、私人图片或其他占位方案替代。不得新增打手上传、保存、替换、移除或配置入口；管理员在后台管理。不得把卡图、响应或业务图片写入 localStorage、IndexedDB、Service Worker/CacheStorage。现有 player-sw.js 仅处理通用通知，保持无 API/图片缓存、无业务写队列。
+
+五、必要验收
+
+沿用已有脚本和断言，新增仅针对本次变化的验证。使用新建隔离后台、数据库、账号和随机回环端口；确认测试进程加载当前服务端、客户端源码或本次生产产物。不要向现有业务库写测试配置，不启停既有 3006/3007/3008 服务，不外发真实通知。
+
+验证管理员真实上传并保存图 A 后，大厅与任务卡片经真实 GET 显示 A；保存图 B 后，原摘要的 appearanceRevision 推动重读并替换为 B；移除及恢复默认后为 null 并恢复原图标。首次进入、可见恢复和网络恢复均走现有读取协调器；多卡片/页面切换不生成按卡片重复请求或第二套轮询。
+
+验证配置读取错误、图片真实 403/404 或加载失败均降级；A 的配置或图片响应迟到时切换到 B、退出或会话失效，旧图不能恢复。使用真实隔离响应或明确故障注入，不伪造业务成功。验证旧卡图不因缓存重新展示，API 与图片未进入浏览器持久业务缓存。
+
+验证客户端没有卡图编辑/上传入口，没有调用后台保存、重绑设备或测试通知。匿名、他人私图、停用/关闭登录的拒绝仍由服务端执行；不要改资格、名额、付款、报酬、押金、资金分页、历史摘要或未知操作规则。
+
+对 320/390/430/768 宽度检查方形缩略图裁切、无关键溢出、订单号顶部复制与键盘入口、文字字重、展开收起、报酬和接单/查看按钮。保留已经通过的业务安全断言；新增改动稳定后运行本工程类型检查、生产构建及受影响验证，记录真实结果和已知限制，不把旧通过数量写成本次结果。
+
+测试输出使用新的本工程独立目录，不覆盖 v3.1/v3.2 或后台交付证据。记录本次修改文件、原因、前后源码/产物指纹、真实读取路径、截图及结果，交接状态明确区分后台已提供接口与客户端本次实际接入。
+
+六、交付
+
+完成最小适配及实际验证后，更新本工程交接与 README，并提交客户端改动范围、真实接口/刷新/降级结果、构建结果及仍未验证的场景。不要只列计划后结束。
+
+本机浏览器验证不代表 Android/iPhone 真机、HTTPS、系统键盘/安全区、移动网络或关闭页面后的系统行为已验收。卡图功能不增加推送、通知绑定或资金能力。未经另行授权不部署公网、推送整个工作区或迁移正式业务库。

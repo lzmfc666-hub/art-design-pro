@@ -1,5 +1,9 @@
 <template>
   <div>
+    <BusinessDetailHeader
+      description="按真实指定、负责人、队友及历史记录查看关联订单。订单总数由服务端返回，明细按页读取。"
+      icon="ri:history-line"
+    />
     <ElAlert
       title="按真实指定、负责人、队友和接单记录查看历史。关闭接单开关不删除历史，也不影响已接订单提交。"
       type="info"
@@ -56,45 +60,100 @@
       <template #createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
       <template #completedAt="{ row }">{{ formatTime(row.completedAt) }}</template>
       <template #operation="{ row }"
-        ><ElButton link type="primary" @click="selected = row">接单记录</ElButton
+        ><ElButton link type="primary" @click="openAssignments(row)">接单记录</ElButton
         ><ElButton v-if="can('orders.view')" link type="primary" @click="openOrder(row.id)"
           >订单详情</ElButton
         ></template
       >
     </ArtTable>
-    <ElDialog
+    <BusinessDetailPanel
+      page-key="player-order-assignments"
+      :record-id="selected?.id"
+      @restore="restoreAssignments"
+      class="business-detail-dialog"
       :model-value="!!selected"
       title="实际接单与解除记录"
-      width="min(720px,94vw)"
+      width="min(960px,94vw)"
       @update:model-value="closeAssignments"
     >
-      <p class="mb-4">{{ selected?.orderNo }} · {{ selected?.title }}</p>
-      <ElTable :data="selectedAssignments" border
-        ><ElTableColumn label="实际接单" min-width="175"
-          ><template #default="{ row }">{{ formatTime(row.acceptedAt) }}</template></ElTableColumn
-        ><ElTableColumn label="解除时间" min-width="175"
-          ><template #default="{ row }">{{ formatTime(row.releasedAt) }}</template></ElTableColumn
-        ><ElTableColumn prop="reason" label="解除说明" min-width="220"
-      /></ElTable>
-      <p class="text-sm text-g-500 mt-3">{{
-        selectedAssignments.length
-          ? '仅显示该打手的真实接单记录。队友身份以完成上报记录为准。'
-          : '该打手在此订单中没有负责人接单记录，可能是指定待接单人或完成队友。'
-      }}</p>
-    </ElDialog>
+      <BusinessDetailHeader
+        :title="selected?.title"
+        description="该打手在此订单中的实际负责人接单与解除记录；队友身份仍以材料记录为准。"
+        icon="ri:team-line"
+        :context="selected?.orderNo"
+      />
+      <BusinessDetailSummary
+        :items="[
+          { label: '当前订单状态', value: selected ? statusLabels[selected.status] : '—' },
+          { label: '参与身份', value: selected ? participation(selected) : '—' },
+          {
+            label: '负责人接单记录',
+            value: selectedAssignments.length,
+            hint: '该订单中该打手的记录数'
+          }
+        ]"
+      />
+      <BusinessDetailSection
+        title="实际接单与解除明细"
+        description="尚未接受的指定任务不伪造接单时间，未解除的接单不填解除时间。"
+      >
+        <ElTable :data="selectedAssignments" border
+          ><ElTableColumn type="expand"
+            ><template #default="{ row }"
+              ><BusinessDetailSection title="单次接单详情">
+                <ElDescriptions :column="2" border>
+                  <ElDescriptionsItem label="派单轮次">{{
+                    row.dispatchRound ?? '未提供'
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="接单状态">{{
+                    row.releasedAt ? '已解除' : '未记录解除'
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="实际接单">{{
+                    formatTime(row.acceptedAt)
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="解除时间">{{
+                    formatTime(row.releasedAt)
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="解除说明" :span="2"
+                    ><p class="whitespace-pre-wrap break-all">{{
+                      row.reason || '未填写'
+                    }}</p></ElDescriptionsItem
+                  >
+                </ElDescriptions>
+              </BusinessDetailSection></template
+            ></ElTableColumn
+          ><ElTableColumn prop="dispatchRound" label="派单轮次" width="100" /><ElTableColumn
+            label="实际接单"
+            min-width="175"
+            ><template #default="{ row }">{{ formatTime(row.acceptedAt) }}</template></ElTableColumn
+          ><ElTableColumn label="解除时间" min-width="175"
+            ><template #default="{ row }">{{ formatTime(row.releasedAt) }}</template></ElTableColumn
+          ><ElTableColumn prop="reason" label="解除说明" min-width="220"
+        /></ElTable>
+        <p class="text-sm text-g-500 mt-3">{{
+          selectedAssignments.length
+            ? '仅显示该打手的真实接单记录。队友身份以完成上报记录为准。'
+            : '该打手在此订单中没有负责人接单记录，可能是指定待接单人或完成队友。'
+        }}</p>
+      </BusinessDetailSection>
+    </BusinessDetailPanel>
   </div>
 </template>
 
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, onUnmounted, reactive, ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
   import { studioRequest } from '@/api/studio'
   import { formatTime, statusLabels, useStudio } from '@/hooks/business/useStudio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import type { Order, OrderStatus } from '@/types/studio'
 
   const props = defineProps<{ userId: string }>()
-  const { can, clearSession } = useStudio()
+  const { can, clearSession, refresh } = useStudio()
   const router = useRouter()
   const records = ref<Order[]>([]),
     selected = ref<Order | null>(null)
@@ -141,6 +200,33 @@
   const selectedAssignments = computed(() => (selected.value ? assignments(selected.value) : []))
   function closeAssignments(value: boolean) {
     if (!value) selected.value = null
+  }
+  function openAssignments(row: Order) {
+    if (can('orders.view') || can('finance.withdrawals')) selected.value = row
+  }
+  async function restoreAssignments({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    if (!recordId) return
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      if (!can('orders.view') && !can('finance.withdrawals')) return
+      const owner = props.userId
+      const row = await studioRequest<Order>(
+        `players/${encodeURIComponent(owner)}/orders/${encodeURIComponent(recordId)}`
+      )
+      if (isCurrent && !isCurrent()) return
+      if (owner === props.userId) openAssignments(row)
+    } catch (cause) {
+      selected.value = null
+      if ((cause as { status?: number }).status === 401) clearSession()
+      error.value = cause instanceof Error ? cause.message : '接单记录读取失败'
+    }
   }
   function openOrder(id: string) {
     if (can('orders.view')) void router.push({ path: '/orders/list', query: { id } })

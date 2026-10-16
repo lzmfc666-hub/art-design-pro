@@ -24,6 +24,12 @@
     <div class="w-full h-[calc(100%-95px)] flex flex-col">
       <div class="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         <p v-if="error" class="px-3.5 pt-3 text-xs text-danger" role="alert">{{ error }}</p>
+        <p
+          v-if="barActiveIndex === 0 && noticeTotal > noticeList.length"
+          class="px-3.5 pt-3 text-xs text-g-500"
+        >
+          显示最近 {{ noticeList.length }} 笔，全部订单请进入订单管理筛选。
+        </p>
         <ul v-if="currentItems.length">
           <li
             v-for="item in currentItems"
@@ -46,7 +52,9 @@
                 item.title
               }}</h4>
               <p class="mt-1.5 text-xs text-g-600 break-words">{{ item.description }}</p>
-              <p class="mt-1.5 text-xs text-g-500">{{ formatTime(item.createdAt) }}</p>
+              <p v-if="item.createdAt" class="mt-1.5 text-xs text-g-500">{{
+                formatTime(item.createdAt)
+              }}</p>
             </div>
             <ArtSvgIcon icon="ri:arrow-right-s-line" class="ml-2 shrink-0 text-g-500" />
           </li>
@@ -92,7 +100,8 @@
   import { useRouter } from 'vue-router'
   import { useStudio, formatTime, money, statusLabels } from '@/hooks/business/useStudio'
   import { useBusinessTodo, type BusinessTodoTarget } from '@/hooks/business/useBusinessTodo'
-  import type { Order } from '@/types/studio'
+  import type { Order, OrderPage, StudioChangesSummary } from '@/types/studio'
+  import { studioRequest } from '@/api/studio'
 
   defineOptions({ name: 'ArtNotification' })
   interface BusinessNotice extends BusinessTodoTarget {
@@ -102,12 +111,20 @@
     createdAt: string
     icon: string
     type: 'primary' | 'warning' | 'danger' | 'success' | 'info'
+    count?: number
   }
   const props = defineProps<{ value: boolean }>()
   const emit = defineEmits<{ 'update:value': [value: boolean] }>()
   const router = useRouter()
-  const { data, user, can, refresh, loading, error } = useStudio()
-  const { items: pendingList } = useBusinessTodo()
+  const { data, user, can, clearSession } = useStudio()
+  const { items: bootstrapPendingList } = useBusinessTodo()
+  const loading = ref(false)
+  const error = ref('')
+  const recentOrders = ref<Order[]>([])
+  const orderCounts = ref<Record<string, number>>({})
+  const noticeTotal = computed(() => orderCounts.value.all || 0)
+  let loadVersion = 0
+  let disposed = false
   const show = ref(false)
   const visible = ref(false)
   const barActiveIndex = ref(0)
@@ -136,7 +153,7 @@
   }
   const noticeList = computed<BusinessNotice[]>(() => {
     if (!isStaff.value || !can('orders.view')) return []
-    return (data.value?.orders || [])
+    return recentOrders.value
       .map(
         (order): BusinessNotice => ({
           id: `order:${order.id}`,
@@ -162,7 +179,7 @@
     const state = data.value
     const rows: BusinessNotice[] = []
     if (can('orders.view')) {
-      for (const order of state.orders) {
+      for (const order of recentOrders.value) {
         for (const submission of order.submissions.filter((item) => item.review)) {
           const passed = submission.review === 'passed'
           rows.push({
@@ -193,7 +210,12 @@
       }
     }
     if (can('finance.withdrawals')) {
-      const labels = { approved: '提现已审核', paid: '已登记打款', rejected: '提现已驳回' }
+      const labels = {
+        approved: '提现已审核',
+        paid: '已登记打款',
+        rejected: '提现已驳回',
+        canceled: '提现已撤回'
+      }
       for (const withdrawal of state.withdrawals) {
         if (withdrawal.status === 'pending') continue
         rows.push({
@@ -209,10 +231,59 @@
     }
     return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   })
+  const pendingList = computed<BusinessNotice[]>(() => {
+    if (!isStaff.value) return []
+    const result: BusinessNotice[] = bootstrapPendingList.value.filter(
+      (item) => !['payment', 'review', 'compensation'].includes(item.key)
+    )
+    for (const [key, title, description, permission, icon, target] of [
+      [
+        'unpaid',
+        '待确认收款',
+        '核对实际到账，未足额收款不能正常上报',
+        'orders.edit',
+        'ri:money-cny-circle-line',
+        { path: '/orders/list', query: { payment: 'unpaid' } }
+      ],
+      [
+        'review',
+        '待验收订单',
+        '核对当前完成材料并验收或退回',
+        'finance.review',
+        'ri:checkbox-circle-line',
+        settlementTarget('review')
+      ],
+      [
+        'compensation',
+        '取消报酬待确认',
+        '核对实际打手补偿，客户退款单独处理',
+        'finance.review',
+        'ri:close-circle-line',
+        settlementTarget('review')
+      ]
+    ] as const) {
+      const count = orderCounts.value[key] || 0
+      if (!count || !can(permission)) continue
+      result.push({
+        id: `order-count:${key}`,
+        title: `${title} · ${count} 单`,
+        description,
+        createdAt: '',
+        icon,
+        type: 'warning',
+        count,
+        ...target
+      })
+    }
+    return result
+  })
+  const pendingTotal = computed(() =>
+    pendingList.value.reduce((sum, item) => sum + (item.count || 1), 0)
+  )
   const barList = computed(() => [
-    { name: '订单动态', num: noticeList.value.length },
+    { name: '订单动态', num: noticeTotal.value },
     { name: '处理结果', num: resultList.value.length },
-    { name: '待办', num: pendingList.value.length }
+    { name: '待办', num: pendingTotal.value }
   ])
   const currentItems = computed(
     () => [noticeList.value, resultList.value, pendingList.value][barActiveIndex.value] || []
@@ -265,12 +336,36 @@
   }
   async function reload() {
     if (loading.value || !user.value) return
+    const version = ++loadVersion
+    const accountId = user.value.id
+    loading.value = true
+    error.value = ''
     try {
-      await refresh()
-    } catch {
-      // Store 保留实际错误信息，面板显示并允许重试。
+      const [summary, orders] = await Promise.all([
+        studioRequest<StudioChangesSummary>('changes'),
+        can('orders.view')
+          ? studioRequest<OrderPage>('orders?current=1&size=20')
+          : Promise.resolve(null)
+      ])
+      if (disposed || version !== loadVersion || accountId !== user.value?.id) return
+      orderCounts.value = summary.orderCounts
+      recentOrders.value = orders?.records || []
+    } catch (cause) {
+      if ((cause as { status?: number }).status === 401) clearSession()
+      if (disposed || version !== loadVersion) return
+      error.value = cause instanceof Error ? cause.message : '通知读取失败，请重试'
+    } finally {
+      if (version === loadVersion) loading.value = false
     }
   }
+  watch([() => user.value?.id, () => data.value?.permissions.join('|')], () => {
+    loadVersion++
+    loading.value = false
+    recentOrders.value = []
+    orderCounts.value = {}
+    error.value = ''
+    if (props.value) void reload()
+  })
   watch(
     () => props.value,
     (open) => {
@@ -288,7 +383,11 @@
     },
     { immediate: true }
   )
-  onUnmounted(() => clearTimeout(animationTimer))
+  onUnmounted(() => {
+    clearTimeout(animationTimer)
+    disposed = true
+    loadVersion++
+  })
 </script>
 
 <style scoped>

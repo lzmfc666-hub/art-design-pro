@@ -1,3 +1,5 @@
+import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
+import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -83,7 +85,7 @@ function fixture(t, { server = false, dbPath = ':memory:' } = {}) {
   const app = server ? createStudioServer(options) : null
   const service = app ? app.service : createStudioService(options)
   t.after(() => (app ? new Promise((resolve) => app.close(resolve)) : service.close()))
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const level = mutate('/levels', { name: '测试优先等级', delaySeconds: 0 })
   const users = {}
   for (const [name, role] of [
@@ -362,7 +364,7 @@ test('等级延迟、指定接单、接单上限及解除后原负责人权限�
         { screenshots: [f.upload(f.users.player1.id)] },
         f.users.player1.id
       ),
-    403
+    409
   )
   f.mutate(`/player/orders/${second.id}/claim`, {}, f.users.player1.id)
   f.setTime('2026-10-12T04:02:00Z')
@@ -465,9 +467,21 @@ test('取消保留执行历史和预计成本；财务单独确认补偿且不�
 test('提现占用避免重复申请，审核付款不可重复；已提现退款只标人工处理、不扣余额', (t) => {
   const f = fixture(t),
     order = f.complete(f.order())
-  const withdrawal = f.mutate('/player/withdrawals', { amount: 7000 }, f.users.player1.id)
+  const withdrawal = f.mutate(
+    '/player/withdrawals',
+    withdrawalBody(f.service, f.users.player1.id, 7000),
+    f.users.player1.id
+  )
   assert.equal(f.service.playerWallet(f.users.player1.id).available, 0)
-  rejects(() => f.mutate('/player/withdrawals', { amount: 1 }, f.users.player1.id), 409)
+  rejects(
+    () =>
+      f.mutate(
+        '/player/withdrawals',
+        withdrawalBody(f.service, f.users.player1.id, 1),
+        f.users.player1.id
+      ),
+    409
+  )
   rejects(
     () =>
       f.mutate(`/withdrawals/${withdrawal.id}/action`, {
@@ -781,8 +795,8 @@ test('HTTP鉴权、cookie和并发抢单/提现避免双重成功', async (t) =>
   f.mutate(`/orders/${order.id}/action`, { action: 'review-pass' })
   const winningCookie = leaderId === f.users.player1.id ? firstCookie : secondCookie
   const withdrawals = await Promise.all([
-    request('/player/withdrawals', winningCookie, { amount: 7000 }),
-    request('/player/withdrawals', winningCookie, { amount: 7000 })
+    request('/player/withdrawals', winningCookie, withdrawalBody(f.service, leaderId, 7000)),
+    request('/player/withdrawals', winningCookie, withdrawalBody(f.service, leaderId, 7000))
   ])
   assert.equal(withdrawals.filter((r) => r.status === 200).length, 1)
   assert.equal(withdrawals.filter((r) => r.status === 409).length, 1)
@@ -835,7 +849,7 @@ test('SQLite重启保留业务、密码和会话，数据库与附件统一事�
   const path = join(directory, 'studio.sqlite')
   const first = createStudioService({ dbPath: path, password: PASSWORD, seed: false })
   const token = first.login('admin', PASSWORD).token
-  const customer = first.mutate('admin', '/customers', {
+  const customer = testMutate(first, 'admin', '/customers', {
     name: '持久客户',
     contact: '',
     gameId: '',
@@ -853,3 +867,5 @@ test('SQLite重启保留业务、密码和会话，数据库与附件统一事�
   assert.equal(second.download('admin', attachment.id).data.toString('base64'), PNG)
   second.close()
 })
+
+installTestClientFetch()

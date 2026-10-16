@@ -1,3 +1,5 @@
+import { testMutate } from './helpers/current-intent.mjs'
+import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -17,7 +19,7 @@ function fixture(t) {
     clock: () => new Date('2026-10-13T04:00:00Z')
   })
   t.after(() => service.close())
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const level = mutate('/levels', { name: '免截图测试', delaySeconds: 0 })
   const users = Object.fromEntries(
     ['finance', 'manager', 'owner', 'admin', 'player', 'support'].map((role) => [
@@ -205,7 +207,11 @@ test('后台更正可以记录超接单上限和已停用历史打手，取消�
 test('已提现订单免图重新验收抵销待追回，重复请求不再次结算', (t) => {
   const f = fixture(t)
   const record = f.correct(f.order(), 'completed')
-  const withdrawal = f.mutate('/player/withdrawals', { amount: 7000 }, f.users.player.id)
+  const withdrawal = f.mutate(
+    '/player/withdrawals',
+    withdrawalBody(f.service, f.users.player.id, 7000),
+    f.users.player.id
+  )
   f.mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'approve' })
   f.mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'pay', receipt: f.upload() })
   const requestId = crypto.randomUUID()
@@ -310,6 +316,8 @@ test('同一状态更正请求号仅允许完全相同重试，修改状态或�
     .prepare('SELECT payload_json FROM financial_requests WHERE request_id=?')
     .get(requestId)
   const legacy = JSON.parse(saved.payload_json)
+  // Simulate a pre-v3 financial record without the new successful-request envelope.
+  f.service.db.prepare('DELETE FROM business_requests WHERE request_id=?').run(requestId)
   delete legacy.status
   delete legacy.leaderId
   f.service.db

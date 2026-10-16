@@ -15,7 +15,7 @@ export interface ReportModule {
   dateLabel?: string
   dateKeys?: { key: string; label: string }[]
   fields: ReportField[]
-  rowCount: number
+  rowCount: number | null
 }
 export interface ExportCatalog {
   month: string

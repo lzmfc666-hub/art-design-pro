@@ -112,40 +112,112 @@
       </ElCard>
     </template>
     <ElCard v-else><ElEmpty description="当前账号没有日志查看权限" /></ElCard>
-    <ElDialog v-model="detailOpen" title="审计记录详情" width="min(1040px, 94vw)">
+    <BusinessDetailPanel
+      page-key="audit-record-details"
+      :record-id="detailRecordId || undefined"
+      @restore="queueRestore('detail', $event)"
+      :restore-error="restoreError"
+      v-model="detailOpen"
+      title="审计记录详情"
+    >
       <div v-loading="detailLoading" class="min-h-30">
         <ElAlert v-if="detailError" :title="detailError" type="error" :closable="false" />
         <template v-if="selected">
-          <ElDescriptions :column="2" border class="mb-5">
-            <ElDescriptionsItem label="操作人">{{ selected.actorName }}</ElDescriptionsItem
-            ><ElDescriptionsItem label="时间">{{
-              formatTime(selected.createdAt)
-            }}</ElDescriptionsItem>
-            <ElDescriptionsItem label="动作">{{ selected.action }}</ElDescriptionsItem
-            ><ElDescriptionsItem label="业务记录"
-              >{{ selected.entity }} / {{ selected.entityId }}</ElDescriptionsItem
-            >
-          </ElDescriptions>
-          <ElRow :gutter="16"
-            ><ElCol :xs="24" :md="12"
-              ><h3 class="mb-3 font-medium">修改前</h3
-              ><pre class="audit-value">{{ pretty(selected.before) }}</pre></ElCol
-            ><ElCol :xs="24" :md="12"
-              ><h3 class="mb-3 font-medium">修改后</h3
-              ><pre class="audit-value">{{ pretty(selected.after) }}</pre>
-            </ElCol></ElRow
+          <BusinessDetailHeader
+            :title="selected.action"
+            description="查看当前账号允许读取的原始审计记录。历史内容不授予当前业务操作或凭证权限。"
+            icon="ri:history-line"
+            badge="只读审计"
+            :context="selected.id"
+          />
+          <BusinessDetailSummary
+            :items="[
+              { label: '操作人', value: selected.actorName },
+              { label: '发生时间', value: formatTime(selected.createdAt) },
+              { label: '业务模块', value: selected.entity },
+              { label: '变化字段', value: auditChanges.length + ' 项', hint: '按记录顶层字段比较' }
+            ]"
+          />
+          <BusinessDetailSection title="业务关联与操作上下文">
+            <ElDescriptions :column="2" border class="mb-5">
+              <ElDescriptionsItem label="操作人">{{ selected.actorName }}</ElDescriptionsItem
+              ><ElDescriptionsItem label="时间">{{
+                formatTime(selected.createdAt)
+              }}</ElDescriptionsItem>
+              <ElDescriptionsItem label="动作">{{ selected.action }}</ElDescriptionsItem
+              ><ElDescriptionsItem label="业务记录"
+                >{{ selected.entity }} / {{ selected.entityId }}</ElDescriptionsItem
+              >
+            </ElDescriptions>
+          </BusinessDetailSection>
+          <ElTabs v-model="detailTab"
+            ><ElTabPane name="changes" label="字段变化"
+              ><BusinessDetailSection
+                title="修改前后对照"
+                description="只比较服务端允许返回的字段；嵌套内容保留原值。"
+              >
+                <ElTable :data="auditChanges" border
+                  ><ElTableColumn prop="field" label="字段" min-width="150" /><ElTableColumn
+                    label="修改前"
+                    min-width="280"
+                    ><template #default="{ row }">
+                      <pre class="audit-value">{{ pretty(row.before) }}</pre>
+                    </template></ElTableColumn
+                  ><ElTableColumn label="修改后" min-width="280"
+                    ><template #default="{ row }">
+                      <pre class="audit-value">{{ pretty(row.after) }}</pre>
+                    </template></ElTableColumn
+                  ></ElTable
+                >
+              </BusinessDetailSection></ElTabPane
+            ><ElTabPane name="raw" label="原始记录"
+              ><BusinessDetailSection
+                title="留存的原始数据"
+                description="原字段过滤与脱敏保持不变，用于追溯当次操作。"
+                ><ElRow :gutter="16"
+                  ><ElCol :xs="24" :md="12"
+                    ><h3 class="mb-3 font-medium">修改前</h3
+                    ><pre class="audit-value">{{ pretty(selected.before) }}</pre></ElCol
+                  ><ElCol :xs="24" :md="12"
+                    ><h3 class="mb-3 font-medium">修改后</h3
+                    ><pre class="audit-value">{{ pretty(selected.after) }}</pre>
+                  </ElCol></ElRow
+                ></BusinessDetailSection
+              ></ElTabPane
+            ></ElTabs
           >
         </template>
       </div>
-    </ElDialog>
-    <ElDialog
+    </BusinessDetailPanel>
+    <BusinessDetailPanel
+      page-key="audit-archive-cleanup"
+      @restore="queueRestore('cleanup', $event)"
+      :restore-error="restoreError"
       v-model="purge.open"
       title="完整备份与归档清理"
-      width="min(640px, 94vw)"
       :close-on-click-modal="!maintenanceBusy && !backupBusy"
       :close-on-press-escape="!maintenanceBusy && !backupBusy"
       :show-close="!maintenanceBusy && !backupBusy"
     >
+      <BusinessDetailHeader
+        description="先下载本次精确范围的完整原始备份，核对保存后再清理。实时日志保留，清理无法从网站恢复。"
+        icon="ri:database-2-line"
+        badge="归档维护"
+      />
+      <BusinessDetailSummary
+        :items="[
+          {
+            label: '清理范围',
+            value: purge.beforeDate ? purge.beforeDate + ' 之前的归档' : '待选择日期'
+          },
+          {
+            label: '完整备份',
+            value: purge.backupToken ? '已生成 ' + purge.backupCount + ' 条' : '尚未完成',
+            hint: '日期或范围改变需重新备份'
+          },
+          { label: '确认状态', value: purge.backupConfirmed ? '已确认保存' : '待核对完整文件' }
+        ]"
+      />
       <ElAlert
         title="先选择日期并下载完整原始备份，核对保存后再清理。普通可见日志导出经过脱敏，不能替代完整备份。清理无法从网站恢复，实时日志保留。"
         type="warning"
@@ -153,48 +225,50 @@
         show-icon
         class="mb-5"
       />
-      <ElForm
-        label-position="top"
-        :disabled="maintenanceBusy || backupBusy"
-        @submit.prevent="purgeArchive"
-      >
-        <ElFormItem label="清理此日期之前的归档" required>
-          <ElDatePicker
-            v-model="purge.beforeDate"
-            type="date"
-            value-format="YYYY-MM-DD"
-            class="!w-full"
-          />
-        </ElFormItem>
-        <ElFormItem label="完整归档备份" required>
-          <ElButton
-            type="primary"
-            plain
-            :loading="backupBusy"
-            :disabled="!purge.beforeDate || maintenanceBusy || backupBusy || !storage?.canBackup"
-            @click="downloadBackup"
-            >下载完整归档备份</ElButton
-          >
-          <p v-if="purge.backupToken" class="mt-2 text-sm text-success"
-            >已生成 {{ purge.backupCount }} 条记录的完整备份并开始下载，请核对文件已完整保存。</p
-          >
-          <p v-else class="mt-2 text-xs text-g-500"
-            >完整备份完成后才可勾选确认；修改日期或归档范围变化需要重新备份。</p
-          >
-        </ElFormItem>
-        <ElFormItem label="清理原因" required>
-          <ElInput
-            v-model="purge.reason"
-            type="textarea"
-            :rows="3"
-            maxlength="1000"
-            show-word-limit
-          />
-        </ElFormItem>
-        <ElCheckbox v-model="purge.backupConfirmed" :disabled="!purge.backupToken || backupBusy"
-          >我已核对并保存本次将清理记录的完整原始归档备份</ElCheckbox
+      <BusinessDetailSection title="备份范围与清理依据"
+        ><ElForm
+          label-position="top"
+          :disabled="maintenanceBusy || backupBusy"
+          @submit.prevent="purgeArchive"
         >
-      </ElForm>
+          <ElFormItem label="清理此日期之前的归档" required>
+            <ElDatePicker
+              v-model="purge.beforeDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              class="!w-full"
+            />
+          </ElFormItem>
+          <ElFormItem label="完整归档备份" required>
+            <ElButton
+              type="primary"
+              plain
+              :loading="backupBusy"
+              :disabled="!purge.beforeDate || maintenanceBusy || backupBusy || !storage?.canBackup"
+              @click="downloadBackup"
+              >下载完整归档备份</ElButton
+            >
+            <p v-if="purge.backupToken" class="mt-2 text-sm text-success"
+              >已生成 {{ purge.backupCount }} 条记录的完整备份并开始下载，请核对文件已完整保存。</p
+            >
+            <p v-else class="mt-2 text-xs text-g-500"
+              >完整备份完成后才可勾选确认；修改日期或归档范围变化需要重新备份。</p
+            >
+          </ElFormItem>
+          <ElFormItem label="清理原因" required>
+            <ElInput
+              v-model="purge.reason"
+              type="textarea"
+              :rows="3"
+              maxlength="1000"
+              show-word-limit
+            />
+          </ElFormItem>
+          <ElCheckbox v-model="purge.backupConfirmed" :disabled="!purge.backupToken || backupBusy"
+            >我已核对并保存本次将清理记录的完整原始归档备份</ElCheckbox
+          >
+        </ElForm></BusinessDetailSection
+      >
       <template #footer>
         <ElButton :disabled="maintenanceBusy || backupBusy" @click="purge.open = false"
           >取消</ElButton
@@ -213,15 +287,20 @@
           >确认清理归档</ElButton
         >
       </template>
-    </ElDialog>
+    </BusinessDetailPanel>
   </div>
 </template>
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
   import { onBeforeRouteLeave, useRouter } from 'vue-router'
   import { ElMessage, ElMessageBox } from 'element-plus'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import { studioRequest } from '@/api/studio'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
+  import { businessConfirmMessage } from '@/utils/business/confirm-message'
   import { dataInspectionPermissions } from '@/utils/auth/studio-access'
   import { formatTime, useStudio } from '@/hooks/business/useStudio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
@@ -320,8 +399,17 @@
           'salary-plan',
           'payroll',
           'appearance',
+          'player-content',
           'upload'
-        ].map((value) => ({ value, label: value === 'work-schedule' ? '个人固定班次' : value }))
+        ].map((value) => ({
+          value,
+          label:
+            value === 'work-schedule'
+              ? '个人固定班次'
+              : value === 'player-content'
+                ? '打手端内容'
+                : value
+        }))
       }
     },
     {
@@ -457,18 +545,84 @@
     detailOpen = ref(false),
     detailLoading = ref(false),
     detailError = ref('')
-  async function showDetail(id: string) {
-    if (!can('logs.view')) return
+  const detailTab = ref('changes')
+  const detailRecordId = ref('')
+  const restoreError = ref('')
+  const pendingRestore = ref<{
+    kind: 'detail' | 'cleanup'
+    recordId?: string
+    isCurrent?: () => boolean
+  } | null>(null)
+  function queueRestore(
+    kind: 'detail' | 'cleanup',
+    payload: { recordId?: string; isCurrent?: () => boolean }
+  ) {
+    restoreError.value = ''
+    pendingRestore.value = { kind, ...payload }
+    resumeRestore()
+  }
+  function resumeRestore() {
+    if (pendingRestore.value?.isCurrent?.() === false) {
+      pendingRestore.value = null
+      return
+    }
+    if (!pendingRestore.value || !data.value || maintenanceBusy.value || backupBusy.value) return
+    const request = pendingRestore.value
+    if (!can('logs.view')) {
+      pendingRestore.value = null
+      restoreError.value = '当前账号没有审计读取权限，请返回业务列表。'
+      return
+    }
+    if (request.kind === 'cleanup') {
+      if (storageLoading.value) return
+      if (!can('settings.manage')) {
+        pendingRestore.value = null
+        restoreError.value = '当前账号没有完整归档维护权限，请返回日志页。'
+        return
+      }
+      if (!storage.value && !storageError.value) {
+        void loadStorage()
+        return
+      }
+      pendingRestore.value = null
+      if (storage.value?.canBackup) openPurge()
+      else restoreError.value = '当前无法读取完整备份权限或归档状态，请返回日志页重新核对。'
+    } else {
+      pendingRestore.value = null
+      if (request.recordId) void showDetail(request.recordId, request.isCurrent)
+      else restoreError.value = '审计编号无效，请返回日志列表重新选择。'
+    }
+  }
+  watch([data, storage, storageLoading, storageError, maintenanceBusy, backupBusy], resumeRestore)
+  const auditChanges = computed(() => {
+    if (!selected.value) return []
+    const { before, after } = selected.value
+    const isRecord = (value: unknown): value is Record<string, unknown> =>
+      !!value && typeof value === 'object' && !Array.isArray(value)
+    if (!isRecord(before) && !isRecord(after))
+      return JSON.stringify(before) === JSON.stringify(after)
+        ? []
+        : [{ field: '整体内容', before, after }]
+    const oldValue = isRecord(before) ? before : {}
+    const newValue = isRecord(after) ? after : {}
+    return [...new Set([...Object.keys(oldValue), ...Object.keys(newValue)])]
+      .filter((field) => JSON.stringify(oldValue[field]) !== JSON.stringify(newValue[field]))
+      .map((field) => ({ field, before: oldValue[field], after: newValue[field] }))
+  })
+  async function showDetail(id: string, isCurrent?: () => boolean) {
+    if (!can('logs.view') || isCurrent?.() === false) return
+    detailRecordId.value = id
     const version = ++detailVersion
     detailOpen.value = true
     detailLoading.value = true
     detailError.value = ''
     selected.value = null
+    detailTab.value = 'changes'
     try {
       const result = await request<AuditLog>('logs/' + encodeURIComponent(id))
-      if (version === detailVersion) selected.value = result
+      if (version === detailVersion && isCurrent?.() !== false) selected.value = result
     } catch (cause) {
-      if (version === detailVersion)
+      if (version === detailVersion && isCurrent?.() !== false)
         detailError.value = cause instanceof Error ? cause.message : '详情加载失败'
     } finally {
       if (version === detailVersion) detailLoading.value = false
@@ -607,7 +761,17 @@
     maintenanceBusy.value = true
     try {
       await ElMessageBox.confirm(
-        '确认已保存完整备份，并永久删除 ' + purge.beforeDate + ' 之前的归档记录？',
+        businessConfirmMessage(
+          '确认已保存完整备份，并永久删除 ' + purge.beforeDate + ' 之前的归档记录？',
+          [
+            { label: '清理截止范围', value: purge.beforeDate + ' 之前的归档' },
+            { label: '本次完整备份记录', value: purge.backupCount + ' 条' },
+            { label: '完整文件核对', value: purge.backupConfirmed ? '已确认保存' : '尚未确认' },
+            { label: '清理原因', value: purge.reason.trim() },
+            { label: '实时日志', value: '继续保留' }
+          ],
+          '网站不能恢复已清理归档；日期或范围变化后须重新下载并核对完整备份。'
+        ),
         '确认清理归档',
         {
           type: 'warning',

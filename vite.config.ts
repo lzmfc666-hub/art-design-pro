@@ -9,12 +9,15 @@ import AutoImport from 'unplugin-auto-import/vite'
 import ElementPlus from 'unplugin-element-plus/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import tailwindcss from '@tailwindcss/vite'
+import { createTrustedProxyResolver, sanitizedProxyHeaders } from './server/runtime-protection.mjs'
 // import { visualizer } from 'rollup-plugin-visualizer'
 
 export default ({ mode }: { mode: string }) => {
   const root = process.cwd()
   const env = loadEnv(mode, root)
+  const qaDeclarations = process.env.STUDIO_QA_DECLARATIONS_DIR
   const { VITE_VERSION, VITE_PORT, VITE_BASE_URL, VITE_API_URL, VITE_API_PROXY_URL } = env
+  const resolveAddress = createTrustedProxyResolver(process.env.STUDIO_ADMIN_TRUSTED_PROXIES || '')
 
   console.log(`🚀 API_URL = ${VITE_API_URL}`)
   console.log(`🚀 VERSION = ${VITE_VERSION}`)
@@ -44,7 +47,19 @@ export default ({ mode }: { mode: string }) => {
       proxy: {
         '/api': {
           target: VITE_API_PROXY_URL,
-          changeOrigin: true
+          changeOrigin: true,
+          configure(proxy) {
+            proxy.on('proxyReq', (proxyRequest, request) => {
+              for (const name of proxyRequest.getHeaderNames())
+                if (name === 'forwarded' || name === 'x-real-ip' || name.startsWith('x-forwarded-'))
+                  proxyRequest.removeHeader(name)
+              proxyRequest.setHeader(
+                'x-forwarded-for',
+                sanitizedProxyHeaders(request, { resolveAddress })['x-forwarded-for']
+              )
+              proxyRequest.removeHeader('x-studio-client')
+            })
+          }
         }
       },
       host: true
@@ -86,17 +101,23 @@ export default ({ mode }: { mode: string }) => {
       // 自动按需导入 API
       AutoImport({
         imports: ['vue', 'vue-router', 'pinia', '@vueuse/core'],
-        dts: 'src/types/import/auto-imports.d.ts',
+        dts: qaDeclarations
+          ? path.resolve(qaDeclarations, 'auto-imports.d.ts')
+          : 'src/types/import/auto-imports.d.ts',
         resolvers: [ElementPlusResolver()],
         eslintrc: {
           enabled: true,
-          filepath: './.auto-import.json',
+          filepath: qaDeclarations
+            ? path.resolve(qaDeclarations, 'auto-import.json')
+            : './.auto-import.json',
           globalsPropValue: true
         }
       }),
       // 自动按需导入组件
       Components({
-        dts: 'src/types/import/components.d.ts',
+        dts: qaDeclarations
+          ? path.resolve(qaDeclarations, 'components.d.ts')
+          : 'src/types/import/components.d.ts',
         resolvers: [ElementPlusResolver()]
       }),
       // 按需定制主题配置

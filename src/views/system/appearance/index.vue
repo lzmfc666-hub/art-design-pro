@@ -22,6 +22,22 @@
         >
       </template>
     </BusinessPageHeader>
+    <BusinessDetailSummary
+      v-if="loaded"
+      :items="[
+        { label: '已保存配置版本', value: baseline.revision },
+        {
+          label: '当前编辑状态',
+          value: conflict ? '存在版本冲突' : dirty ? '草稿尚未保存' : '与已保存设置一致',
+          hint: '预览与正式保存分别处理'
+        },
+        {
+          label: '打手订单卡图',
+          value: form.playerOrderCardImage ? '当前草稿已配置图片' : '当前草稿使用原游戏图标',
+          hint: '保存后提供后台读取配置，打手显示以其接入状态为准'
+        }
+      ]"
+    />
 
     <ElAlert
       v-if="!canEdit"
@@ -58,6 +74,7 @@
           <ElTabPane name="brand" label="品牌与页面背景" :disabled="busy" />
           <ElTabPane name="hero" label="主页横幅" :disabled="busy" />
           <ElTabPane name="login" label="登录外观" :disabled="busy" />
+          <ElTabPane name="playerOrderCard" label="打手订单卡片" :disabled="busy" />
           <ElTabPane name="icons" label="菜单与快捷图标" :disabled="busy" />
         </ElTabs>
         <ElForm
@@ -304,6 +321,35 @@
             </section>
           </template>
 
+          <template v-else-if="tab === 'playerOrderCard'">
+            <section class="settings-section order-card-image-settings">
+              <div class="section-title"
+                ><ArtSvgIcon icon="ri:gamepad-line" /><div>
+                  <h3>打手订单卡片图片</h3>
+                  <p>设置一张统一图片，用于打手订单卡片的缩略图位置。</p>
+                </div></div
+              >
+              <ElFormItem label="订单卡片图片"
+                ><AppearanceImageUpload
+                  label="订单卡片图片"
+                  variant="square"
+                  :image-url="form.playerOrderCardImage?.url"
+                  :filename="form.playerOrderCardImage?.name"
+                  recommended="建议清晰的正方形图片，主体置于中央"
+                  :disabled="locked"
+                  @uploaded="setImage('playerOrderCard', $event)"
+                  @remove="removeImage('playerOrderCard')"
+                  @busy="uploading = $event"
+              /></ElFormItem>
+              <p class="field-tip"
+                >所有订单共用此图，移除后恢复原游戏图标。请勿使用收款码、客户凭证或订单完成材料。</p
+              >
+              <p v-if="!form.playerOrderCardImage" class="default-hint"
+                ><ArtSvgIcon icon="ri:gamepad-line" />当前使用原游戏图标，未配置订单卡片图片。</p
+              >
+            </section>
+          </template>
+
           <template v-else>
             <section class="settings-section"
               ><div class="section-title"
@@ -373,7 +419,11 @@
             ><div class="preview-heading"
               ><h3>草稿预览</h3
               ><ElTag :type="previewing ? 'primary' : 'info'" effect="plain" size="small">{{
-                previewing ? '本窗口预览已应用' : '小预览随编辑更新'
+                tab === 'playerOrderCard'
+                  ? '缩略图位置预览'
+                  : previewing
+                    ? '本窗口预览已应用'
+                    : '小预览随编辑更新'
               }}</ElTag></div
             ></template
           >
@@ -403,6 +453,25 @@
               ><small>{{ form.login.description }}</small
               ><div class="mini-login-button">登录</div></div
             >
+          </div>
+          <div v-else-if="tab === 'playerOrderCard'" class="order-card-image-preview">
+            <div class="order-card-preview">
+              <div class="order-card-preview-thumbnail">
+                <img
+                  v-if="form.playerOrderCardImage"
+                  :src="form.playerOrderCardImage.url"
+                  alt="打手订单卡片图片草稿"
+                />
+                <ArtSvgIcon v-else icon="ri:gamepad-line" />
+              </div>
+              <div class="order-card-preview-content">
+                <strong>订单标题</strong>
+                <span>缩略图位置示意</span>
+              </div>
+            </div>
+            <p class="field-tip">{{
+              form.playerOrderCardImage ? '当前草稿使用已选择图片' : '当前草稿使用原游戏图标'
+            }}</p>
           </div>
           <div
             v-else
@@ -444,10 +513,13 @@
               ><div class="mini-data-cards"
                 ><div v-for="index in 4" :key="index"><i /><span /><span /></div></div></div
           ></div>
-          <p class="preview-description"
+          <p v-if="tab === 'playerOrderCard'" class="preview-description"
+            >此处仅预览图片位置，不会修改已保存设置。请使用顶部“保存到工作室”提交。</p
+          >
+          <p v-else class="preview-description"
             >小预览随编辑更新。点击“预览应用”可在当前窗口查看实际外观，登录页可在此预览。</p
           >
-          <div class="preview-actions"
+          <div v-if="tab !== 'playerOrderCard'" class="preview-actions"
             ><ElButton type="primary" plain :disabled="locked" @click="applyPreview"
               ><ArtSvgIcon icon="ri:eye-line" class="mr-1" />预览应用</ElButton
             ><ElButton :disabled="busy || !previewing" @click="store.stopPreview"
@@ -457,7 +529,9 @@
         ><ElCard shadow="never" class="scope-card"
           ><div class="scope-heading"
             ><ArtSvgIcon icon="ri:team-line" /><h3>保存后全工作室共享</h3></div
-          ><p>预览只影响当前窗口，保存后其他成员刷新页面即可使用新的工作室外观。</p
+          ><p v-if="tab === 'playerOrderCard'"
+            >保存后提供统一订单卡片图片，未保存的草稿不会对外生效。</p
+          ><p v-else>预览只影响当前窗口，保存后其他成员刷新页面即可使用新的工作室外观。</p
           ><p>员工原有浅色 / 深色、主题色和布局偏好继续由个人设置管理。</p
           ><p>恢复默认会保存原外观配置，历史上传图片继续保留。</p></ElCard
         ></aside
@@ -467,6 +541,8 @@
 </template>
 
 <script setup lang="ts">
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import { businessConfirmMessage } from '@/utils/business/confirm-message'
   import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
   import { onBeforeRouteLeave, useRoute } from 'vue-router'
   import { ElMessage, ElMessageBox } from 'element-plus'
@@ -512,6 +588,7 @@
     JSON.stringify({
       studioName: value.studioName,
       logo: value.logo,
+      playerOrderCardImage: value.playerOrderCardImage,
       page: value.page,
       hero: value.hero,
       login: value.login,
@@ -588,17 +665,21 @@
     target === 'login' ? form.value.login.background : form.value[target]
 
   function setImage(
-    target: 'logo' | 'page' | 'hero' | 'login' | 'illustration',
+    target: 'logo' | 'page' | 'hero' | 'login' | 'illustration' | 'playerOrderCard',
     attachment: Attachment
   ) {
     if (!canEdit.value) return
     if (target === 'logo') form.value.logo = attachment
+    else if (target === 'playerOrderCard') form.value.playerOrderCardImage = attachment
     else if (target === 'illustration') form.value.login.illustration.image = attachment
     else backgroundFor(target).image = attachment
   }
-  function removeImage(target: 'logo' | 'page' | 'hero' | 'login' | 'illustration') {
+  function removeImage(
+    target: 'logo' | 'page' | 'hero' | 'login' | 'illustration' | 'playerOrderCard'
+  ) {
     if (locked.value) return
     if (target === 'logo') form.value.logo = null
+    else if (target === 'playerOrderCard') form.value.playerOrderCardImage = null
     else if (target === 'illustration')
       form.value.login.illustration = { mode: 'default', image: null }
     else {
@@ -719,12 +800,25 @@
   async function confirmDiscard(message: string) {
     confirming.value = true
     try {
-      await ElMessageBox.confirm(message, '尚有未保存更改', {
-        confirmButtonText: '放弃更改',
-        cancelButtonText: '继续编辑',
-        type: 'warning',
-        closeOnClickModal: false
-      })
+      await ElMessageBox.confirm(
+        businessConfirmMessage(
+          message,
+          [
+            { label: '当前草稿名称', value: form.value.studioName },
+            { label: '草稿基于版本', value: form.value.revision },
+            { label: '本窗口预览', value: previewing.value ? '正在预览' : '未启用' }
+          ],
+          '放弃草稿不保存配置，也不改变其他账号已保存的外观。'
+        ),
+        '尚有未保存更改',
+        {
+          confirmButtonText: '放弃更改',
+          cancelButtonText: '继续编辑',
+          type: 'warning',
+          closeOnHashChange: false,
+          closeOnClickModal: false
+        }
+      )
       return true
     } catch {
       return false
@@ -767,7 +861,15 @@
       confirming.value = true
       try {
         await ElMessageBox.confirm(
-          `最新共享名称为“${store.saved.studioName}”。确认使用当前页面草稿替换最新外观设置？`,
+          businessConfirmMessage(
+            `最新共享名称为“${store.saved.studioName}”。确认使用当前页面草稿替换最新外观设置？`,
+            [
+              { label: '最新已保存版本', value: latestRevision.value },
+              { label: '当前草稿名称', value: candidate.studioName },
+              { label: '草稿统一卡图', value: candidate.playerOrderCardImage?.name || '未配置' }
+            ],
+            '提交仍核对当前权限和最新版本；若再次冲突，会保留草稿供重新核对。'
+          ),
           '核对并保存当前草稿',
           {
             confirmButtonText: '确认替换并保存',
@@ -803,7 +905,15 @@
     confirming.value = true
     try {
       await ElMessageBox.confirm(
-        '将品牌、页面背景、主页横幅、登录背景与文案、毛玻璃和菜单图标恢复为默认外观并保存。历史上传图片继续保留。',
+        businessConfirmMessage(
+          '将品牌、页面背景、主页横幅、登录背景与文案、毛玻璃、打手订单卡片图片和菜单图标恢复为默认外观并保存。历史上传图片继续保留。',
+          [
+            { label: '本次核对版本', value: revision },
+            { label: '当前统一卡图', value: store.saved.playerOrderCardImage?.name || '未配置' },
+            { label: '保存后卡图', value: '未配置，打手显示原游戏图标' }
+          ],
+          '恢复默认会保存共享配置；当前页面草稿不会保留为已保存设置。'
+        ),
         '恢复工作室默认外观',
         {
           confirmButtonText: '确认恢复并保存',
@@ -910,6 +1020,56 @@
 </script>
 
 <style scoped lang="scss">
+  .order-card-preview {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 18px;
+    background: var(--el-bg-color);
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 12px;
+  }
+
+  .order-card-preview-thumbnail {
+    display: grid;
+    flex: 0 0 64px;
+    place-items: center;
+    height: 64px;
+    overflow: hidden;
+    color: var(--el-color-primary);
+    background: var(--el-color-primary-light-9);
+    border-radius: 10px;
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    :deep(.art-svg-icon) {
+      width: 30px;
+      height: 30px;
+      font-size: 30px;
+    }
+  }
+
+  .order-card-preview-content {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+
+    strong {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    span {
+      font-size: 12px;
+      color: var(--el-text-color-secondary);
+    }
+  }
+
   .mini-login {
     min-height: 340px;
     padding: 18px;

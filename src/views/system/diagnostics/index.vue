@@ -93,8 +93,11 @@
             </ElTableColumn>
             <ElTableColumn prop="entityId" label="关联记录" min-width="190" show-overflow-tooltip />
             <ElTableColumn prop="message" label="检查说明" min-width="320" />
-            <ElTableColumn label="操作" width="100" fixed="right">
+            <ElTableColumn label="操作" width="180" fixed="right">
               <template #default="{ row }">
+                <ElButton type="primary" link @click="selectedIssueId = row.id"
+                  >查看检查详情</ElButton
+                >
                 <ElButton
                   v-if="row.entity === 'order' && row.entityId"
                   type="primary"
@@ -118,21 +121,113 @@
       <ElCard v-else-if="!loading && !error" shadow="never">
         <ElEmpty description="点击开始数据检查，生成当前数据的检查报告" />
       </ElCard>
+      <BusinessDetailPanel
+        v-model="issueOpen"
+        page-key="diagnostic-issue"
+        :record-id="selectedIssueId"
+        :restore-error="inspectionRestoreError"
+        @restore="restoreInspectionIssue($event)"
+        title="数据检查事项详情"
+        class="business-detail-dialog"
+        width="min(880px, 96vw)"
+      >
+        <template v-if="selectedIssue">
+          <BusinessDetailHeader
+            :title="selectedCheck?.label || '业务数据核对'"
+            description="核对本次检查发现的关联记录和说明，人工确认后回原模块处理；本窗口没有自动修复或回滚操作。"
+            icon="ri:shield-check-line"
+            :context="`检查时间：${formatTime(report?.generatedAt)}`"
+          />
+          <BusinessDetailSummary
+            :items="[
+              {
+                label: '结果级别',
+                value: selectedIssue.severity === 'error' ? '异常' : '待核对',
+                tone: selectedIssue.severity === 'error' ? 'danger' : 'warning'
+              },
+              { label: '业务模块', value: entityLabels[selectedIssue.entity] || '业务记录' },
+              { label: '检查范围记录数', value: selectedCheck?.checkedRecords ?? '—' }
+            ]"
+          />
+          <BusinessDetailSection title="关联与核对说明"
+            ><ElDescriptions :column="1" border
+              ><ElDescriptionsItem label="关联记录">{{
+                selectedIssue.entityId || '未提供'
+              }}</ElDescriptionsItem
+              ><ElDescriptionsItem label="检查说明">{{ selectedIssue.message }}</ElDescriptionsItem
+              ><ElDescriptionsItem label="核对口径">{{
+                selectedCheck?.description || '以本次服务端检查说明为准'
+              }}</ElDescriptionsItem></ElDescriptions
+            ></BusinessDetailSection
+          >
+          <BusinessDetailSection title="结果边界"
+            ><p class="text-sm text-g-500"
+              >此事项来自本次已返回检查集；服务端结果截断时仍须核对完整摘要，并在处理后重新检查。检查不改订单、资金、材料或审计。</p
+            ></BusinessDetailSection
+          >
+        </template>
+        <template #footer
+          ><ElButton @click="issueOpen = false">关闭</ElButton
+          ><ElButton
+            v-if="selectedIssue?.entity === 'order' && selectedIssue.entityId"
+            type="primary"
+            @click="openOrder(selectedIssue.entityId)"
+            >查看关联订单</ElButton
+          ></template
+        >
+      </BusinessDetailPanel>
     </template>
     <ElCard v-else><ElEmpty description="当前账号没有完整业务检查权限" /></ElCard>
   </div>
 </template>
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { studioRequest } from '@/api/studio'
   import { useStudio, formatTime } from '@/hooks/business/useStudio'
   import { dataInspectionPermissions } from '@/utils/auth/studio-access'
   import type { DiagnosticsReport } from '@/types/studio'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   defineOptions({ name: 'DataDiagnostics' })
   const router = useRouter()
   const { can, clearSession } = useStudio()
   const allowed = computed(() => dataInspectionPermissions.every(can))
   const report = ref<DiagnosticsReport | null>(null)
+  const selectedIssueId = ref('')
+  const inspectionRestoreError = ref('')
+  async function restoreInspectionIssue({
+    recordId: id,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    inspectionRestoreError.value = '该检查事项无法在当前结果中恢复，请返回重新检查。'
+    if (!id || !allowed.value) return
+    await runInspection()
+    if (
+      isCurrent?.() !== false &&
+      allowed.value &&
+      report.value?.issues.some((issue) => issue.id === id)
+    ) {
+      selectedIssueId.value = id
+      inspectionRestoreError.value = ''
+    }
+  }
+  const selectedIssue = computed(() =>
+    allowed.value ? report.value?.issues.find((row) => row.id === selectedIssueId.value) : undefined
+  )
+  const selectedCheck = computed(() =>
+    report.value?.checks.find((row) => row.id === selectedIssue.value?.checkId)
+  )
+  const issueOpen = computed({
+    get: () => Boolean(selectedIssue.value),
+    set: (value) => {
+      if (!value) selectedIssueId.value = ''
+    }
+  })
   const loading = ref(false)
   const error = ref('')
   const severity = ref<'all' | 'error' | 'warning'>('all')

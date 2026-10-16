@@ -1,3 +1,4 @@
+import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioServer } from '../server/index.mjs'
@@ -64,7 +65,7 @@ test('导出 HTTP 使用真实会话，非法模块字段或账期被拒绝', as
 
 test('下载时重新读取权限，旧目录不能导出已撤销的工资权限', async (t) => {
   const { server, login, request } = await fixture(t)
-  const user = server.service.mutate('admin', '/users', {
+  const user = testMutate(server.service, 'admin', '/users', {
     username: 'export-finance',
     name: '导出财务',
     role: 'finance',
@@ -82,7 +83,7 @@ test('下载时重新读取权限，旧目录不能导出已撤销的工资权�
     (await request('/exports/download', cookie, { month: '2026-10', modules })).status,
     200
   )
-  server.service.mutate('admin', '/users', {
+  testMutate(server.service, 'admin', '/users', {
     ...user,
     permissionOverrides: { 'salary.view': false, 'salary.all': false, 'salary.manage': false }
   })
@@ -97,7 +98,7 @@ test('下载时重新读取权限，旧目录不能导出已撤销的工资权�
 test('导出全量可见审计记录，页面列表上限不截断报表', async (t) => {
   const { server, login, request } = await fixture(t)
   for (let index = 0; index < 1005; index++)
-    server.service.mutate('admin', '/profile', { name: `审计导出${index}` })
+    testMutate(server.service, 'admin', '/profile', { name: `审计导出${index}` })
   const cookie = await login('admin')
   const page = await request('/logs?current=1&size=20', cookie)
   assert.equal(page.status, 200)
@@ -128,7 +129,7 @@ test('导出全量可见审计记录，页面列表上限不截断报表', async
 test('客服和客服主管真实登录后目录、预览、下载全部拒绝，个人授权覆盖无法绕过', async (t) => {
   const { server, login, request } = await fixture(t)
   for (const role of ['support', 'support_lead']) {
-    const actor = server.service.mutate('admin', '/users', {
+    const actor = testMutate(server.service, 'admin', '/users', {
       username: `blocked-${role}`,
       name: role,
       role,
@@ -151,3 +152,5 @@ test('客服和客服主管真实登录后目录、预览、下载全部拒绝�
       )
   }
 })
+
+installTestClientFetch()

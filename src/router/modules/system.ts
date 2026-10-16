@@ -39,6 +39,17 @@ export const systemRoutes: AppRouteRecord = {
       }
     },
     {
+      path: 'player-content',
+      name: 'PlayerContentManagement',
+      component: '/system/player-content',
+      meta: {
+        title: '打手端内容管理',
+        icon: 'ri:slideshow-3-line',
+        studioPermissions: ['settings.manage'],
+        keepAlive: false
+      }
+    },
+    {
       path: 'menu',
       name: 'Menus',
       component: '/system/menu',

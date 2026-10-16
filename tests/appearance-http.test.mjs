@@ -1,3 +1,4 @@
+import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioServer } from '../server/index.mjs'
@@ -22,7 +23,7 @@ test('外观 HTTP 仅授权管理员写入，共享品牌图片须登录，版�
     assert.equal(response.status, 200)
     return response.headers.get('set-cookie').split(';')[0]
   }
-  const staff = server.service.mutate('admin', '/users', {
+  const staff = testMutate(server.service, 'admin', '/users', {
     username: 'appearance-staff',
     name: '外观客服',
     role: 'support',
@@ -63,3 +64,5 @@ test('外观 HTTP 仅授权管理员写入，共享品牌图片须登录，版�
   assert.equal((await call(image.url.replace('/api/studio', ''), employee)).status, 403)
   assert.equal((await call(image.url.replace('/api/studio', ''), admin)).status, 200)
 })
+
+installTestClientFetch()

@@ -21,7 +21,21 @@ async function readRouteModule(relativePath) {
     [],
     `路由源码应可转译：${relativePath}`
   )
-  return import(`data:text/javascript;base64,${Buffer.from(result.outputText).toString('base64')}`)
+  let output = result.outputText
+  const dependencyPattern = /from ['"]([^'"]+)['"]/g
+  const dependencies = [...output.matchAll(dependencyPattern)]
+  for (const dependency of dependencies) {
+    if (!dependency[1].startsWith('.')) continue
+    const dependencyUrl = new URL(`${dependency[1]}.ts`, url)
+    const nested = ts.transpileModule(readFileSync(dependencyUrl, 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 }
+    }).outputText
+    output = output.replace(
+      dependency[0],
+      `from 'data:text/javascript;base64,${Buffer.from(nested).toString('base64')}'`
+    )
+  }
+  return import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`)
 }
 
 const { staticRoutes } = await readRouteModule('../src/router/routes/staticRoutes.ts')

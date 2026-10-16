@@ -53,6 +53,9 @@ import { ApiStatus } from '@/utils/http/status'
 import { isHttpError } from '@/utils/http/error'
 import { RouteRegistry, MenuProcessor, IframeRouteManager, RoutePermissionValidator } from '../core'
 import { canAccessStudioPage } from '@/utils/auth/studio-access'
+import { useStudioStore } from '@/store/modules/studio'
+import { playerClientUrl } from '@/utils/auth/player-client'
+import { isPlayerEntryPath } from '@/utils/auth/admin-entry'
 
 // 路由注册器实例
 let routeRegistry: RouteRegistry | null = null
@@ -150,6 +153,20 @@ async function handleRouteGuard(
   // 启动进度条
   if (settingStore.showNprogress) {
     NProgress.start()
+  }
+
+  // 旧手机地址仅跳转到独立工程；后台不再载入打手页面。
+  if (isPlayerEntryPath(to.path)) {
+    NProgress.done()
+    window.location.replace(playerClientUrl(to.fullPath))
+    next(false)
+    return
+  }
+  const studioStore = useStudioStore()
+  if (studioStore.user?.role === 'player') {
+    // 兼容旧共享会话：只清理后台状态，后台入口始终允许重新登录。
+    userStore.clearSession()
+    studioStore.clearSession()
   }
 
   // 1. 检查登录状态

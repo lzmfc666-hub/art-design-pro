@@ -1,0 +1,19 @@
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  min-height: 100%;
+  background: #f1f7fd;
+}
+body {
+  -webkit-text-size-adjust: 100%;
+}
+button {
+  border: 0;
+}
+input,
+select,
+textarea {
+  margin: 0;
+}

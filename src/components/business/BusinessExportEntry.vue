@@ -37,7 +37,8 @@
         '/finance/settlement',
         '/finance/salary',
         '/dashboard/analysis',
-        '/system/diagnostics'
+        '/system/diagnostics',
+        '/system/player-content'
       ].includes(route.path) &&
       (route.path !== '/system/appearance' || can('settings.manage')) &&
       user.value?.role !== 'player'

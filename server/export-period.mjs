@@ -60,8 +60,14 @@ export function exportPeriod(request = {}, state = {}, now = new Date()) {
       if (date && date <= today) dates.push(date)
     }
     for (const value of state.exportOnlyDates || []) include(value)
-    for (const order of state.orders || [])
+    for (const order of state.orders || []) {
       for (const key of ['createdAt', 'paidAt', 'completedAt', 'canceledAt']) include(order[key])
+      for (const row of order.returnRequests || []) {
+        include(row.requestedAt)
+        include(row.processedAt)
+      }
+      for (const row of order.rejections || []) include(row.rejectedAt)
+    }
     for (const table of [
       'refunds',
       'withdrawals',
@@ -73,7 +79,14 @@ export function exportPeriod(request = {}, state = {}, now = new Date()) {
       'logs'
     ])
       for (const row of state[table] || []) {
-        for (const key of ['date', 'createdAt', 'processedAt', 'paidAt', 'resolvedAt'])
+        for (const key of [
+          'date',
+          'createdAt',
+          'processedAt',
+          'paidAt',
+          'resolvedAt',
+          'canceledAt'
+        ])
           include(row[key])
         if (table === 'payrolls' && /^\d{4}-(0[1-9]|1[0-2])$/.test(row.month || ''))
           include(`${row.month}-01`)
@@ -109,11 +122,15 @@ export function buildPeriodExportSnapshot({ base, state, request, now, monthRepo
       throw new ApiError('核算月份与当前数据不一致')
     return result
   }
+  if (base.skipReportComputation) return result
   const inRange = (value) => {
     const date = dateOf(value)
     return Boolean(date && date >= period.start && date <= period.end)
   }
-  const profitVisible = base.permissions.includes('profit.view')
+  const profitVisible =
+    !base.skipReportComputation &&
+    base.user.role !== 'player' &&
+    base.permissions.includes('profit.view')
   const months = []
   const cursor = dayValue(`${period.start.slice(0, 7)}-01`)
   const finalMonth = period.end.slice(0, 7)
@@ -177,7 +194,8 @@ export function buildPeriodExportSnapshot({ base, state, request, now, monthRepo
       }
     })
   const salaryVisible =
-    base.permissions.includes('salary.all') || base.permissions.includes('salary.view')
+    base.user.role !== 'player' &&
+    (base.permissions.includes('salary.all') || base.permissions.includes('salary.view'))
   const allSalary = base.permissions.includes('salary.all')
   const payrolls = salaryVisible
     ? (state.payrolls || [])

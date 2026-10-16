@@ -1,4 +1,8 @@
 import type { Attachment } from '@/types/studio'
+import { useStudioStore } from '@/store/modules/studio'
+import { setStudioMutationActorResolver } from './studio-mutation'
+
+setStudioMutationActorResolver(() => useStudioStore().user?.id)
 
 /** 工作室接口沿用当前站点的服务器会话，业务金额以分传输。 */
 export async function studioRequest<T>(
@@ -7,17 +11,30 @@ export async function studioRequest<T>(
   method = 'GET',
   signal?: AbortSignal
 ): Promise<T> {
+  const actorId =
+    body &&
+    typeof body === 'object' &&
+    'expectedActorId' in body &&
+    typeof body.expectedActorId === 'string'
+      ? body.expectedActorId
+      : useStudioStore().user?.id
   const response = await fetch(`/api/studio/${path.replace(/^\//, '')}`, {
     method,
     signal,
     credentials: 'same-origin',
-    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    headers: {
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(actorId && method !== 'GET' && method !== 'HEAD' ? { 'X-Studio-Actor': actorId } : {})
+    },
     body: body === undefined ? undefined : JSON.stringify(body)
   })
   const result = await response.json().catch(() => ({ message: '后台连接失败，请稍后重试' }))
   if (!response.ok)
     throw Object.assign(new Error(result.message || '操作失败，请重试'), {
-      status: response.status
+      status: response.status,
+      code: result.code,
+      details: result.details,
+      retryAfter: response.headers.get('Retry-After')
     })
   return result as T
 }

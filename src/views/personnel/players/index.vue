@@ -135,8 +135,13 @@
       account-kind="player"
       @busy="editorBusy = $event"
       @saved="profileSaved"
+      @restore="restorePlayerEditor"
     />
-    <ElDrawer
+    <BusinessDetailPanel
+      page-key="player-detail"
+      :record-id="selected?.id"
+      @restore="restorePlayerDetail"
+      class="business-detail-drawer"
       v-model="detailOpen"
       :title="selected ? `${selected.name} · 打手账户与历史` : '打手详情'"
       size="min(1100px,96vw)"
@@ -148,6 +153,25 @@
       @closed="selected = null"
     >
       <template v-if="selected">
+        <BusinessDetailHeader
+          :title="selected.name"
+          description="打手档案、操作开关与独立资金账户，按当前权限分别展示。"
+          icon="ri:gamepad-line"
+          :badge="selected.status === 'active' ? '启用账号' : '停用账号'"
+          :context="selected.username"
+        />
+        <BusinessDetailSummary
+          :items="[
+            {
+              label: '执行中 / 上限',
+              value: `${selected.activeOrders ?? 0} / ${selected.maxActiveOrders}`,
+              hint: '本人作为有效负责人的接单名额'
+            },
+            { label: '登录', value: canLogin(selected) ? '允许' : '禁止' },
+            { label: '接新订单', value: access(selected, 'claim') ? '允许' : '禁止' },
+            { label: '申请新提现', value: access(selected, 'withdraw') ? '允许' : '禁止' }
+          ]"
+        />
         <ElDescriptions :column="2" border class="mb-4"
           ><ElDescriptionsItem label="登录账号">{{ selected.username }}</ElDescriptionsItem
           ><ElDescriptionsItem label="打手等级">{{
@@ -191,17 +215,20 @@
           :user-id="selected.id"
         />
       </template>
-    </ElDrawer>
+    </BusinessDetailPanel>
   </div>
 </template>
 
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
   import { onBeforeRouteLeave, useRoute } from 'vue-router'
   import { ElMessage } from 'element-plus'
   import { studioRequest } from '@/api/studio'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import BusinessStatCard from '@/components/business/BusinessStatCard.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
   import { money, useStudio } from '@/hooks/business/useStudio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import UserDialog from '@/views/system/user/modules/user-dialog.vue'
@@ -466,6 +493,61 @@
     detailTab.value = canFunds.value ? 'wallet' : 'history'
     detailOpen.value = true
   }
+  async function restorePlayerDetail({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    if (!recordId || pageBusy.value) return
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      if (!canView.value) return
+      const row = await studioRequest<PlayerListRecord>(`players/${encodeURIComponent(recordId)}`)
+      if (isCurrent && !isCurrent()) return
+      if (!canView.value) return
+      showDetail(row)
+      const keys = Array.isArray(route.query.secondary)
+        ? route.query.secondary
+        : [route.query.secondary]
+      if (
+        keys.some((key) => typeof key === 'string' && key.startsWith('player-deposit-')) &&
+        canFunds.value
+      )
+        detailTab.value = 'deposits'
+      else if (keys.includes('player-order-assignments') && canHistory.value)
+        detailTab.value = 'history'
+    } catch (cause) {
+      if ((cause as { status?: number }).status === 401) clearSession()
+      selected.value = null
+      ElMessage.error(cause instanceof Error ? cause.message : '打手详情读取失败')
+    }
+  }
+  async function restorePlayerEditor({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      if (!canManage.value) return
+      if (recordId === 'new') await edit()
+      if (isCurrent && !isCurrent()) return
+      else if (recordId) {
+        const row = await studioRequest<PlayerListRecord>(`players/${encodeURIComponent(recordId)}`)
+        if (isCurrent && !isCurrent()) return
+        await edit(row)
+        if (isCurrent && !isCurrent()) return
+      }
+    } catch (cause) {
+      ElMessage.error(cause instanceof Error ? cause.message : '详情读取失败，请返回列表重试')
+    }
+  }
   function closeDetail(done: () => void) {
     if (pageBusy.value) return void ElMessage.warning('正在保存或上传，请稍后关闭')
     done()
@@ -482,9 +564,6 @@
       ElMessage.warning('正在保存或上传，请稍后离开')
       return false
     }
-    editorOpen.value = false
-    detailOpen.value = false
-    selected.value = null
     return true
   })
   watch(

@@ -1,16 +1,29 @@
 <script setup lang="ts">
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, nextTick, reactive, ref, watch } from 'vue'
   import { useRouter, onBeforeRouteLeave } from 'vue-router'
   import { ElMessage, ElMessageBox } from 'element-plus'
-  import type { Attachment, Customer, CustomerOrderReference, OrderTemplate } from '@/types/studio'
+  import type {
+    Attachment,
+    Customer,
+    CustomerOrderReference,
+    OrderDispatchTarget,
+    OrderPage,
+    OrderTemplate,
+    Order
+  } from '@/types/studio'
   import { useStudio, money, formatTime } from '@/hooks/business/useStudio'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import BusinessUpload from '@/components/business/BusinessUpload.vue'
   import { rulesForPlatform } from '@/utils/business/platform-rules'
   import { useMediaQuery } from '@vueuse/core'
   import { studioRequest } from '@/api/studio'
+  import { createStudioMutationIntent } from '@/api/studio-mutation'
+  import { businessConfirmMessage } from '@/utils/business/confirm-message'
 
-  const { data, user, can, mutate, loading, refresh, clearSession } = useStudio()
+  const { data, user, can, mutate, refresh, clearSession } = useStudio()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const router = useRouter()
   const saving = ref(false)
@@ -51,6 +64,7 @@
     amount: null as number | null,
     reward: null as number | null,
     remark: '',
+    playerRemark: '',
     dispatchMode: 'pool' as 'pool' | 'direct',
     assignedTo: '',
     payOnArrival: false,
@@ -63,13 +77,76 @@
   const balanceLoading = ref(false)
   const balanceError = ref('')
   let balanceVersion = 0
-  let orderRequestId = crypto.randomUUID()
+  const orderIntent = createStudioMutationIntent()
+  const dispatchTargets = ref<OrderDispatchTarget[]>([])
+  const targetsLoading = ref(false)
+  const targetsError = ref('')
+  let targetsVersion = 0
+  async function loadTargets() {
+    if (!can('orders.create')) return
+    const version = ++targetsVersion
+    const accountId = user.value?.id
+    targetsLoading.value = true
+    targetsError.value = ''
+    try {
+      const result = await studioRequest<{ records: OrderDispatchTarget[] }>(
+        'orders/dispatch-targets'
+      )
+      if (version === targetsVersion && accountId === user.value?.id)
+        dispatchTargets.value = result.records
+    } catch (cause) {
+      if (version === targetsVersion) targetsError.value = errorText(cause)
+      if ((cause as { status?: number }).status === 401) clearSession()
+    } finally {
+      if (version === targetsVersion) targetsLoading.value = false
+    }
+  }
+  function refreshPlayerOptions(visible: boolean) {
+    if (visible) void loadTargets()
+  }
+  const pendingOrders = ref<Order[]>([])
+  const pendingTotal = ref(0)
+  const pendingLoading = ref(false)
+  let pendingVersion = 0
+  async function loadPendingOrders() {
+    if (!can('orders.view')) {
+      pendingOrders.value = []
+      pendingTotal.value = 0
+      return
+    }
+    const version = ++pendingVersion
+    const accountId = user.value?.id
+    pendingLoading.value = true
+    try {
+      const result = await studioRequest<OrderPage>('orders?current=1&size=8&status=pending')
+      if (version === pendingVersion && accountId === user.value?.id && can('orders.view')) {
+        pendingOrders.value = result.records
+        pendingTotal.value = result.total
+      }
+    } catch (cause) {
+      if (version === pendingVersion) ElMessage.warning(errorText(cause))
+    } finally {
+      if (version === pendingVersion) pendingLoading.value = false
+    }
+  }
   watch(
-    () => JSON.stringify(form),
+    [() => user.value?.id, () => can('orders.create')],
     () => {
-      orderRequestId = crypto.randomUUID()
+      dispatchTargets.value = []
+      targetsVersion++
+      void loadTargets()
     },
-    { flush: 'sync' }
+    { immediate: true }
+  )
+  watch(
+    [() => user.value?.id, () => can('orders.view')],
+    () => {
+      pendingVersion++
+      pendingOrders.value = []
+      pendingTotal.value = 0
+      void loadPendingOrders()
+    },
+    { immediate: true }
   )
   async function loadCustomerBalance() {
     const version = ++balanceVersion
@@ -130,6 +207,7 @@
         form.roomCode ||
         form.gameId ||
         form.remark ||
+        form.playerRemark ||
         form.receipt ||
         customerDraft.name ||
         customerDraft.contact
@@ -144,11 +222,31 @@
     }
     if (!dirty.value) return true
     try {
-      await ElMessageBox.confirm('当前订单尚未发布，离开后会丢失已填写内容。', '离开下单页面', {
-        confirmButtonText: '离开页面',
-        cancelButtonText: '继续填写',
-        type: 'warning'
-      })
+      await ElMessageBox.confirm(
+        businessConfirmMessage(
+          '当前订单尚未发布，离开后会丢失已填写内容。',
+          [
+            { label: '当前项目', value: selectedTemplate.value?.name || '尚未选择' },
+            {
+              label: '客户',
+              value:
+                data.value?.customers.find((row) => row.id === form.customerId)?.name || '尚未选择'
+            },
+            {
+              label: '订单金额',
+              value: form.amount == null ? '尚未填写' : money(toCents(form.amount))
+            }
+          ],
+          '放弃仅针对当前未发布的订单内容。'
+        ),
+        '离开下单页面',
+        {
+          confirmButtonText: '离开页面',
+          cancelButtonText: '继续填写',
+          closeOnHashChange: false,
+          type: 'warning'
+        }
+      )
       return true
     } catch {
       return false
@@ -166,18 +264,12 @@
   )
   const players = computed(
     () =>
-      data.value?.users.filter(
+      dispatchTargets.value.filter(
         (item) =>
-          item.role === 'player' &&
           item.status === 'active' &&
           item.playerAccess?.login !== false &&
           item.playerAccess?.claim !== false
       ) ?? []
-  )
-  const pendingOrders = computed(() =>
-    (data.value?.orders ?? [])
-      .filter((item) => item.status === 'pending')
-      .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
   )
   const toCents = (amount: number | null) => Math.round(Number(amount) * 100)
   const personName = (id: string | null) =>
@@ -210,6 +302,50 @@
       customerReference.externalOrderNo = form.externalOrderNo
     }
     customerDialog.value = true
+  }
+  async function restoreQuickCustomer({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      if (!can('orders.create') || operationBusy.value) return
+      if (recordId === 'new') {
+        Object.assign(customerDraft, {
+          id: '',
+          name: '',
+          contact: '',
+          gameId: '',
+          remark: '',
+          platformId: null
+        })
+        savedCustomerReferences.value = []
+      } else {
+        const row = data.value?.customers.find((item) => item.id === recordId)
+        if (!row) return
+        Object.assign(customerDraft, {
+          id: row.id,
+          name: row.name,
+          contact: row.contact,
+          gameId: row.gameId,
+          remark: row.remark,
+          platformId: row.platformId
+        })
+        const page = await studioRequest<{ records: CustomerOrderReference[] }>(
+          `customers/${encodeURIComponent(row.id)}/order-references?current=1&size=20`
+        )
+        if (isCurrent && !isCurrent()) return
+        savedCustomerReferences.value = page.records
+      }
+      await openCustomerDialog()
+      if (isCurrent && !isCurrent()) return
+    } catch (cause) {
+      ElMessage.error(cause instanceof Error ? cause.message : '详情读取失败，请返回列表重试')
+    }
   }
   watch(
     () => customerDraft.platformId,
@@ -352,6 +488,8 @@
 
   async function submitOrder() {
     if (operationBusy.value) return
+    if (form.dispatchMode === 'direct' && (targetsLoading.value || targetsError.value))
+      return void ElMessage.warning(targetsError.value || '正在读取最新打手名额，请稍后确认')
     const balancePayment = form.paymentMethod === 'balance'
     if (
       balancePayment &&
@@ -406,25 +544,30 @@
     }
     saving.value = true
     try {
-      const result = (await mutate('/orders', {
-        ...form,
-        requestId: orderRequestId,
-        amount: toCents(form.amount),
-        reward: toCents(form.reward),
-        receivedAmount: balancePayment
-          ? toCents(form.amount)
-          : form.payOnArrival
-            ? 0
-            : toCents(form.receivedAmount),
-        paidAt: balancePayment || form.payOnArrival ? null : form.paidAt,
-        receipt:
-          balancePayment || form.payOnArrival || !rules.value.requiresReceipt ? null : form.receipt,
-        shopId: form.shopId || null,
-        assignedTo: form.dispatchMode === 'direct' ? form.assignedTo : null,
-        roomCode: form.roomCode.trim(),
-        gameId: form.gameId.trim(),
-        externalOrderNo: form.externalOrderNo.trim()
-      })) as { id?: string; order?: { id: string } }
+      const result = (await mutate(
+        '/orders',
+        orderIntent.prepare('/orders', {
+          ...form,
+          amount: toCents(form.amount),
+          reward: toCents(form.reward),
+          receivedAmount: balancePayment
+            ? toCents(form.amount)
+            : form.payOnArrival
+              ? 0
+              : toCents(form.receivedAmount),
+          paidAt: balancePayment || form.payOnArrival ? null : form.paidAt,
+          receipt:
+            balancePayment || form.payOnArrival || !rules.value.requiresReceipt
+              ? null
+              : form.receipt,
+          shopId: form.shopId || null,
+          assignedTo: form.dispatchMode === 'direct' ? form.assignedTo : null,
+          roomCode: form.roomCode.trim(),
+          gameId: form.gameId.trim(),
+          externalOrderNo: form.externalOrderNo.trim()
+        })
+      )) as { id?: string; order?: { id: string } }
+      orderIntent.complete()
       ElMessage.success(
         form.dispatchMode === 'direct' ? '订单已发布，等待指定打手接单' : '订单已发布到抢单池'
       )
@@ -445,6 +588,7 @@
           amount: null,
           reward: null,
           remark: '',
+          playerRemark: '',
           dispatchMode: 'pool',
           assignedTo: '',
           payOnArrival: false,
@@ -455,6 +599,7 @@
         })
       }
     } catch (error) {
+      orderIntent.fail(error)
       ElMessage.error(errorText(error))
     } finally {
       saving.value = false
@@ -466,6 +611,8 @@
   onMounted(() => refresh().catch(() => {}))
   onUnmounted(() => {
     balanceVersion++
+    targetsVersion++
+    pendingVersion++
   })
 </script>
 <template>
@@ -500,237 +647,286 @@
             :disabled="operationBusy"
             @submit.prevent="submitOrder"
           >
-            <ElFormItem label="订单项目" required>
-              <ElSelect
-                v-model="form.templateId"
-                filterable
-                placeholder="选择已启用的订单模板"
-                @change="changeTemplate"
-              >
-                <ElOption
-                  v-for="item in templates"
-                  :key="item.id"
-                  :label="item.name + ' · ' + item.game"
-                  :value="item.id"
-                />
-              </ElSelect>
-            </ElFormItem>
-            <ElAlert
-              v-if="selectedTemplate"
-              :title="selectedTemplate.description || selectedTemplate.name"
-              type="info"
-              :closable="false"
-              class="mb-5"
-            />
-            <ElRow :gutter="20">
-              <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="客户档案" required
-                  ><div class="flex w-full gap-2"
-                    ><ElSelect v-model="form.customerId" filterable placeholder="选择客户"
-                      ><ElOption
-                        v-for="item in data?.customers"
-                        :key="item.id"
-                        :value="item.id"
-                        :label="item.name + (item.contact ? ' · ' + item.contact : '')" /></ElSelect
-                    ><ElButton :disabled="operationBusy" @click="openCustomerDialog"
-                      >新增</ElButton
-                    ></div
-                  ></ElFormItem
-                ></ElCol
-              >
-              <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="订单来源" required
-                  ><ElSelect v-model="form.platformId" placeholder="选择来源"
-                    ><ElOption
-                      v-for="item in data?.platforms"
-                      :key="item.id"
-                      :value="item.id"
-                      :label="item.name" /></ElSelect></ElFormItem
-              ></ElCol>
-              <ElCol v-if="shops.length || rules.requiresShop" :xs="24" :sm="12"
-                ><ElFormItem label="来源店铺" :required="rules.requiresShop"
-                  ><ElSelect
-                    v-model="form.shopId"
-                    :clearable="!rules.requiresShop"
-                    placeholder="选择同来源店铺"
-                    ><ElOption
-                      v-for="item in shops"
-                      :key="item.id"
-                      :value="item.id"
-                      :label="item.name" /></ElSelect
-                  ><p v-if="!shops.length" class="text-xs text-warning"
-                    >请先在业务配置中建立店铺。</p
-                  ></ElFormItem
-                ></ElCol
-              >
-              <ElCol v-if="rules.requiresExternalOrderNo" :xs="24" :sm="12"
-                ><ElFormItem label="平台订单号" required
-                  ><ElInput
-                    v-model="form.externalOrderNo"
-                    maxlength="128"
-                    placeholder="填写完整平台订单号" /></ElFormItem
-              ></ElCol>
-              <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="房间码"
-                  ><ElInput
-                    v-model="form.roomCode"
-                    maxlength="100"
-                    placeholder="房间码与游戏 ID 至少填一项" /></ElFormItem
-              ></ElCol>
-              <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="客户游戏 ID"
-                  ><ElInput v-model="form.gameId" maxlength="100" /></ElFormItem
-              ></ElCol>
-              <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="地图"
-                  ><ElSelect v-model="form.map" filterable allow-create default-first-option
-                    ><ElOption
-                      v-for="item in [
-                        '不限',
-                        '零号大坝',
-                        '长弓溪谷',
-                        '巴克什',
-                        '航天基地',
-                        '潮汐监狱'
-                      ]"
-                      :key="item"
-                      :value="item"
-                      :label="item" /></ElSelect></ElFormItem
-              ></ElCol>
-              <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="客户订单金额（元）" required
-                  ><ElInputNumber
-                    v-model="form.amount"
-                    :min="0.01"
-                    :precision="2"
-                    :step="0.01"
-                    controls-position="right"
-                    class="!w-full"
-                    placeholder="待配置，请填写" /></ElFormItem
-              ></ElCol>
-              <ElCol :xs="24" :sm="12"
-                ><ElFormItem label="整单打手报酬（元）" required
-                  ><ElInputNumber
-                    v-model="form.reward"
-                    :min="0"
-                    :precision="2"
-                    :step="0.01"
-                    controls-position="right"
-                    class="!w-full"
-                    placeholder="待配置，请填写" /></ElFormItem
-              ></ElCol>
-            </ElRow>
-            <ElFormItem label="打手可见备注"
-              ><ElInput
-                v-model="form.remark"
-                type="textarea"
-                :rows="3"
-                maxlength="2000"
-                show-word-limit
-                placeholder="订单向打手开放后即可查看"
-            /></ElFormItem>
-            <ElDivider content-position="left">收款确认</ElDivider>
-            <ElFormItem label="收款方式" required>
-              <ElRadioGroup v-model="form.paymentMethod">
-                <ElRadioButton value="cash">现金 / 平台收款</ElRadioButton>
-                <ElRadioButton value="balance">老板储值支付</ElRadioButton>
-              </ElRadioGroup>
-            </ElFormItem>
-            <ElFormItem
-              v-if="rules.allowPayOnArrival && form.paymentMethod === 'cash'"
-              label="付款方式"
-              ><ElSwitch v-model="form.payOnArrival" active-text="落地付：先发布，后补收款"
-            /></ElFormItem>
-            <div v-if="form.paymentMethod === 'balance'" class="mb-5">
-              <div class="flex items-center gap-3 flex-wrap mb-3">
-                <span
-                  >当前储值余额：{{ balanceLoading ? '正在读取…' : money(customerBalance) }}</span
+            <BusinessDetailSection
+              title="订单项目与客户资料"
+              description="项目快照随单保存；来源规则决定店铺、平台编号及付款凭证要求。"
+            >
+              <ElFormItem label="订单项目" required>
+                <ElSelect
+                  v-model="form.templateId"
+                  filterable
+                  placeholder="选择已启用的订单模板"
+                  @change="changeTemplate"
                 >
-                <ElButton
-                  size="small"
-                  :disabled="operationBusy || balanceLoading || !form.customerId"
-                  @click="loadCustomerBalance"
-                  >刷新余额</ElButton
-                >
-              </div>
+                  <ElOption
+                    v-for="item in templates"
+                    :key="item.id"
+                    :label="item.name + ' · ' + item.game"
+                    :value="item.id"
+                  />
+                </ElSelect>
+              </ElFormItem>
               <ElAlert
-                v-if="balanceError"
-                :title="balanceError"
-                type="error"
-                :closable="false"
-                class="mb-3"
-              />
-              <ElAlert
-                title="发布时从该客户储值余额扣除全额，并记录实际支付时间；按原来源规则允许退款时，会退回原储值账户。无需重复登记现金收款。"
-                type="info"
-                :closable="false"
-              />
-            </div>
-            <ElAlert
-              v-if="form.payOnArrival"
-              title="落地付订单发布后须补录实际收款时间与凭证，收款前不能通过财务验收。"
-              type="warning"
-              :closable="false"
-              show-icon
-              class="mb-5"
-            />
-            <template v-else-if="form.paymentMethod === 'cash'">
-              <ElRow :gutter="20"
-                ><ElCol :xs="24" :sm="12"
-                  ><ElFormItem label="已收金额（元）" required
-                    ><ElInputNumber
-                      v-model="form.receivedAmount"
-                      :min="0.01"
-                      :precision="2"
-                      :step="0.01"
-                      class="!w-full"
-                      controls-position="right" /></ElFormItem></ElCol
-                ><ElCol :xs="24" :sm="12"
-                  ><ElFormItem label="客户实际付款时间" required
-                    ><ElDatePicker
-                      v-model="form.paidAt"
-                      type="datetime"
-                      value-format="YYYY-MM-DDTHH:mm:ssZ"
-                      format="YYYY-MM-DD HH:mm"
-                      class="!w-full" /></ElFormItem></ElCol
-              ></ElRow>
-              <ElFormItem v-if="rules.requiresReceipt" label="付款凭证" required
-                ><BusinessUpload
-                  v-model="form.receipt"
-                  :disabled="saving || customerSaving"
-                  @busy="uploading = $event"
-              /></ElFormItem>
-              <ElAlert
-                v-else
-                title="当前来源无需付款截图，请核对实际付款时间与相关平台信息。"
+                v-if="selectedTemplate"
+                :title="selectedTemplate.description || selectedTemplate.name"
                 type="info"
                 :closable="false"
                 class="mb-5"
               />
-            </template>
-            <ElDivider content-position="left">派单安排</ElDivider>
-            <ElFormItem label="派单方式"
-              ><ElRadioGroup v-model="form.dispatchMode"
-                ><ElRadioButton value="pool">公开抢单池</ElRadioButton
-                ><ElRadioButton value="direct">指定打手</ElRadioButton></ElRadioGroup
-              ></ElFormItem
+              <ElRow :gutter="20">
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="客户档案" required
+                    ><div class="flex w-full gap-2"
+                      ><ElSelect v-model="form.customerId" filterable placeholder="选择客户"
+                        ><ElOption
+                          v-for="item in data?.customers"
+                          :key="item.id"
+                          :value="item.id"
+                          :label="
+                            item.name + (item.contact ? ' · ' + item.contact : '')
+                          " /></ElSelect
+                      ><ElButton :disabled="operationBusy" @click="openCustomerDialog"
+                        >新增</ElButton
+                      ></div
+                    ></ElFormItem
+                  ></ElCol
+                >
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="订单来源" required
+                    ><ElSelect v-model="form.platformId" placeholder="选择来源"
+                      ><ElOption
+                        v-for="item in data?.platforms"
+                        :key="item.id"
+                        :value="item.id"
+                        :label="item.name" /></ElSelect></ElFormItem
+                ></ElCol>
+                <ElCol v-if="shops.length || rules.requiresShop" :xs="24" :sm="12"
+                  ><ElFormItem label="来源店铺" :required="rules.requiresShop"
+                    ><ElSelect
+                      v-model="form.shopId"
+                      :clearable="!rules.requiresShop"
+                      placeholder="选择同来源店铺"
+                      ><ElOption
+                        v-for="item in shops"
+                        :key="item.id"
+                        :value="item.id"
+                        :label="item.name" /></ElSelect
+                    ><p v-if="!shops.length" class="text-xs text-warning"
+                      >请先在业务配置中建立店铺。</p
+                    ></ElFormItem
+                  ></ElCol
+                >
+                <ElCol v-if="rules.requiresExternalOrderNo" :xs="24" :sm="12"
+                  ><ElFormItem label="平台订单号" required
+                    ><ElInput
+                      v-model="form.externalOrderNo"
+                      maxlength="128"
+                      placeholder="填写完整平台订单号" /></ElFormItem
+                ></ElCol>
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="房间码"
+                    ><ElInput
+                      v-model="form.roomCode"
+                      maxlength="100"
+                      placeholder="房间码与游戏 ID 至少填一项" /></ElFormItem
+                ></ElCol>
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="客户游戏 ID"
+                    ><ElInput v-model="form.gameId" maxlength="100" /></ElFormItem
+                ></ElCol>
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="地图"
+                    ><ElSelect v-model="form.map" filterable allow-create default-first-option
+                      ><ElOption
+                        v-for="item in [
+                          '不限',
+                          '零号大坝',
+                          '长弓溪谷',
+                          '巴克什',
+                          '航天基地',
+                          '潮汐监狱'
+                        ]"
+                        :key="item"
+                        :value="item"
+                        :label="item" /></ElSelect></ElFormItem
+                ></ElCol>
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="客户订单金额（元）" required
+                    ><ElInputNumber
+                      v-model="form.amount"
+                      :min="0.01"
+                      :precision="2"
+                      :step="0.01"
+                      controls-position="right"
+                      class="!w-full"
+                      placeholder="待配置，请填写" /></ElFormItem
+                ></ElCol>
+                <ElCol :xs="24" :sm="12"
+                  ><ElFormItem label="整单打手报酬（元）" required
+                    ><ElInputNumber
+                      v-model="form.reward"
+                      :min="0"
+                      :precision="2"
+                      :step="0.01"
+                      controls-position="right"
+                      class="!w-full"
+                      placeholder="待配置，请填写" /></ElFormItem
+                ></ElCol>
+              </ElRow>
+              <ElFormItem label="内部备注（模板及历史备注默认保留内部）"
+                ><ElInput
+                  v-model="form.remark"
+                  type="textarea"
+                  :rows="3"
+                  maxlength="2000"
+                  show-word-limit
+                  placeholder="仅供后台记录，不向打手公开"
+              /></ElFormItem>
+              <ElFormItem label="打手可见备注">
+                <ElInput
+                  v-model="form.playerRemark"
+                  type="textarea"
+                  :rows="3"
+                  maxlength="2000"
+                  show-word-limit
+                  placeholder="明确填写可向符合资格的打手展示的履约说明"
+                />
+              </ElFormItem>
+            </BusinessDetailSection>
+            <BusinessDetailSection
+              title="收款确认"
+              description="填写实际付款信息，储值支付以服务端读取的账户余额为准。"
             >
-            <ElFormItem v-if="form.dispatchMode === 'direct'" label="指定打手" required
-              ><ElSelect v-model="form.assignedTo" filterable placeholder="等待指定打手本人接单"
-                ><ElOption
-                  v-for="item in players"
-                  :key="item.id"
-                  :value="item.id"
-                  :label="
-                    item.name + ' · 执行中 ' + (item.activeOrders || 0) + '/' + item.maxActiveOrders
-                  " /></ElSelect
-            ></ElFormItem>
-            <ElAlert
-              v-else
-              title="订单发布后，按等级配置的等待时间向打手开放。"
-              type="info"
-              :closable="false"
-            />
+              <ElFormItem label="收款方式" required>
+                <ElRadioGroup v-model="form.paymentMethod">
+                  <ElRadioButton value="cash">现金 / 平台收款</ElRadioButton>
+                  <ElRadioButton value="balance">老板储值支付</ElRadioButton>
+                </ElRadioGroup>
+              </ElFormItem>
+              <ElFormItem
+                v-if="rules.allowPayOnArrival && form.paymentMethod === 'cash'"
+                label="付款方式"
+                ><ElSwitch v-model="form.payOnArrival" active-text="落地付：先发布，后补收款"
+              /></ElFormItem>
+              <div v-if="form.paymentMethod === 'balance'" class="mb-5">
+                <div class="flex items-center gap-3 flex-wrap mb-3">
+                  <span
+                    >当前储值余额：{{ balanceLoading ? '正在读取…' : money(customerBalance) }}</span
+                  >
+                  <ElButton
+                    size="small"
+                    :disabled="operationBusy || balanceLoading || !form.customerId"
+                    @click="loadCustomerBalance"
+                    >刷新余额</ElButton
+                  >
+                </div>
+                <ElAlert
+                  v-if="balanceError"
+                  :title="balanceError"
+                  type="error"
+                  :closable="false"
+                  class="mb-3"
+                />
+                <ElAlert
+                  title="发布时从该客户储值余额扣除全额，并记录实际支付时间；按原来源规则允许退款时，会退回原储值账户。无需重复登记现金收款。"
+                  type="info"
+                  :closable="false"
+                />
+              </div>
+              <ElAlert
+                v-if="form.payOnArrival"
+                title="落地付订单发布后须补录实际收款时间与凭证，收款前不能通过财务验收。"
+                type="warning"
+                :closable="false"
+                show-icon
+                class="mb-5"
+              />
+              <template v-else-if="form.paymentMethod === 'cash'">
+                <ElRow :gutter="20"
+                  ><ElCol :xs="24" :sm="12"
+                    ><ElFormItem label="已收金额（元）" required
+                      ><ElInputNumber
+                        v-model="form.receivedAmount"
+                        :min="0.01"
+                        :precision="2"
+                        :step="0.01"
+                        class="!w-full"
+                        controls-position="right" /></ElFormItem></ElCol
+                  ><ElCol :xs="24" :sm="12"
+                    ><ElFormItem label="客户实际付款时间" required
+                      ><ElDatePicker
+                        v-model="form.paidAt"
+                        type="datetime"
+                        value-format="YYYY-MM-DDTHH:mm:ssZ"
+                        format="YYYY-MM-DD HH:mm"
+                        class="!w-full" /></ElFormItem></ElCol
+                ></ElRow>
+                <ElFormItem v-if="rules.requiresReceipt" label="付款凭证" required
+                  ><BusinessUpload
+                    v-model="form.receipt"
+                    :disabled="saving || customerSaving"
+                    @busy="uploading = $event"
+                /></ElFormItem>
+                <ElAlert
+                  v-else
+                  title="当前来源无需付款截图，请核对实际付款时间与相关平台信息。"
+                  type="info"
+                  :closable="false"
+                  class="mb-5"
+                />
+              </template>
+            </BusinessDetailSection>
+            <BusinessDetailSection
+              title="派单安排"
+              description="公开抢单和指定待接受分别处理，发布后仍由打手本人接单。"
+            >
+              <ElFormItem label="派单方式"
+                ><ElRadioGroup v-model="form.dispatchMode"
+                  ><ElRadioButton value="pool">公开抢单池</ElRadioButton
+                  ><ElRadioButton value="direct">指定打手</ElRadioButton></ElRadioGroup
+                ></ElFormItem
+              >
+              <ElFormItem v-if="form.dispatchMode === 'direct'" label="指定打手" required
+                ><ElSelect
+                  v-model="form.assignedTo"
+                  :loading="targetsLoading"
+                  filterable
+                  placeholder="等待指定打手本人接单"
+                  @visible-change="refreshPlayerOptions"
+                  ><ElOption
+                    v-for="item in players"
+                    :key="item.id"
+                    :value="item.id"
+                    :label="
+                      item.name +
+                      ' · 接单中 ' +
+                      (item.activeOrders || 0) +
+                      '/' +
+                      item.maxActiveOrders +
+                      ' · 待接受 ' +
+                      (item.pendingAssignments || 0)
+                    " /></ElSelect
+              ></ElFormItem>
+              <ElAlert
+                v-if="targetsError"
+                :title="targetsError"
+                type="error"
+                :closable="false"
+                class="mb-3"
+              />
+              <ElButton link type="primary" :loading="targetsLoading" @click="loadTargets"
+                >刷新打手接单数量</ElButton
+              >
+              <ElAlert
+                title="订单发布后，按等级配置的等待时间向打手开放。"
+                v-if="form.dispatchMode !== 'direct'"
+                type="info"
+                :closable="false"
+              />
+              <p class="text-xs text-g-500 mt-3">
+                指定待接受不预占名额，接受时由服务器核对最新资格；足额收款后才能正常上报，待验收释放名额，验收后产生报酬。
+              </p>
+            </BusinessDetailSection>
             <div class="flex justify-end gap-3 mt-5"
               ><ElButton
                 v-if="can('orders.view')"
@@ -779,14 +975,15 @@
             >单人完成获得整单报酬；有一名队友时固定平分。完成材料由打手本人提交，再由财务验收。</p
           ></div
         >
-        <div class="art-card p-5"
+        <div v-if="can('orders.view')" class="art-card p-5"
           ><div class="art-card-header"
             ><div class="title"
-              ><h4>待接订单</h4><p>共 {{ pendingOrders.length }} 笔</p></div
-            ><ElButton :loading="loading" link @click="refresh().catch(() => {})"
+              ><h4>待接订单</h4><p>共 {{ pendingTotal }} 笔，展示最新 8 笔</p></div
+            ><ElButton :loading="pendingLoading" link @click="loadPendingOrders"
               ><ArtSvgIcon icon="ri:refresh-line" /></ElButton></div
           ><ArtTable
-            :data="pendingOrders.slice(0, 8)"
+            :data="pendingOrders"
+            :loading="pendingLoading"
             :height="340"
             :showTableHeader="false"
             :border="false"
@@ -810,15 +1007,22 @@
         >
       </ElCol>
     </ElRow>
-    <ElDialog
+    <BusinessDetailPanel
+      page-key="quick-customer-editor"
+      :record-id="customerDraft.id || 'new'"
+      @restore="restoreQuickCustomer"
       v-model="customerDialog"
-      class="quick-customer-dialog"
+      class="quick-customer-dialog business-detail-dialog"
       title="新增客户档案"
-      width="min(680px, 94vw)"
+      width="min(840px, 94vw)"
       :close-on-click-modal="!customerSaving"
       :close-on-press-escape="!customerSaving"
       :show-close="!customerSaving"
-      ><ElAlert
+      ><BusinessDetailHeader
+        description="维护客户档案并返回当前订单，关联平台编号独立保存，不产生订单或收入。"
+        icon="ri:contacts-book-line"
+        :context="customerDraft.name || '新客户档案'"
+      /><ElAlert
         v-if="customerDraft.id"
         title="客户档案已保存；可继续追加编号，保存并选择后返回当前订单。"
         type="success"
@@ -829,71 +1033,74 @@
         label-position="top"
         :disabled="customerSaving"
         @submit.prevent="saveCustomer()"
-        ><ElFormItem label="客户名称" required
-          ><ElInput v-model="customerDraft.name" maxlength="100" /></ElFormItem
-        ><ElFormItem label="客户来源"
-          ><ElSelect v-model="customerDraft.platformId" clearable placeholder="选择来源"
-            ><ElOption
-              v-for="item in data?.platforms || []"
-              :key="item.id"
-              :value="item.id"
-              :label="item.name" /></ElSelect
-        ></ElFormItem>
-        <template v-if="customerRules.requiresExternalOrderNo">
-          <ElAlert
-            :title="`${customerPlatform?.name || '当前来源'}要求平台订单号；可逐条追加多个关联编号。档案编号不会生成业务订单或收入。`"
-            type="info"
-            :closable="false"
-            class="mb-4"
-          />
-          <ElFormItem
-            v-if="customerShops.length || customerRules.requiresShop"
-            label="关联店铺"
-            :required="customerRules.requiresShop"
-            ><ElSelect
-              v-model="customerReference.shopId"
-              :clearable="!customerRules.requiresShop"
-              placeholder="选择同来源店铺"
+        ><BusinessDetailSection
+          title="客户档案与来源编号"
+          description="客户名称、联系方式与游戏 ID 用于后台核对，按原来源规则保存关联编号。"
+          ><ElFormItem label="客户名称" required
+            ><ElInput v-model="customerDraft.name" maxlength="100" /></ElFormItem
+          ><ElFormItem label="客户来源"
+            ><ElSelect v-model="customerDraft.platformId" clearable placeholder="选择来源"
               ><ElOption
-                v-for="item in customerShops"
+                v-for="item in data?.platforms || []"
                 :key="item.id"
                 :value="item.id"
                 :label="item.name" /></ElSelect
           ></ElFormItem>
-          <ElFormItem label="关联平台订单号" :required="!customerHasReference"
-            ><ElInput
-              v-model="customerReference.externalOrderNo"
-              maxlength="128"
-              placeholder="填写完整编号，可保留开头的 0"
-          /></ElFormItem>
-        </template>
-        <div v-if="savedCustomerReferences.length" class="mb-4">
-          <p class="text-sm text-g-500 mb-2"
-            >已独立保存 {{ savedCustomerReferences.length }} 条编号</p
-          >
-          <div class="flex flex-wrap gap-2">
-            <ElTag
-              v-for="item in savedCustomerReferences"
-              :key="item.id"
-              :title="item.externalOrderNo"
-              class="quick-customer-reference-tag"
+          <template v-if="customerRules.requiresExternalOrderNo">
+            <ElAlert
+              :title="`${customerPlatform?.name || '当前来源'}要求平台订单号；可逐条追加多个关联编号。档案编号不会生成业务订单或收入。`"
+              type="info"
+              :closable="false"
+              class="mb-4"
+            />
+            <ElFormItem
+              v-if="customerShops.length || customerRules.requiresShop"
+              label="关联店铺"
+              :required="customerRules.requiresShop"
+              ><ElSelect
+                v-model="customerReference.shopId"
+                :clearable="!customerRules.requiresShop"
+                placeholder="选择同来源店铺"
+                ><ElOption
+                  v-for="item in customerShops"
+                  :key="item.id"
+                  :value="item.id"
+                  :label="item.name" /></ElSelect
+            ></ElFormItem>
+            <ElFormItem label="关联平台订单号" :required="!customerHasReference"
+              ><ElInput
+                v-model="customerReference.externalOrderNo"
+                maxlength="128"
+                placeholder="填写完整编号，可保留开头的 0"
+            /></ElFormItem>
+          </template>
+          <div v-if="savedCustomerReferences.length" class="mb-4">
+            <p class="text-sm text-g-500 mb-2"
+              >已独立保存 {{ savedCustomerReferences.length }} 条编号</p
             >
-              {{ data?.platforms.find((platform) => platform.id === item.platformId)?.name }}：{{
-                item.externalOrderNo
-              }}
-            </ElTag>
+            <div class="flex flex-wrap gap-2">
+              <ElTag
+                v-for="item in savedCustomerReferences"
+                :key="item.id"
+                :title="item.externalOrderNo"
+                class="quick-customer-reference-tag"
+              >
+                {{ data?.platforms.find((platform) => platform.id === item.platformId)?.name }}：{{
+                  item.externalOrderNo
+                }}
+              </ElTag>
+            </div>
           </div>
-        </div>
-        <ElFormItem label="联系方式"
-          ><ElInput v-model="customerDraft.contact" maxlength="100" /></ElFormItem
-        ><ElFormItem label="客户游戏 ID"
-          ><ElInput v-model="customerDraft.gameId" maxlength="100" /></ElFormItem
-        ><ElFormItem label="客户备注"
-          ><ElInput
-            v-model="customerDraft.remark"
-            type="textarea"
-            :rows="3"
-            maxlength="2000" /></ElFormItem></ElForm
+          <ElFormItem label="联系方式"
+            ><ElInput v-model="customerDraft.contact" maxlength="100" /></ElFormItem
+          ><ElFormItem label="客户游戏 ID"
+            ><ElInput v-model="customerDraft.gameId" maxlength="100" /></ElFormItem
+          ><ElFormItem label="客户备注"
+            ><ElInput
+              v-model="customerDraft.remark"
+              type="textarea"
+              :rows="3"
+              maxlength="2000" /></ElFormItem></BusinessDetailSection></ElForm
       ><template #footer
         ><ElButton :disabled="customerSaving" @click="customerDialog = false">取消</ElButton
         ><ElButton
@@ -904,7 +1111,7 @@
         ><ElButton type="primary" :loading="customerSaving" @click="saveCustomer()"
           >保存并选择</ElButton
         ></template
-      ></ElDialog
+      ></BusinessDetailPanel
     >
   </div>
 </template>

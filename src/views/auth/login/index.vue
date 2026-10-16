@@ -107,6 +107,7 @@
   import { ElMessage, ElNotification, type FormInstance, type FormRules } from 'element-plus'
   import { useSettingStore } from '@/store/modules/setting'
   import { useStudio } from '@/hooks/business/useStudio'
+  import { adminLoginRedirect } from '@/utils/auth/admin-entry'
 
   defineOptions({ name: 'Login' })
   const { config } = useAppearance()
@@ -125,7 +126,8 @@
   const dragVerify = ref()
 
   const userStore = useUserStore()
-  const { error: studioError } = useStudio()
+  const studio = useStudio()
+  const { error: studioError } = studio
   const router = useRouter()
   const route = useRoute()
   const isPassing = ref(false)
@@ -148,7 +150,8 @@
 
   // 登录
   const handleSubmit = async () => {
-    if (!formRef.value) return
+    if (!formRef.value || loading.value) return
+    loading.value = true
 
     try {
       // 表单验证
@@ -161,8 +164,6 @@
         return
       }
 
-      loading.value = true
-
       // 登录请求
       const { username, password } = formData
 
@@ -170,6 +171,12 @@
         userName: username,
         password
       })
+
+      if (studio.user.value?.role === 'player') {
+        userStore.clearSession()
+        studio.clearSession()
+        throw new Error('此入口为管理后台，请使用管理员或员工账号登录。打手账号请前往打手端。')
+      }
 
       userStore.setUserInfo(userInfo)
       userStore.setLoginStatus(true)
@@ -184,12 +191,7 @@
       showLoginSuccessNotice()
 
       // 获取 redirect 参数，如果存在则跳转到指定页面，否则跳转到首页
-      const redirect = route.query.redirect as string
-      await router.push(
-        redirect?.startsWith('/') && !redirect.startsWith('//') && !redirect.startsWith('/auth/')
-          ? redirect
-          : '/dashboard/console'
-      )
+      await router.push(adminLoginRedirect(route.query.redirect))
     } catch (error) {
       if (error instanceof Error) ElMessage.error(error.message)
     } finally {

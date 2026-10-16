@@ -1,3 +1,4 @@
+import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioServer } from '../server/index.mjs'
@@ -10,7 +11,7 @@ test('区间主页 HTTP 验证真实会话、日期和当前权限，读取不�
   const base = `http://127.0.0.1:${server.address().port}/api/studio`
   const path = '/overview?start=2026-09-29&end=2026-10-03'
   assert.equal((await fetch(base + path)).status, 401)
-  const actor = server.service.mutate('admin', '/users', {
+  const actor = testMutate(server.service, 'admin', '/users', {
     username: 'overview-support',
     name: '主页客服',
     role: 'support',
@@ -43,7 +44,7 @@ test('区间主页 HTTP 验证真实会话、日期和当前权限，读取不�
     ).status,
     400
   )
-  server.service.mutate('admin', '/users', {
+  testMutate(server.service, 'admin', '/users', {
     ...actor,
     permissionOverrides: { 'profit.view': true }
   })
@@ -51,7 +52,7 @@ test('区间主页 HTTP 验证真实会话、日期和当前权限，读取不�
   result = await response.json()
   assert.equal(response.status, 200)
   assert.equal(typeof result.metrics.received, 'number')
-  server.service.mutate('admin', '/users', {
+  testMutate(server.service, 'admin', '/users', {
     ...actor,
     permissionOverrides: { 'profit.view': false }
   })
@@ -59,3 +60,5 @@ test('区间主页 HTTP 验证真实会话、日期和当前权限，读取不�
   assert.equal(result.metrics.received, null)
   assert.equal(result.metrics.fullMonthsProfit, null)
 })
+
+installTestClientFetch()

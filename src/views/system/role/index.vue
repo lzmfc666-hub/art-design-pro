@@ -68,7 +68,11 @@
         >
       </ArtTable>
     </ElCard>
-    <RolePermissionDialog v-model="permissionVisible" :role="selectedRole" />
+    <RolePermissionDialog
+      v-model="permissionVisible"
+      :role="selectedRole"
+      @restore="restoreRolePermissions"
+    />
   </div>
 </template>
 
@@ -142,6 +146,12 @@
   ])
   const permissionVisible = ref(false)
   const selectedRole = ref<Role>('support')
+  function restoreRolePermissions(role?: string) {
+    if (role && Object.hasOwn(roleLabels, role)) {
+      selectedRole.value = role as Role
+      permissionVisible.value = true
+    }
+  }
   function showPermissions(role: Role) {
     selectedRole.value = role
     permissionVisible.value = true

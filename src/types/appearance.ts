@@ -9,6 +9,7 @@ export interface AppearanceBackground {
 export interface AppearanceConfig {
   studioName: string
   logo: Attachment | null
+  playerOrderCardImage: Attachment | null
   page: AppearanceBackground
   hero: AppearanceBackground & { showDecoration: boolean }
   login: LoginAppearance
@@ -111,6 +112,7 @@ export const APPEARANCE_ICON_OPTIONS = [
 export const DEFAULT_APPEARANCE: AppearanceConfig = {
   studioName: '电竞工作室',
   logo: null,
+  playerOrderCardImage: null,
   page: { mode: 'default', color: '#f5f8fc', image: null, overlay: 50 },
   hero: { mode: 'default', color: '#80b7ff', image: null, overlay: 35, showDecoration: true },
   login: {
@@ -127,12 +129,13 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
 export const cloneAppearance = (value: AppearanceConfig): AppearanceConfig =>
   JSON.parse(JSON.stringify(value))
 
-/** 旧数据库外观缺少新设置时，保持原行为并补充默认登录页。 */
+/** 旧数据库外观缺少新设置时，保持原行为并补充默认值。 */
 export function completeAppearance(value: AppearanceConfig): AppearanceConfig {
   const defaults = cloneAppearance(DEFAULT_APPEARANCE)
   return {
     ...defaults,
     ...value,
+    playerOrderCardImage: value.playerOrderCardImage ?? null,
     icons: canonicalAppearanceIcons(value.icons),
     login: value.login
       ? {

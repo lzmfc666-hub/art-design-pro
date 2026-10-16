@@ -1,5 +1,11 @@
 <template>
   <div>
+    <BusinessDetailHeader
+      :title="player.name"
+      description="独立押金账户与真实资金流水，不计入可用报酬或普通提现。"
+      icon="ri:shield-check-line"
+      :context="player.username"
+    />
     <div class="deposit-overview">
       <BusinessStatCard
         label="独立押金余额"
@@ -13,62 +19,86 @@
       >
     </div>
     <ElAlert v-if="error" :title="error" type="error" :closable="false" class="mb-4" />
-    <ArtTableHeader v-model:columns="columnChecks" :loading="loading" @refresh="load">
-      <template #left
-        ><ElSpace wrap
-          ><ElButton type="primary" :disabled="busy || loading || !account" @click="openDeposit"
-            >缴纳押金</ElButton
-          ><ElButton
-            plain
-            type="warning"
-            :disabled="busy || loading || !account || account.balance <= 0"
-            @click="openExit"
-            >退店 / 跑路处理</ElButton
-          ></ElSpace
-        ></template
-      >
-    </ArtTableHeader>
-    <ArtTable
-      :data="account?.records || []"
-      :columns="columns"
-      :loading="loading"
-      :pagination="pagination"
-      height="360"
-      @pagination:size-change="changeSize"
-      @pagination:current-change="changePage"
+    <BusinessDetailSection
+      title="押金流水"
+      :description="`服务端共 ${pagination.total} 条记录，按页读取；余额使用完整账户口径。`"
     >
-      <template #kind="{ row }"
-        ><ElTag
-          :type="row.kind === 'deposit' ? 'success' : row.kind === 'penalty' ? 'danger' : 'info'"
-          >{{ kindLabel(row.kind) }}</ElTag
-        ></template
+      <ArtTableHeader v-model:columns="columnChecks" :loading="loading" @refresh="load">
+        <template #left
+          ><ElSpace wrap
+            ><ElButton type="primary" :disabled="busy || loading || !account" @click="openDeposit"
+              >缴纳押金</ElButton
+            ><ElButton
+              plain
+              type="warning"
+              :disabled="busy || loading || !account || account.balance <= 0"
+              @click="openExit"
+              >退店 / 跑路处理</ElButton
+            ></ElSpace
+          ></template
+        >
+      </ArtTableHeader>
+      <ArtTable
+        :data="account?.records || []"
+        :columns="columns"
+        :loading="loading"
+        :pagination="pagination"
+        height="360"
+        @pagination:size-change="changeSize"
+        @pagination:current-change="changePage"
       >
-      <template #amount="{ row }">{{ money(row.amount) }}</template>
-      <template #balanceAfter="{ row }">{{ money(row.balanceAfter) }}</template>
-      <template #exitType="{ row }">{{
-        row.exitType === 'leave' ? '退店' : row.exitType === 'absconded' ? '跑路' : '—'
-      }}</template>
-      <template #createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
-      <template #receipt="{ row }"
-        ><ElLink
-          v-if="row.receipt"
-          :href="row.receipt.url"
-          target="_blank"
-          rel="noopener"
-          type="primary"
-          >查看凭证</ElLink
-        ><span v-else>—</span></template
-      >
-    </ArtTable>
-    <ElDialog
+        <template #kind="{ row }"
+          ><ElTag
+            :type="row.kind === 'deposit' ? 'success' : row.kind === 'penalty' ? 'danger' : 'info'"
+            >{{ kindLabel(row.kind) }}</ElTag
+          ></template
+        >
+        <template #amount="{ row }">{{ money(row.amount) }}</template>
+        <template #balanceAfter="{ row }">{{ money(row.balanceAfter) }}</template>
+        <template #exitType="{ row }">{{
+          row.exitType === 'leave' ? '退店' : row.exitType === 'absconded' ? '跑路' : '—'
+        }}</template>
+        <template #createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
+        <template #receipt="{ row }"
+          ><ElLink
+            v-if="row.receipt"
+            :href="row.receipt.url"
+            target="_blank"
+            rel="noopener"
+            type="primary"
+            >查看凭证</ElLink
+          ><span v-else>—</span></template
+        >
+        <template #operation="{ row }"
+          ><ElButton link type="primary" :disabled="busy" @click="detailId = row.id"
+            >查看明细</ElButton
+          ></template
+        >
+      </ArtTable>
+    </BusinessDetailSection>
+    <BusinessDetailPanel
+      page-key="player-deposit-editor"
+      :record-id="`${form.kind === 'deposit' ? 'deposit' : 'exit'}:${player.id}`"
+      @restore="restoreDepositEditor"
+      class="business-detail-dialog"
       v-model="open"
       :title="form.kind === 'deposit' ? '登记打手缴纳押金' : '退店 / 跑路押金处理'"
-      width="min(620px,94vw)"
+      width="min(840px,94vw)"
       :close-on-click-modal="!busy"
       :close-on-press-escape="!busy"
       :show-close="!busy"
       destroy-on-close
     >
+      <BusinessDetailHeader
+        :title="player.name"
+        :description="
+          form.kind === 'deposit'
+            ? '登记实际缴纳的押金，保存后计入独立押金账户。'
+            : '核对退出场景与实际处理方式，报酬、权限和订单人员移交仍分别处理。'
+        "
+        icon="ri:shield-check-line"
+        :context="player.username"
+      />
       <ElAlert
         v-if="form.kind !== 'deposit'"
         title="退出资金处理不会自动停用账号、关闭权限或清空订单工资，请另外核对三个开关和未完成订单的人员移交。"
@@ -84,47 +114,52 @@
         :disabled="busy"
         @submit.prevent="save"
       >
-        <ElDescriptions :column="1" border class="mb-4"
-          ><ElDescriptionsItem label="打手"
-            >{{ player.name }} · {{ player.username }}</ElDescriptionsItem
-          ><ElDescriptionsItem label="当前押金余额">{{
-            account ? money(account.balance) : '—'
-          }}</ElDescriptionsItem></ElDescriptions
+        <BusinessDetailSection
+          title="押金处理内容"
+          description="核对当前押金余额、金额、说明与实际凭证；不得超过账户可处理余额。"
         >
-        <template v-if="form.kind !== 'deposit'">
-          <ElFormItem label="退出场景" prop="exitType"
-            ><ElRadioGroup v-model="form.exitType"
-              ><ElRadioButton value="leave">退店</ElRadioButton
-              ><ElRadioButton value="absconded">跑路</ElRadioButton></ElRadioGroup
-            ></ElFormItem
+          <ElDescriptions :column="1" border class="mb-4"
+            ><ElDescriptionsItem label="打手"
+              >{{ player.name }} · {{ player.username }}</ElDescriptionsItem
+            ><ElDescriptionsItem label="当前押金余额">{{
+              account ? money(account.balance) : '—'
+            }}</ElDescriptionsItem></ElDescriptions
           >
-          <ElFormItem label="处理方式"
-            ><ElRadioGroup v-model="form.kind"
-              ><ElRadioButton value="return">退还押金</ElRadioButton
-              ><ElRadioButton value="penalty">没收押金</ElRadioButton></ElRadioGroup
-            ></ElFormItem
-          >
-          <p class="text-sm text-g-500 mb-4">{{
-            form.kind === 'penalty'
-              ? '没收部分计入工作室其他收入；报酬钱包保持独立。'
-              : '完成实际退还后登记，退还金额不能超过当前押金余额。'
-          }}</p>
-        </template>
-        <ElFormItem label="金额（元）" prop="amount"
-          ><BusinessAmount v-model="form.amount" placeholder="填写实际金额"
-        /></ElFormItem>
-        <ElFormItem :label="form.kind === 'deposit' ? '缴纳说明' : '处理原因'" prop="reason"
-          ><ElInput
-            v-model="form.reason"
-            type="textarea"
-            :rows="3"
-            maxlength="2000"
-            show-word-limit
-            placeholder="填写实际发生情况和处理依据"
-        /></ElFormItem>
-        <ElFormItem label="资金凭证（可选）"
-          ><BusinessUpload v-model="form.receipt" :disabled="saving" @busy="uploading = $event"
-        /></ElFormItem>
+          <template v-if="form.kind !== 'deposit'">
+            <ElFormItem label="退出场景" prop="exitType"
+              ><ElRadioGroup v-model="form.exitType"
+                ><ElRadioButton value="leave">退店</ElRadioButton
+                ><ElRadioButton value="absconded">跑路</ElRadioButton></ElRadioGroup
+              ></ElFormItem
+            >
+            <ElFormItem label="处理方式"
+              ><ElRadioGroup v-model="form.kind"
+                ><ElRadioButton value="return">退还押金</ElRadioButton
+                ><ElRadioButton value="penalty">没收押金</ElRadioButton></ElRadioGroup
+              ></ElFormItem
+            >
+            <p class="text-sm text-g-500 mb-4">{{
+              form.kind === 'penalty'
+                ? '没收部分计入工作室其他收入；报酬钱包保持独立。'
+                : '完成实际退还后登记，退还金额不能超过当前押金余额。'
+            }}</p>
+          </template>
+          <ElFormItem label="金额（元）" prop="amount"
+            ><BusinessAmount v-model="form.amount" placeholder="填写实际金额"
+          /></ElFormItem>
+          <ElFormItem :label="form.kind === 'deposit' ? '缴纳说明' : '处理原因'" prop="reason"
+            ><ElInput
+              v-model="form.reason"
+              type="textarea"
+              :rows="3"
+              maxlength="2000"
+              show-word-limit
+              placeholder="填写实际发生情况和处理依据"
+          /></ElFormItem>
+          <ElFormItem label="资金凭证（可选）"
+            ><BusinessUpload v-model="form.receipt" :disabled="saving" @busy="uploading = $event"
+          /></ElFormItem>
+        </BusinessDetailSection>
       </ElForm>
       <template #footer
         ><ElButton :disabled="busy" @click="open = false">取消</ElButton
@@ -132,17 +167,90 @@
           >确认登记</ElButton
         ></template
       >
-    </ElDialog>
+    </BusinessDetailPanel>
+    <BusinessDetailPanel
+      page-key="player-deposit-detail"
+      :record-id="detailId"
+      @restore="restoreDepositDetail"
+      :model-value="!!detailId && can('finance.withdrawals')"
+      class="business-detail-dialog"
+      title="押金流水详情"
+      width="min(860px,94vw)"
+      append-to-body
+      @update:model-value="detailId = ''"
+    >
+      <template v-if="depositDetail">
+        <BusinessDetailHeader
+          :title="player.name"
+          :description="kindLabel(depositDetail.kind)"
+          icon="ri:history-line"
+          :context="formatTime(depositDetail.createdAt)"
+        />
+        <BusinessDetailSummary
+          :items="[
+            { label: '处理金额', value: money(depositDetail.amount) },
+            {
+              label: '操作后押金',
+              value: money(depositDetail.balanceAfter),
+              hint: '此笔操作后的历史余额'
+            },
+            {
+              label: '退出场景',
+              value:
+                depositDetail.exitType === 'leave'
+                  ? '退店'
+                  : depositDetail.exitType === 'absconded'
+                    ? '跑路'
+                    : '不涉及退出'
+            }
+          ]"
+        />
+        <BusinessDetailSection title="处理依据">
+          <ElDescriptions :column="2" border>
+            <ElDescriptionsItem label="类型">{{
+              kindLabel(depositDetail.kind)
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="经办人">{{
+              depositDetail.createdByName || '未提供'
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="登记时间" :span="2">{{
+              formatTime(depositDetail.createdAt)
+            }}</ElDescriptionsItem>
+            <ElDescriptionsItem label="原因 / 说明" :span="2"
+              ><p class="whitespace-pre-wrap break-all">{{
+                depositDetail.reason || '未填写'
+              }}</p></ElDescriptionsItem
+            >
+            <ElDescriptionsItem label="资金凭证" :span="2"
+              ><ElLink
+                v-if="depositDetail.receipt"
+                :href="depositDetail.receipt.url"
+                target="_blank"
+                rel="noopener"
+                type="primary"
+                >{{ depositDetail.receipt.name }}</ElLink
+              ><span v-else>未上传</span></ElDescriptionsItem
+            >
+          </ElDescriptions>
+        </BusinessDetailSection>
+      </template>
+      <ElEmpty v-else description="该记录不在当前读取页或已无查看权限，请重新选择记录" />
+    </BusinessDetailPanel>
   </div>
 </template>
 
 <script setup lang="ts">
+  import { createStudioRequestId } from '@/api/studio-mutation'
+  import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, onUnmounted, reactive, ref, watch } from 'vue'
   import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
   import { studioRequest } from '@/api/studio'
   import BusinessAmount from '@/components/business/BusinessAmount.vue'
   import BusinessStatCard from '@/components/business/BusinessStatCard.vue'
   import BusinessUpload from '@/components/business/BusinessUpload.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
+  import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import { formatTime, money, useStudio } from '@/hooks/business/useStudio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import type { Attachment, FundTransaction, PlayerListRecord } from '@/types/studio'
@@ -157,8 +265,60 @@
   }
   const props = defineProps<{ player: PlayerListRecord }>()
   const emit = defineEmits<{ updated: []; busy: [value: boolean] }>()
-  const { can, mutate, clearSession } = useStudio()
+  const { can, mutate, clearSession, refresh } = useStudio()
   const account = ref<DepositPage | null>(null)
+  const detailId = ref('')
+  const restoredDetail = ref<FundTransaction | null>(null)
+  const depositDetail = computed(
+    () =>
+      account.value?.records.find((row) => row.id === detailId.value) ||
+      (restoredDetail.value?.id === detailId.value ? restoredDetail.value : undefined)
+  )
+  async function restoreDepositDetail({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    if (!recordId) return
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      if (!can('finance.withdrawals')) return
+      const owner = props.player.id
+      const row = await studioRequest<FundTransaction>(
+        `players/${encodeURIComponent(owner)}/deposits/${encodeURIComponent(recordId)}`
+      )
+      if (isCurrent && !isCurrent()) return
+      if (owner !== props.player.id || !can('finance.withdrawals')) return
+      restoredDetail.value = row
+      detailId.value = row.id
+    } catch (cause) {
+      restoredDetail.value = null
+      detailId.value = ''
+      if ((cause as { status?: number }).status === 401) clearSession()
+      error.value = cause instanceof Error ? cause.message : '押金明细读取失败'
+    }
+  }
+  async function restoreDepositEditor({
+    recordId,
+    isCurrent
+  }: {
+    recordId?: string
+    isCurrent?: () => boolean
+  }) {
+    try {
+      await refresh()
+      if (isCurrent && !isCurrent()) return
+      await load()
+      if (isCurrent && !isCurrent()) return
+      if (recordId === `deposit:${props.player.id}`) openDeposit()
+      else if (recordId === `exit:${props.player.id}`) openExit()
+    } catch (cause) {
+      ElMessage.error(cause instanceof Error ? cause.message : '详情读取失败，请返回列表重试')
+    }
+  }
   const loading = ref(false),
     error = ref(''),
     saving = ref(false),
@@ -185,7 +345,8 @@
     { prop: 'reason', label: '原因 / 说明', minWidth: 240, showOverflowTooltip: true },
     { prop: 'createdByName', label: '经办人', minWidth: 120 },
     { prop: 'createdAt', label: '登记时间', minWidth: 175, useSlot: true },
-    { prop: 'receipt', label: '凭证', width: 100, useSlot: true }
+    { prop: 'receipt', label: '凭证', width: 100, useSlot: true },
+    { prop: 'operation', label: '明细', width: 100, fixed: 'right', useSlot: true }
   ])
   async function load() {
     if (busy.value || !can('finance.withdrawals')) return
@@ -279,7 +440,7 @@
       amount: null,
       reason: '',
       receipt: null,
-      requestId: crypto.randomUUID()
+      requestId: createStudioRequestId()
     })
     open.value = true
   }

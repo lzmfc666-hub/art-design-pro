@@ -23,6 +23,7 @@ export interface Staff {
   maxActiveOrders: number
   permissionOverrides: Record<string, boolean>
   activeOrders?: number
+  pendingAssignments?: number
   playerAccess?: PlayerAccess
 }
 export interface PlayerAccess {
@@ -91,6 +92,8 @@ export interface Attachment {
 }
 export interface Submission {
   id: string
+  assignmentId: string | null
+  dispatchRound: number
   submittedAt: string
   leaderId: string
   teammateId: string | null
@@ -108,13 +111,43 @@ export interface Submission {
   correctionReason?: string
 }
 export interface Assignment {
+  id: string
+  dispatchRound: number
   leaderId: string
   acceptedAt: string
   releasedAt?: string
   reason?: string
 }
+export interface OrderReturnRequest {
+  id: string
+  assignmentId: string
+  dispatchRound: number
+  leaderId: string
+  reason: string
+  status: 'pending' | 'approved' | 'rejected' | 'obsolete'
+  requestedAt: string
+  processedAt?: string
+  processedBy?: string
+  processReason?: string
+}
+export interface OrderAssignmentRejection {
+  id: string
+  dispatchRound: number
+  playerId: string
+  reason: string
+  rejectedAt: string
+}
+export interface PlayerPaymentSnapshot {
+  method: 'wechat' | 'alipay'
+  qrCode: Attachment
+  updatedAt: string
+}
 export interface Order {
   id: string
+  revision: number
+  dispatchRound: number
+  assignmentId: string | null
+  submissionId: string | null
   orderNo: string
   templateId: string
   title: string
@@ -137,7 +170,9 @@ export interface Order {
   balanceCustomerId?: string
   status: OrderStatus
   dispatchMode: 'pool' | 'direct'
+  dispatchState?: 'ready' | 'unassigned'
   assignedTo: string | null
+  assignedAt?: string
   leaderId: string | null
   teammateId: string | null
   creatorId: string
@@ -145,9 +180,17 @@ export interface Order {
   publishedAt: string
   completedAt: string | null
   remark: string
+  playerRemark: string
+  paymentConfirmed?: boolean
+  canClaim?: boolean
+  canSubmit?: boolean
+  claimBlockedReason?: { code: string; message: string } | null
+  submitBlockedReason?: { code: string; message: string } | null
   snapshot: OrderTemplate
   assignments: Assignment[]
   submissions: Submission[]
+  returnRequests?: OrderReturnRequest[]
+  rejections?: OrderAssignmentRejection[]
   canceledAt?: string
   cancelReason?: string
   canceledFrom?: OrderStatus
@@ -159,6 +202,42 @@ export interface Order {
     operationsRate: number | null
     operationsId: string | null
   }
+}
+export interface OrderPage {
+  records: Order[]
+  total: number
+  current: number
+  size: number
+  counts?: Record<string, number>
+}
+export interface OrderDetailResponse {
+  order: Order
+  refunds?: Refund[]
+  logs?: AuditLog[]
+}
+export interface OrderExpectedState {
+  expectedRevision: number
+  dispatchRound: number
+  assignmentId: string | null
+  submissionId: string | null
+  leaderId: string | null
+}
+export type OrderDispatchTarget = Pick<
+  Staff,
+  | 'id'
+  | 'name'
+  | 'status'
+  | 'levelId'
+  | 'maxActiveOrders'
+  | 'activeOrders'
+  | 'pendingAssignments'
+  | 'playerAccess'
+>
+export interface StudioChangesSummary {
+  version: string
+  changed: boolean
+  serverTime: string
+  orderCounts: Record<string, number>
 }
 export interface Refund {
   id: string
@@ -180,10 +259,16 @@ export interface Withdrawal {
   id: string
   userId: string
   amount: number
-  status: 'pending' | 'approved' | 'paid' | 'rejected'
+  status: 'pending' | 'approved' | 'paid' | 'rejected' | 'canceled'
   createdAt: string
   processedAt?: string
+  processedBy?: string
+  canceledAt?: string
   paidAt?: string
+  paymentMethod?: 'wechat' | 'alipay'
+  paymentSnapshot?: PlayerPaymentSnapshot
+  weekStart?: string
+  requestId?: string
   reason?: string
   receipt?: Attachment | null
 }

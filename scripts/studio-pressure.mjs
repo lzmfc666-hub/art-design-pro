@@ -6,6 +6,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { createStudioServer } from '../server/index.mjs'
+import { testMutate, installTestClientFetch } from '../tests/helpers/current-intent.mjs'
+
+installTestClientFetch()
 
 // Only a disposable, local SQLite database is accepted. Never target a running studio.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -32,7 +35,7 @@ async function worker() {
     const password = `pressure-${randomUUID()}`
     server = createStudioServer({ dbPath, seed: false, password })
     const service = server.service
-    const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+    const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
     const level = mutate('/levels', { name: '压测等级', delaySeconds: 0 })
     const platform = mutate('/platforms', {
       name: '压测平台',
@@ -135,6 +138,14 @@ async function worker() {
         ['support', support.username]
       ].map(([key, username]) => [key, `studio_session=${service.login(username, password).token}`])
     )
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
+    const qrCode = service.upload(player.id, {
+      name: 'isolated-qr.png',
+      mime: 'image/png',
+      data: png
+    })
+    mutate('/player/payment-methods', { method: 'wechat', qrCode }, player.id)
     await new Promise((res) => server.listen(0, '127.0.0.1', res))
     process.send({
       kind: 'ready',
@@ -316,7 +327,12 @@ async function main() {
       'same-wallet-withdrawal-race',
       25,
       25,
-      () => request('/player/withdrawals', 'player', { amount: 7000 }),
+      () =>
+        request('/player/withdrawals', 'player', {
+          amount: 7000,
+          paymentMethod: 'wechat',
+          requestId: randomUUID()
+        }),
       [200, 409]
     )
     assert.equal(withdrawals.statuses[200], 1)

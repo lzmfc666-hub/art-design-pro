@@ -1,5 +1,11 @@
 <template>
-  <div class="w-full">
+  <div class="w-full business-detail-page">
+    <BusinessPageHeader
+      title="个人中心"
+      description="核对当前账号身份、本人业绩、工资口径和账号安全，个人资料与业务授权分别维护。"
+      icon="ri:user-line"
+      :badge="user ? roleLabels[user.role] : '未登录'"
+    />
     <ElRow :gutter="20">
       <ElCol :xs="24" :lg="8">
         <div class="art-card-sm relative overflow-hidden text-center mb-5">
@@ -28,7 +34,11 @@
           </div>
         </div>
         <div class="art-card-sm p-5 mb-5">
-          <h3 class="font-medium mb-4">所选月份个人业绩</h3>
+          <BusinessDetailHeader
+            title="所选月份个人业绩"
+            description="本人完成业绩与已登记工时，工资金额沿用原月度核算和已发快照。"
+            :context="`${selectedMonth} 核算月份`"
+          />
           <ElDescriptions :column="1">
             <ElDescriptionsItem label="完成订单"
               >{{ performance?.completed ?? 0 }} 单</ElDescriptionsItem
@@ -59,6 +69,9 @@
       <ElCol :xs="24" :lg="16">
         <div class="art-card-sm mb-5">
           <h3 class="p-5 border-b border-g-300 font-medium">基本资料</h3>
+          <p class="px-5 pt-4 text-sm text-g-500"
+            >仅维护本人展示名称；登录账号、岗位和个人业务权限由管理人员维护。</p
+          >
           <ElForm
             ref="profileFormRef"
             :model="profile"
@@ -80,6 +93,9 @@
         </div>
         <div class="art-card-sm mb-5">
           <h3 class="p-5 border-b border-g-300 font-medium">账户安全</h3>
+          <p class="px-5 pt-4 text-sm text-g-500"
+            >先核验当前密码，再确认两次新密码；提交成功后撤销全部设备会话并重新登录。</p
+          >
           <ElForm
             ref="passwordFormRef"
             :model="password"
@@ -122,7 +138,10 @@
           </ElForm>
         </div>
         <div class="art-card-sm p-5">
-          <h3 class="font-medium mb-4">我的近期操作</h3>
+          <BusinessDetailHeader
+            title="我的近期操作"
+            description="当前授权热审计中本人最近的操作记录；本区不代表完整历史，也不能恢复已失去的业务权限。"
+          />
           <ArtTable :data="myLogs" :columns="activityColumns" height="300">
             <template #createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
           </ArtTable>
@@ -133,20 +152,44 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, reactive, ref, watch } from 'vue'
+  import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
+  import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
+  import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue'
+  import { useRoute } from 'vue-router'
   import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
   import { useStudio, roleLabels, money, formatTime } from '@/hooks/business/useStudio'
   import { studioRequest } from '@/api/studio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
 
   defineOptions({ name: 'UserCenter' })
-  const { data, user, selectedMonth, can, mutate, logout, clearSession } = useStudio()
+  const { data, user, selectedMonth, can, refresh, mutate, logout, clearSession } = useStudio()
+  const route = useRoute()
   const profileFormRef = ref<FormInstance>()
   const passwordFormRef = ref<FormInstance>()
   const profile = reactive({ name: '' })
   const password = reactive({ currentPassword: '', newPassword: '', confirmation: '' })
   const savingProfile = ref(false)
   const savingPassword = ref(false)
+  function refreshCurrentProfile() {
+    if (
+      route.path === '/system/user-center' &&
+      user.value &&
+      !savingProfile.value &&
+      !savingPassword.value
+    )
+      void refresh(selectedMonth.value).catch((cause) => {
+        ElMessage.error(cause instanceof Error ? cause.message : '个人核算读取失败')
+      })
+  }
+  let firstActivation = true
+  onMounted(refreshCurrentProfile)
+  onActivated(() => {
+    if (firstActivation) {
+      firstActivation = false
+      return
+    }
+    refreshCurrentProfile()
+  })
   const profileRules: FormRules = {
     name: [{ required: true, message: '请输入姓名或称呼', trigger: 'blur' }]
   }

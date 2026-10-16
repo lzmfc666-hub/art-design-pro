@@ -1,10 +1,12 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useStudio } from '@/hooks/business/useStudio'
+import { createStudioMutationIntent } from '@/api/studio-mutation'
 
 export function useFinanceActions() {
   const { mutate, refresh, loading, error } = useStudio()
   const saving = ref(false)
+  const intent = createStudioMutationIntent()
   async function submit(path: string, body: Record<string, unknown>, message: string) {
     if (saving.value) return false
     if (loading.value || error.value) {
@@ -15,14 +17,15 @@ export function useFinanceActions() {
     }
     saving.value = true
     try {
-      await mutate(path, body)
+      await mutate(path, intent.prepare(path, body))
+      intent.complete()
       ElMessage.success(message)
       return true
     } catch (cause) {
+      intent.fail(cause)
       const status = (cause as { status?: number } | null)?.status
       if (!status || status >= 500) {
-        error.value = '操作结果尚未确认，请刷新并核实记录后再操作，避免重复登记'
-        ElMessage.error(error.value)
+        ElMessage.error('操作结果尚未确认。再次提交原内容会安全重试；请勿另行登记相同业务')
       } else ElMessage.error(cause instanceof Error ? cause.message : '操作失败')
       return false
     } finally {

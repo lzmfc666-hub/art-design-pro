@@ -3,7 +3,6 @@ import { ApiError, shanghaiDate } from './studio.mjs'
 const DAY_MS = 86400000
 const dateNumber = (date) => Date.parse(`${date}T00:00:00Z`)
 const dateText = (timestamp) => new Date(timestamp).toISOString().slice(0, 10)
-const dayOf = (value) => (value ? shanghaiDate(value) : null)
 const inRange = (date, range) => Boolean(date && date >= range.start && date <= range.end)
 const sum = (rows, key) => rows.reduce((total, row) => total + (row[key] || 0), 0)
 const ratio = (value, total) => (total ? Math.round((value / total) * 10000) / 100 : null)
@@ -92,6 +91,13 @@ export function overviewMonths({ range, comparisonRange }) {
 /** 只使用已经按当前用户权限过滤的 bootstrap 快照，金额始终为整数分。 */
 export function buildOverviewReport(snapshots, dates, generatedAt) {
   if (!Array.isArray(snapshots) || !snapshots.length) throw new ApiError('概览数据尚未加载')
+  const dayDates = new Map()
+  const dayOf = (value) => {
+    if (!value) return null
+    const key = value instanceof Date ? value.getTime() : value
+    if (!dayDates.has(key)) dayDates.set(key, shanghaiDate(value))
+    return dayDates.get(key)
+  }
   const snapshot = snapshots[0]
   const permissions = [...snapshot.permissions]
   const can = (permission) => permissions.includes(permission)
@@ -117,6 +123,34 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
     snapshot.user.role === 'operations'
       ? order.commissionSnapshot?.operationsId === snapshot.user.id
       : order.creatorId === snapshot.user.id
+  // Index each event once for both date ranges; these maps never leave this read.
+  const byDay = (rows, date) => {
+    const index = new Map()
+    for (const row of rows) {
+      const key = date(row)
+      const bucket = index.get(key) || []
+      bucket.push(row)
+      index.set(key, bucket)
+    }
+    return index
+  }
+  const paidByDay = byDay(orderRows.filter(row => row.receivedAmount > 0), row => dayOf(row.paidAt))
+  const completedByDay = byDay(orderRows.filter(row => row.status === 'completed'), row => dayOf(row.completedAt))
+  const createdByDay = byDay(orderRows, row => dayOf(row.createdAt))
+  const canceledByDay = byDay(orderRows, row => dayOf(row.canceledAt))
+  const assignments = orderRows.flatMap(order => (order.assignments || [])
+    .filter(row => can('orders.view') || row.leaderId === snapshot.user.id)
+    .map(row => ({ ...row, order })))
+  const acceptedByDay = byDay(assignments, row => dayOf(row.acceptedAt))
+  const personalByDay = byDay(snapshot.personalPerformance || [], row => row.date)
+  const expensesByDay = !profit && expensesVisible
+    ? byDay(snapshot.expenses.filter(row => !row.deletedAt), row => row.date)
+    : new Map()
+  const reportDays = new Map()
+  for (const report of reportsByMonth.values())
+    for (const row of report.days)
+      if (!reportDays.has(`${report.month}/${row.date}`))
+        reportDays.set(`${report.month}/${row.date}`, row)
   const creationCoverage = (rows, range) => ({
     known: rows.filter((row) => row.createdAt).length,
     unknown: rows.filter((row) => !row.createdAt).length,
@@ -126,18 +160,10 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
     const metrics = Object.fromEntries(metricKeys.map((key) => [key, null]))
     const series = Array.from({ length: range.days }, (_, index) => {
       const date = dateText(dateNumber(range.start) + index * DAY_MS)
-      const report = reportsByMonth.get(date.slice(0, 7))?.days.find((row) => row.date === date)
-      const paid = orderRows.filter((row) => row.receivedAmount > 0 && dayOf(row.paidAt) === date)
-      const completed = orderRows.filter(
-        (row) => row.status === 'completed' && dayOf(row.completedAt) === date
-      )
-      const accepted = orderRows.flatMap((order) =>
-        (order.assignments || []).filter(
-          (row) =>
-            dayOf(row.acceptedAt) === date &&
-            (can('orders.view') || row.leaderId === snapshot.user.id)
-        )
-      )
+      const report = reportDays.get(`${date.slice(0, 7)}/${date}`)
+      const paid = paidByDay.get(date) || []
+      const completed = completedByDay.get(date) || []
+      const accepted = acceptedByDay.get(date) || []
       return {
         date,
         received: profit ? (report?.received ?? null) : null,
@@ -145,11 +171,11 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
         net: profit ? (report?.net ?? null) : null,
         orders: ordersVisible ? paid.length : null,
         createdOrders: ordersVisible
-          ? orderRows.filter((row) => dayOf(row.createdAt) === date).length
+          ? (createdByDay.get(date)?.length || 0)
           : null,
         completedOrders: ordersVisible ? completed.length : null,
         canceledOrders: ordersVisible
-          ? orderRows.filter((row) => dayOf(row.canceledAt) === date).length
+          ? (canceledByDay.get(date)?.length || 0)
           : null,
         payingCustomers:
           profit && can('orders.view')
@@ -160,21 +186,19 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
         expenses: profit
           ? (report?.expenses ?? null)
           : expensesVisible
-            ? snapshot.expenses
-                .filter((row) => !row.deletedAt && row.date === date)
+            ? (expensesByDay.get(date) || [])
                 .reduce((total, row) => total + row.amount, 0)
             : null,
         otherIncome: profit ? (report?.otherIncome ?? 0) : null,
         personalNet: can('orders.view')
           ? snapshot.personalPerformance
-            ? snapshot.personalPerformance
-                .filter((row) => row.date === date)
+            ? (personalByDay.get(date) || [])
                 .reduce((total, row) => total + row.net, 0)
             : completed.filter(personal).reduce((total, row) => total + netOrder(row), 0)
           : null,
         personalCompletedOrders: can('orders.view')
           ? snapshot.personalPerformance
-            ? snapshot.personalPerformance.filter((row) => row.date === date).length
+            ? (personalByDay.get(date)?.length || 0)
             : completed.filter(personal).length
           : null
       }
@@ -188,16 +212,13 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
       )
       const customers = new Set(paid.map((row) => row.customerId).filter(Boolean))
       // 复购人数：选期付费客户在截至选期末的可见付款历史中至少有两笔订单。
-      const repeating = [...customers].filter(
-        (id) =>
-          orderRows.filter(
-            (row) =>
-              row.customerId === id &&
-              row.receivedAmount > 0 &&
-              dayOf(row.paidAt) &&
-              dayOf(row.paidAt) <= range.end
-          ).length >= 2
-      ).length
+      const historyCounts = new Map()
+      for (const row of orderRows) {
+        const date = row.receivedAmount > 0 && dayOf(row.paidAt)
+        if (date && date <= range.end)
+          historyCounts.set(row.customerId, (historyCounts.get(row.customerId) || 0) + 1)
+      }
+      const repeating = [...customers].filter(id => (historyCounts.get(id) || 0) >= 2).length
       Object.assign(metrics, {
         received: sum(periodDays, 'received'),
         refunds: sum(periodDays, 'refunds'),
@@ -245,21 +266,13 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
       metrics.createdOrders = sum(series, 'createdOrders')
       metrics.completedOrders = sum(series, 'completedOrders')
       metrics.canceledOrders = sum(series, 'canceledOrders')
-      const assignments = orderRows.flatMap((order) =>
-        (order.assignments || [])
-          .filter(
-            (row) =>
-              inRange(dayOf(row.acceptedAt), range) &&
-              (can('orders.view') || row.leaderId === snapshot.user.id)
-          )
-          .map((row) => ({ ...row, order }))
-      )
+      const rangeAssignments = assignments.filter(row => inRange(dayOf(row.acceptedAt), range))
       const acceptedOrders = [
-        ...new Map(assignments.map((row) => [row.order.id, row.order])).values()
+        ...new Map(rangeAssignments.map((row) => [row.order.id, row.order])).values()
       ]
-      metrics.playerAccepted = assignments.length
+      metrics.playerAccepted = rangeAssignments.length
       metrics.playerAcceptedOrders = acceptedOrders.length
-      metrics.playerUnique = new Set(assignments.map((row) => row.leaderId)).size
+      metrics.playerUnique = new Set(rangeAssignments.map((row) => row.leaderId)).size
       metrics.playerCompletedOrders = orderRows.filter(
         (row) => row.status === 'completed' && inRange(dayOf(row.completedAt), range)
       ).length

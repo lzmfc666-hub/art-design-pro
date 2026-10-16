@@ -1,3 +1,4 @@
+import { testMutate } from './helpers/current-intent.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -18,7 +19,7 @@ function fixture(t) {
     clock: () => new Date('2026-10-13T02:00:00Z')
   })
   t.after(() => service.close())
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const staff = (name, role = 'hr', overrides = {}) =>
     mutate('/users', {
       username: name,

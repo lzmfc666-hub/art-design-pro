@@ -69,6 +69,14 @@ const permissionNames = {
   'reports.export': '导出业务数据'
 }
 const permissionText = (keys) => keys.map((key) => permissionNames[key] || key).join('、')
+function* mapRows(rows, mapper) {
+  let index = 0
+  for (const row of rows) yield mapper(row, index++, rows)
+}
+function* flatMapRows(rows, mapper) {
+  let index = 0
+  for (const row of rows) yield* mapper(row, index++, rows)
+}
 const field = (key, label, type = 'text', selected = true) => ({
   key,
   label,
@@ -107,14 +115,23 @@ function modulesFor(snapshot) {
     !snapshot.permissions.includes('reports.export')
   )
     throw new ApiError('客服账号不开放数据导出，或当前账号没有导出权限', 403)
-  const can = (...keys) => keys.some((key) => snapshot.permissions.includes(key))
-  const person = (id) => snapshot.users.find((row) => row.id === id)?.name || id || ''
-  const platform = (id) => snapshot.platforms.find((row) => row.id === id)?.name || id || ''
-  const shop = (id) => snapshot.shops.find((row) => row.id === id)?.name || id || ''
-  const customer = (id) => snapshot.customers.find((row) => row.id === id)?.name || id || ''
-  const orderMap = new Map(snapshot.orders.map((row) => [row.id, row]))
+  const can = (...keys) =>
+    snapshot.user.role !== 'player' && keys.some((key) => snapshot.permissions.includes(key))
+  const names = new Map()
+  const name = (table, id) => {
+    if (!id) return ''
+    if (!names.has(table))
+      names.set(table, new Map(snapshot[table].map((row) => [row.id, row.name])))
+    return names.get(table).get(id) || id
+  }
+  const person = (id) => name('users', id)
+  const platform = (id) => name('platforms', id)
+  const shop = (id) => name('shops', id)
+  const customer = (id) => name('customers', id)
+  let orderMap
   const orderIdentity = (id) => {
-    const order = orderMap.get(id)
+    if (id && !orderMap) orderMap = new Map(snapshot.orders.map((row) => [row.id, row]))
+    const order = orderMap?.get(id)
     return {
       orderNo: order?.orderNo || id,
       orderTitle: order?.title || '',
@@ -154,13 +171,14 @@ function modulesFor(snapshot) {
       ['balance', '当前储值余额（元）', 'number'],
       ['balanceScope', '余额口径']
     ],
-    (snapshot.customerBalances || []).map((row) => ({
-      customerId: row.customerId,
-      customerName: customer(row.customerId),
-      balance: yuan(row.balance),
-      balanceScope: '当前余额快照，并非所选期间期末余额',
-      _customers: [row.customerId]
-    })),
+    () =>
+      mapRows(snapshot.customerBalances || [], (row) => ({
+        customerId: row.customerId,
+        customerName: customer(row.customerId),
+        balance: yuan(row.balance),
+        balanceScope: '当前余额快照，并非所选期间期末余额',
+        _customers: [row.customerId]
+      })),
     '当前储值账户余额，不按所选日报、周报、月报或总计区间重建历史余额。充值、余额退还不计订单收入，交易明细见老板储值流水。'
   )
   add(
@@ -183,23 +201,24 @@ function modulesFor(snapshot) {
       ['receiptName', '凭证名称', 'text', false],
       ['receiptUrl', '凭证站内地址', 'text', false]
     ],
-    (snapshot.customerTransactions || []).map((row) => ({
-      id: row.id,
-      accountId: row.accountId,
-      customerName: customer(row.accountId),
-      kind: customerFundKinds[row.kind] || row.kind,
-      amount: yuan(row.amount),
-      delta: yuan(row.delta),
-      balanceAfter: yuan(row.balanceAfter),
-      reason: row.reason,
-      orderNo: row.orderId ? orderIdentity(row.orderId).orderNo : '',
-      createdByName: row.createdByName || person(row.createdBy),
-      createdAt: displayTime(row.createdAt),
-      ...receipt(row.receipt),
-      _date: row.createdAt,
-      _people: [row.createdBy],
-      _customers: [row.accountId]
-    })),
+    () =>
+      mapRows(snapshot.customerTransactions || [], (row) => ({
+        id: row.id,
+        accountId: row.accountId,
+        customerName: customer(row.accountId),
+        kind: customerFundKinds[row.kind] || row.kind,
+        amount: yuan(row.amount),
+        delta: yuan(row.delta),
+        balanceAfter: yuan(row.balanceAfter),
+        reason: row.reason,
+        orderNo: row.orderId ? orderIdentity(row.orderId).orderNo : '',
+        createdByName: row.createdByName || person(row.createdBy),
+        createdAt: displayTime(row.createdAt),
+        ...receipt(row.receipt),
+        _date: row.createdAt,
+        _people: [row.createdBy],
+        _customers: [row.accountId]
+      })),
     '按实际登记日期筛选完整授权流水，不只导出页面分页。充值和退还不计收入；订单余额支付按订单只计一次收入，非订单扣款计其他收入。交易后余额是该笔记录的余额，不代表所选期间末余额。',
     '实际交易登记日期'
   )
@@ -214,13 +233,14 @@ function modulesFor(snapshot) {
       ['balance', '当前押金余额（元）', 'number'],
       ['balanceScope', '余额口径']
     ],
-    (snapshot.playerDeposits || []).map((row) => ({
-      userId: row.userId,
-      name: person(row.userId),
-      balance: yuan(row.balance),
-      balanceScope: '当前余额快照，并非所选期间期末余额',
-      _people: [row.userId]
-    })),
+    () =>
+      mapRows(snapshot.playerDeposits || [], (row) => ({
+        userId: row.userId,
+        name: person(row.userId),
+        balance: yuan(row.balance),
+        balanceScope: '当前余额快照，并非所选期间期末余额',
+        _people: [row.userId]
+      })),
     '当前押金余额与打手报酬钱包分开，不按报表期间重建历史。日常扣款只走报酬钱包；押金退还和没收仅用于离店或跑路处理。'
   )
   add(
@@ -243,22 +263,23 @@ function modulesFor(snapshot) {
       ['receiptName', '凭证名称', 'text', false],
       ['receiptUrl', '凭证站内地址', 'text', false]
     ],
-    (snapshot.playerDepositTransactions || []).map((row) => ({
-      id: row.id,
-      accountId: row.accountId,
-      name: person(row.accountId),
-      kind: depositKinds[row.kind] || row.kind,
-      exitType: exitTypes[row.exitType] || '',
-      amount: yuan(row.amount),
-      delta: yuan(row.delta),
-      balanceAfter: yuan(row.balanceAfter),
-      reason: row.reason,
-      createdByName: row.createdByName || person(row.createdBy),
-      createdAt: displayTime(row.createdAt),
-      ...receipt(row.receipt),
-      _date: row.createdAt,
-      _people: [row.accountId, row.createdBy]
-    })),
+    () =>
+      mapRows(snapshot.playerDepositTransactions || [], (row) => ({
+        id: row.id,
+        accountId: row.accountId,
+        name: person(row.accountId),
+        kind: depositKinds[row.kind] || row.kind,
+        exitType: exitTypes[row.exitType] || '',
+        amount: yuan(row.amount),
+        delta: yuan(row.delta),
+        balanceAfter: yuan(row.balanceAfter),
+        reason: row.reason,
+        createdByName: row.createdByName || person(row.createdBy),
+        createdAt: displayTime(row.createdAt),
+        ...receipt(row.receipt),
+        _date: row.createdAt,
+        _people: [row.accountId, row.createdBy]
+      })),
     '按实际登记日期筛选完整授权流水。缴纳和退还押金不计收入；离店或跑路时的押金没收计其他收入，与日常报酬钱包扣款分开。交易后余额不代表所选期间期末余额。',
     '实际交易登记日期'
   )
@@ -281,27 +302,28 @@ function modulesFor(snapshot) {
       ['resolution', '差额处理结果'],
       ['resolutionReason', '处理说明']
     ],
-    (snapshot.playerAdjustments || []).map((row) => ({
-      ...row,
-      name: person(row.userId),
-      kind: row.kind === 'deduction' ? '扣款' : '补款',
-      amount: yuan(row.amount),
-      appliedAmount: yuan(row.appliedAmount),
-      manualAmount: yuan(row.manualAmount),
-      status: { applied: '已入账', manual: '待人工处理', resolved: '已处理' }[row.status],
-      orderNo: orderIdentity(row.orderId).orderNo,
-      createdByName: person(row.createdBy),
-      createdAt: displayTime(row.createdAt),
-      resolution:
-        row.resolution === 'recovered'
-          ? '已线下追回'
-          : row.resolution === 'waived'
-            ? '免除差额'
-            : '',
-      _date: row.createdAt,
-      _status: row.status,
-      _people: [row.userId, row.createdBy]
-    })),
+    () =>
+      mapRows(snapshot.playerAdjustments || [], (row) => ({
+        ...row,
+        name: person(row.userId),
+        kind: row.kind === 'deduction' ? '扣款' : '补款',
+        amount: yuan(row.amount),
+        appliedAmount: yuan(row.appliedAmount),
+        manualAmount: yuan(row.manualAmount),
+        status: { applied: '已入账', manual: '待人工处理', resolved: '已处理' }[row.status],
+        orderNo: orderIdentity(row.orderId).orderNo,
+        createdByName: person(row.createdBy),
+        createdAt: displayTime(row.createdAt),
+        resolution:
+          row.resolution === 'recovered'
+            ? '已线下追回'
+            : row.resolution === 'waived'
+              ? '免除差额'
+              : '',
+        _date: row.createdAt,
+        _status: row.status,
+        _people: [row.userId, row.createdBy]
+      })),
     '独立扣补款流水；已付提现不重写，差额按财务登记的实际处理结果保存。',
     '调整登记日期'
   )
@@ -318,14 +340,15 @@ function modulesFor(snapshot) {
       ['resolution', '人工处理说明'],
       ['resolvedAt', '处理时间']
     ],
-    (snapshot.rewardReviews || []).map((row) => ({
-      ...row,
-      orderNo: orderIdentity(row.orderId).orderNo,
-      expectedReward: yuan(row.expectedReward),
-      createdAt: displayTime(row.createdAt),
-      resolvedAt: displayTime(row.resolvedAt),
-      _date: row.createdAt
-    })),
+    () =>
+      mapRows(snapshot.rewardReviews || [], (row) => ({
+        ...row,
+        orderNo: orderIdentity(row.orderId).orderNo,
+        expectedReward: yuan(row.expectedReward),
+        createdAt: displayTime(row.createdAt),
+        resolvedAt: displayTime(row.resolvedAt),
+        _date: row.createdAt
+      })),
     '旧报酬更正的人工处理记录，不将未知差额伪造为单个打手扣款。',
     '登记日期'
   )
@@ -340,15 +363,16 @@ function modulesFor(snapshot) {
       ['shopName', '来源店铺'],
       ['externalOrderNo', '平台订单编号']
     ],
-    snapshot.customers.flatMap((row) =>
-      (row.orderReferences || []).map((reference) => ({
-        customerName: row.name,
-        platformName: platform(reference.platformId),
-        shopName: shop(reference.shopId),
-        externalOrderNo: reference.externalOrderNo,
-        _platforms: [reference.platformId]
-      }))
-    ),
+    () =>
+      flatMapRows(snapshot.customers, (row) =>
+        mapRows(row.orderReferences || [], (reference) => ({
+          customerName: row.name,
+          platformName: platform(reference.platformId),
+          shopName: shop(reference.shopId),
+          externalOrderNo: reference.externalOrderNo,
+          _platforms: [reference.platformId]
+        }))
+      ),
     '客户档案中的平台编号关联记录，不形成订单营收。日期范围不适用。'
   )
   add(
@@ -374,7 +398,7 @@ function modulesFor(snapshot) {
       ]),
       ['incomplete', '统计是否完整']
     ],
-    [
+    () => [
       {
         month: periodText,
         ...Object.fromEntries(
@@ -433,30 +457,31 @@ function modulesFor(snapshot) {
       ]),
       ['incomplete', '配置状态']
     ],
-    report.days.map((row) => ({
-      ...row,
-      ...Object.fromEntries(
-        [
-          'received',
-          'refunds',
-          'net',
-          'otherIncome',
-          'reward',
-          'estimatedReward',
-          'supportCommission',
-          'operationsCommission',
-          'expenses',
-          'profit'
-        ].map((key) => [
-          key,
-          ['supportCommission', 'operationsCommission'].includes(key) && row.incomplete
-            ? '待配置'
-            : yuan(key === 'otherIncome' ? (row[key] ?? 0) : row[key])
-        ])
-      ),
-      incomplete: row.incomplete ? '配置未齐' : '完整',
-      _date: row.date
-    })),
+    () =>
+      mapRows(report.days, (row) => ({
+        ...row,
+        ...Object.fromEntries(
+          [
+            'received',
+            'refunds',
+            'net',
+            'otherIncome',
+            'reward',
+            'estimatedReward',
+            'supportCommission',
+            'operationsCommission',
+            'expenses',
+            'profit'
+          ].map((key) => [
+            key,
+            ['supportCommission', 'operationsCommission'].includes(key) && row.incomplete
+              ? '待配置'
+              : yuan(key === 'otherIncome' ? (row[key] ?? 0) : row[key])
+          ])
+        ),
+        incomplete: row.incomplete ? '配置未齐' : '完整',
+        _date: row.date
+      })),
     '订单收入与退款归属原付款日；非订单扣款及离店押金没收按实际登记日计其他收入，已包含在日利润，不再次叠加。充值、押金缴退不计经营收入，日利润未扣月底薪。',
     '订单付款 / 其他收入登记日'
   )
@@ -476,15 +501,16 @@ function modulesFor(snapshot) {
         ['net', '净收入']
       ])
     ],
-    report.channels.map((row) => ({
-      ...row,
-      received: yuan(row.received),
-      refunds: yuan(row.refunds),
-      net: yuan(row.net),
-      platformName: platform(row.platformId),
-      shopName: shop(row.shopId),
-      _platforms: [row.platformId]
-    })),
+    () =>
+      mapRows(report.channels, (row) => ({
+        ...row,
+        received: yuan(row.received),
+        refunds: yuan(row.refunds),
+        net: yuan(row.net),
+        platformName: platform(row.platformId),
+        shopName: shop(row.shopId),
+        _platforms: [row.platformId]
+      })),
     '按所选报表区间的原付款日汇总；平台与所属店铺不能重复相加，追加明细筛选不重算该汇总。'
   )
   add(
@@ -499,12 +525,13 @@ function modulesFor(snapshot) {
       ['net', '业绩净收入（元）', 'number'],
       ['month', '业绩统计区间']
     ],
-    report.performance.map((row) => ({
-      ...row,
-      net: yuan(row.net),
-      month: periodText,
-      _people: [row.userId]
-    })),
+    () =>
+      mapRows(report.performance, (row) => ({
+        ...row,
+        net: yuan(row.net),
+        month: periodText,
+        _people: [row.userId]
+      })),
     '按所选报表区间的订单完成日期统计；仅当前账号可见的本人或全员业绩，追加明细筛选不重算该汇总。'
   )
   const orderColumns = [
@@ -533,8 +560,10 @@ function modulesFor(snapshot) {
     ['publishedAt', '发布时间', 'text', false],
     ['completedAt', '完成时间'],
     ['dispatchMode', '派单方式'],
+    ['dispatchState', '分配状态'],
     ['assignedName', '指定打手'],
-    ['remark', '打手可见备注'],
+    ['remark', '内部备注'],
+    ['playerRemark', '打手备注'],
     ['receiptName', '付款凭证名称', 'text', false],
     ['receiptUrl', '付款凭证地址', 'text', false],
     ['cancelReason', '取消原因', 'text', false]
@@ -545,40 +574,105 @@ function modulesFor(snapshot) {
     '订单业务',
     can('orders.view'),
     orderColumns,
-    snapshot.orders.map((row) => ({
-      ...row,
-      amount: yuan(row.amount),
-      reward: yuan(row.reward),
-      receivedAmount: yuan(row.receivedAmount),
-      customerName: customer(row.customerId),
-      platformName: platform(row.platformId),
-      shopName: shop(row.shopId),
-      creatorName: person(row.creatorId),
-      leaderName: person(row.leaderId),
-      teammateName: person(row.teammateId),
-      assignedName: person(row.assignedTo),
-      status: {
-        pending: '待接单',
-        active: '接单中',
-        review: '待验收',
-        completed: '已完成',
-        canceled: '已取消'
-      }[row.status],
-      dispatchMode: row.dispatchMode === 'direct' ? '指定打手' : '抢单池',
-      ...receipt(row.receipt),
-      ...Object.fromEntries(
-        ['createdAt', 'paidAt', 'receivedAt', 'publishedAt', 'completedAt'].map((key) => [
-          key,
-          displayTime(row[key])
-        ])
-      ),
-      _dates: { createdAt: row.createdAt, paidAt: row.paidAt, completedAt: row.completedAt },
-      _status: row.status,
-      _people: [row.creatorId, row.leaderId, row.teammateId, row.assignedTo],
-      _platforms: [row.platformId]
-    })),
+    () =>
+      mapRows(snapshot.orders, (row) => ({
+        ...row,
+        amount: yuan(row.amount),
+        reward: yuan(row.reward),
+        receivedAmount: yuan(row.receivedAmount),
+        customerName: customer(row.customerId),
+        platformName: platform(row.platformId),
+        shopName: shop(row.shopId),
+        creatorName: person(row.creatorId),
+        leaderName: person(row.leaderId),
+        teammateName: person(row.teammateId),
+        assignedName: person(row.assignedTo),
+        status: {
+          pending: row.dispatchState === 'unassigned' ? '待分配' : '待接单',
+          active: '接单中',
+          review: '待验收',
+          completed: '已完成',
+          canceled: '已取消'
+        }[row.status],
+        dispatchMode: row.dispatchMode === 'direct' ? '指定打手' : '抢单池',
+        dispatchState: row.dispatchState === 'unassigned' ? '待客服分配' : '已发布 / 已指定',
+        ...receipt(row.receipt),
+        ...Object.fromEntries(
+          ['createdAt', 'paidAt', 'receivedAt', 'publishedAt', 'completedAt'].map((key) => [
+            key,
+            displayTime(row[key])
+          ])
+        ),
+        _dates: { createdAt: row.createdAt, paidAt: row.paidAt, completedAt: row.completedAt },
+        _status: row.status,
+        _people: [row.creatorId, row.leaderId, row.teammateId, row.assignedTo],
+        _platforms: [row.platformId]
+      })),
     '导出当前权限可见订单；日期可选创建、付款或完成时间。',
     '所选订单日期口径'
+  )
+  add(
+    'orderReturns',
+    '打手退单申请',
+    '订单业务',
+    can('orders.view'),
+    [
+      ['orderNo', '订单号'],
+      ['orderTitle', '项目'],
+      ['leaderName', '原负责人'],
+      ['reason', '申请原因'],
+      ['status', '处理状态'],
+      ['requestedAt', '申请时间'],
+      ['processedAt', '处理时间'],
+      ['processedName', '处理人'],
+      ['processReason', '处理说明']
+    ],
+    () =>
+      flatMapRows(snapshot.orders, (order) =>
+        mapRows(order.returnRequests || [], (row) => ({
+          ...orderIdentity(order.id),
+          leaderName: person(row.leaderId),
+          reason: row.reason,
+          status: { pending: '待处理', approved: '已批准', rejected: '已驳回', obsolete: '已失效' }[
+            row.status
+          ],
+          requestedAt: displayTime(row.requestedAt),
+          processedAt: displayTime(row.processedAt),
+          processedName: person(row.processedBy),
+          processReason: row.processReason || '',
+          _date: row.requestedAt,
+          _status: row.status,
+          _people: [row.leaderId, row.processedBy, order.creatorId]
+        }))
+      ),
+    '退单申请与客户退款分别记录；保留原负责人及客服处理说明。',
+    '退单申请日期'
+  )
+  add(
+    'orderRejections',
+    '指定订单拒单',
+    '订单业务',
+    can('orders.view'),
+    [
+      ['orderNo', '订单号'],
+      ['orderTitle', '项目'],
+      ['playerName', '原指定打手'],
+      ['reason', '拒绝原因'],
+      ['rejectedAt', '拒绝时间']
+    ],
+    () =>
+      flatMapRows(snapshot.orders, (order) =>
+        mapRows(order.rejections || [], (row) => ({
+          ...orderIdentity(order.id),
+          playerName: person(row.playerId),
+          reason: row.reason,
+          rejectedAt: displayTime(row.rejectedAt),
+          _date: row.rejectedAt,
+          _people: [row.playerId, order.creatorId]
+        }))
+      ),
+    '接受前拒绝指定订单的历史；拒绝后保留客户订单并交回客服分配。',
+    '拒单日期'
   )
   add(
     'orderAssignments',
@@ -593,17 +687,18 @@ function modulesFor(snapshot) {
       ['releasedAt', '解除时间'],
       ['reason', '解除原因']
     ],
-    snapshot.orders.flatMap((order) =>
-      order.assignments.map((row) => ({
-        ...orderIdentity(order.id),
-        leaderName: person(row.leaderId),
-        acceptedAt: displayTime(row.acceptedAt),
-        releasedAt: displayTime(row.releasedAt),
-        reason: row.reason || '',
-        _date: row.acceptedAt,
-        _people: [row.leaderId, order.creatorId]
-      }))
-    ),
+    () =>
+      flatMapRows(snapshot.orders, (order) =>
+        mapRows(order.assignments || [], (row) => ({
+          ...orderIdentity(order.id),
+          leaderName: person(row.leaderId),
+          acceptedAt: displayTime(row.acceptedAt),
+          releasedAt: displayTime(row.releasedAt),
+          reason: row.reason || '',
+          _date: row.acceptedAt,
+          _people: [row.leaderId, order.creatorId]
+        }))
+      ),
     '订单历史接单和解除明细。',
     '接单日期'
   )
@@ -627,24 +722,27 @@ function modulesFor(snapshot) {
       ['reason', '退回原因'],
       ['screenshots', '截图名称与地址']
     ],
-    snapshot.orders.flatMap((order) =>
-      order.submissions.map((row) => ({
-        ...orderIdentity(order.id),
-        leaderName: person(row.leaderId),
-        teammateName: person(row.teammateId),
-        submittedAt: displayTime(row.submittedAt),
-        source: row.source === 'status-correction' ? '后台状态登记（免截图）' : '打手上报',
-        correctedByName: person(row.correctedBy),
-        correctionReason: row.correctionReason || '',
-        reviewedAt: displayTime(row.reviewedAt),
-        reviewerName: person(row.reviewerId),
-        review: row.review || '待验收',
-        reason: row.reason || '',
-        screenshots: row.screenshots.map((image) => `${image.name}：${image.url}`).join('\n'),
-        _date: row.submittedAt,
-        _people: [row.leaderId, row.teammateId, row.reviewerId, order.creatorId]
-      }))
-    ),
+    () =>
+      flatMapRows(snapshot.orders, (order) =>
+        mapRows(order.submissions || [], (row) => ({
+          ...orderIdentity(order.id),
+          leaderName: person(row.leaderId),
+          teammateName: person(row.teammateId),
+          submittedAt: displayTime(row.submittedAt),
+          source: row.source === 'status-correction' ? '后台状态登记（免截图）' : '打手上报',
+          correctedByName: person(row.correctedBy),
+          correctionReason: row.correctionReason || '',
+          reviewedAt: displayTime(row.reviewedAt),
+          reviewerName: person(row.reviewerId),
+          review: row.review || '待验收',
+          reason: row.reason || '',
+          screenshots: (row.screenshots || [])
+            .map((image) => `${image.name}：${image.url}`)
+            .join('\n'),
+          _date: row.submittedAt,
+          _people: [row.leaderId, row.teammateId, row.reviewerId, order.creatorId]
+        }))
+      ),
     '保留上报、退回和验收记录；截图导出名称与地址，不打包图片。',
     '上报日期'
   )
@@ -667,21 +765,22 @@ function modulesFor(snapshot) {
       ['manualRewardReview', '提现后差额待人工处理'],
       ['manualResolution', '人工处理结果']
     ],
-    snapshot.refunds.map((row) => ({
-      ...row,
-      ...orderIdentity(row.orderId),
-      amount: yuan(row.amount),
-      status: { pending: '待审核', paid: '已退款', rejected: '已驳回' }[row.status],
-      requestedName: person(row.requestedBy),
-      processedName: person(row.processedBy),
-      createdAt: displayTime(row.createdAt),
-      processedAt: displayTime(row.processedAt),
-      manualRewardReview: row.manualRewardReview ? '是' : '否',
-      manualResolution: row.manualResolution || '',
-      _status: row.status,
-      _date: row.createdAt,
-      _people: [row.requestedBy, row.processedBy, ...orderIdentity(row.orderId)._people]
-    })),
+    () =>
+      mapRows(snapshot.refunds, (row) => ({
+        ...row,
+        ...orderIdentity(row.orderId),
+        amount: yuan(row.amount),
+        status: { pending: '待审核', paid: '已退款', rejected: '已驳回' }[row.status],
+        requestedName: person(row.requestedBy),
+        processedName: person(row.processedBy),
+        createdAt: displayTime(row.createdAt),
+        processedAt: displayTime(row.processedAt),
+        manualRewardReview: row.manualRewardReview ? '是' : '否',
+        manualResolution: row.manualResolution || '',
+        _status: row.status,
+        _date: row.createdAt,
+        _people: [row.requestedBy, row.processedBy, ...orderIdentity(row.orderId)._people]
+      })),
     '仅当前可见订单的退款；人工差额登记与说明一起导出。',
     '申请日期'
   )
@@ -698,25 +797,45 @@ function modulesFor(snapshot) {
       ['createdAt', '申请时间'],
       ['processedAt', '审核时间'],
       ['paidAt', '发放时间'],
+      ['canceledAt', '撤回时间'],
+      ['weekStart', '次数所属自然周'],
+      ['paymentMethod', '收款方式'],
+      ['paymentSnapshotUpdatedAt', '申请时收款资料更新时间'],
+      ['paymentQrCodeName', '申请时收款码名称'],
+      ['paymentQrCodeUrl', '申请时收款码地址', 'text', false],
+      ['processedName', '处理人'],
       ['reason', '处理说明'],
       ['receiptName', '发放凭证名称'],
       ['receiptUrl', '发放凭证地址']
     ],
-    snapshot.withdrawals.map((row) => ({
-      ...row,
-      name: person(row.userId),
-      amount: yuan(row.amount),
-      status: { pending: '待审核', approved: '待发放', paid: '已发放', rejected: '已驳回' }[
-        row.status
-      ],
-      ...receipt(row.receipt),
-      createdAt: displayTime(row.createdAt),
-      processedAt: displayTime(row.processedAt),
-      paidAt: displayTime(row.paidAt),
-      _date: row.createdAt,
-      _status: row.status,
-      _people: [row.userId]
-    })),
+    () =>
+      mapRows(snapshot.withdrawals, (row) => ({
+        ...row,
+        name: person(row.userId),
+        amount: yuan(row.amount),
+        status: {
+          pending: '待审核',
+          approved: '待发放',
+          paid: '已发放',
+          rejected: '已驳回',
+          canceled: '已撤回'
+        }[row.status],
+        paymentMethod:
+          { wechat: '微信', alipay: '支付宝' }[row.paymentSnapshot?.method || row.paymentMethod] ||
+          '历史记录未登记',
+        paymentSnapshotUpdatedAt: displayTime(row.paymentSnapshot?.updatedAt),
+        paymentQrCodeName: row.paymentSnapshot?.qrCode?.name || '',
+        paymentQrCodeUrl: row.paymentSnapshot?.qrCode?.url || '',
+        processedName: person(row.processedBy),
+        ...receipt(row.receipt),
+        createdAt: displayTime(row.createdAt),
+        processedAt: displayTime(row.processedAt),
+        paidAt: displayTime(row.paidAt),
+        canceledAt: displayTime(row.canceledAt),
+        _date: row.createdAt,
+        _status: row.status,
+        _people: [row.userId]
+      })),
     '财务可导可见打手记录；打手仅可导本人提现。',
     '申请日期'
   )
@@ -734,13 +853,14 @@ function modulesFor(snapshot) {
         ['available', '可提现']
       ])
     ],
-    snapshot.wallets.map((row) => ({
-      name: person(row.userId),
-      ...Object.fromEntries(
-        ['earned', 'occupied', 'paid', 'available'].map((key) => [key, yuan(row[key])])
-      ),
-      _people: [row.userId]
-    })),
+    () =>
+      mapRows(snapshot.wallets, (row) => ({
+        name: person(row.userId),
+        ...Object.fromEntries(
+          ['earned', 'occupied', 'paid', 'available'].map((key) => [key, yuan(row[key])])
+        ),
+        _people: [row.userId]
+      })),
     '当前余额快照，不按日期范围回溯。'
   )
   add(
@@ -760,17 +880,18 @@ function modulesFor(snapshot) {
       ['receiptName', '凭证名称'],
       ['receiptUrl', '凭证地址']
     ],
-    snapshot.expenses.map((row) => ({
-      ...row,
-      amount: yuan(row.amount),
-      creatorName: person(row.createdBy),
-      ...receipt(row.receipt),
-      status: row.deletedAt ? '已删除' : '已入账',
-      deletedAt: displayTime(row.deletedAt),
-      _status: row.deletedAt ? 'deleted' : 'active',
-      _date: row.date,
-      _people: [row.createdBy]
-    })),
+    () =>
+      mapRows(snapshot.expenses, (row) => ({
+        ...row,
+        amount: yuan(row.amount),
+        creatorName: person(row.createdBy),
+        ...receipt(row.receipt),
+        status: row.deletedAt ? '已删除' : '已入账',
+        deletedAt: displayTime(row.deletedAt),
+        _status: row.deletedAt ? 'deleted' : 'active',
+        _date: row.date,
+        _people: [row.createdBy]
+      })),
     '包含已删除和可恢复记录，可按状态筛选。',
     '实际发生日期'
   )
@@ -788,15 +909,17 @@ function modulesFor(snapshot) {
     ['incomplete', '配置状态']
   ]
   const monthPayroll = !period || period.type === 'monthly'
-  const paidLineCount = snapshot.payrolls
-    .filter((row) => row.month === report.month)
-    .reduce((sum, row) => sum + row.lines.length, 0)
+  let paidLineCount
+  const paidLines = () =>
+    (paidLineCount ??= snapshot.payrolls
+      .filter((row) => row.month === report.month)
+      .reduce((sum, row) => sum + row.lines.length, 0))
   const payrollRow = (row, index) => ({
     ...row,
     role: roleNames[row.role],
     month: monthPayroll ? report.month : periodText,
     settlementState: monthPayroll
-      ? index < paidLineCount
+      ? index < paidLines()
         ? '已发快照'
         : '待结算 / 差额'
       : '实际已发汇总',
@@ -812,7 +935,7 @@ function modulesFor(snapshot) {
     '工资与提成',
     ownOrSalary,
     payrollColumns,
-    report.payroll.map(payrollRow),
+    () => mapRows(report.payroll, payrollRow),
     monthPayroll
       ? '按所选核算月份导出已发快照与待结算差额，金额来源分列，不将历史已发金额再次计为待发。追加明细筛选不重算该核算。'
       : '按所选报表区间的实际发放日期汇总已发工资；不按天摊分月度工资，也不包含待结算金额。'
@@ -830,20 +953,21 @@ function modulesFor(snapshot) {
       ['paidAt', '发放时间'],
       ['paidByName', '经办人']
     ],
-    snapshot.payrolls
-      .filter((row) => !monthPayroll || row.month === report.month)
-      .flatMap((payroll) =>
-        payroll.lines.map((row) => ({
-          ...payrollRow(row, 0),
-          settlementState: '已发快照',
-          month: payroll.month,
-          payrollId: payroll.id,
-          paidAt: displayTime(payroll.paidAt),
-          paidByName: person(payroll.paidBy),
-          _date: payroll.paidAt,
-          _periodFilter: !monthPayroll,
-          _people: [row.userId, payroll.paidBy]
-        }))
+    () =>
+      flatMapRows(
+        snapshot.payrolls.filter((row) => !monthPayroll || row.month === report.month),
+        (payroll) =>
+          mapRows(payroll.lines, (row) => ({
+            ...payrollRow(row, 0),
+            settlementState: '已发快照',
+            month: payroll.month,
+            payrollId: payroll.id,
+            paidAt: displayTime(payroll.paidAt),
+            paidByName: person(payroll.paidBy),
+            _date: payroll.paidAt,
+            _periodFilter: !monthPayroll,
+            _people: [row.userId, payroll.paidBy]
+          }))
       ),
     monthPayroll
       ? '所选核算月份的原始发放快照与补结算，发放可能发生在次月；仅主动填写明细日期范围时按发放日进一步筛选。'
@@ -864,24 +988,25 @@ function modulesFor(snapshot) {
       ['effectiveFrom', '生效日期'],
       ['hourlyEnabled', '按工时计薪']
     ],
-    snapshot.salaryPlans.map((row) => ({
-      ...row,
-      name: person(row.userId),
-      mode: { base_commission: '底薪加提成', commission: '纯提成', fixed: '固定工资' }[row.mode],
-      base: row.mode === 'commission' ? '' : yuan(row.base),
-      rate:
-        row.mode === 'fixed' ||
-        snapshot.users.find((person) => person.id === row.userId)?.role === 'operations'
-          ? ''
-          : percent(row.rate),
-      platformRates: Object.entries(row.platformRates)
-        .map(([key, value]) => `${platform(key)}：${percent(value)}${value == null ? '' : '%'}`)
-        .join('；'),
-      hourlyEnabled: row.hourlyEnabled ? '是' : '否',
-      _date: row.effectiveFrom,
-      _periodFilter: false,
-      _people: [row.userId]
-    })),
+    () =>
+      mapRows(snapshot.salaryPlans, (row) => ({
+        ...row,
+        name: person(row.userId),
+        mode: { base_commission: '底薪加提成', commission: '纯提成', fixed: '固定工资' }[row.mode],
+        base: row.mode === 'commission' ? '' : yuan(row.base),
+        rate:
+          row.mode === 'fixed' ||
+          snapshot.users.find((person) => person.id === row.userId)?.role === 'operations'
+            ? ''
+            : percent(row.rate),
+        platformRates: Object.entries(row.platformRates)
+          .map(([key, value]) => `${platform(key)}：${percent(value)}${value == null ? '' : '%'}`)
+          .join('；'),
+        hourlyEnabled: row.hourlyEnabled ? '是' : '否',
+        _date: row.effectiveFrom,
+        _periodFilter: false,
+        _people: [row.userId]
+      })),
     '当前权限可见工资方案；按生效日期筛选，不将缺配置金额视为零。',
     '方案生效日期'
   )
@@ -901,17 +1026,18 @@ function modulesFor(snapshot) {
       ['updatedByName', '设置人'],
       ['updatedAt', '设置时间']
     ],
-    (snapshot.workSchedules || []).map((row) => ({
-      ...row,
-      name: person(row.userId),
-      enabled: row.enabled ? '启用' : '停用',
-      overnight: row.enabled && row.end < row.start ? '次日下班' : '',
-      updatedByName: person(row.updatedBy),
-      updatedAt: displayTime(row.updatedAt),
-      _date: row.effectiveFrom,
-      _periodFilter: false,
-      _people: [row.userId]
-    })),
+    () =>
+      mapRows(snapshot.workSchedules || [], (row) => ({
+        ...row,
+        name: person(row.userId),
+        enabled: row.enabled ? '启用' : '停用',
+        overnight: row.enabled && row.end < row.start ? '次日下班' : '',
+        updatedByName: person(row.updatedBy),
+        updatedAt: displayTime(row.updatedAt),
+        _date: row.effectiveFrom,
+        _periodFilter: false,
+        _people: [row.userId]
+      })),
     '当前权限可见的固定班次版本；不自动生成考勤或实际工时。报表账期不截断配置版本，可额外按生效日期筛选。',
     '班次生效日期'
   )
@@ -929,14 +1055,15 @@ function modulesFor(snapshot) {
       ['actualHours', '实际工时（小时）', 'number'],
       ['remark', '备注']
     ],
-    snapshot.attendance.map((row) => ({
-      ...row,
-      name: person(row.userId),
-      status: statuses[row.status],
-      _status: row.status,
-      _date: row.date,
-      _people: [row.userId]
-    })),
+    () =>
+      mapRows(snapshot.attendance, (row) => ({
+        ...row,
+        name: person(row.userId),
+        status: statuses[row.status],
+        _status: row.status,
+        _date: row.date,
+        _people: [row.userId]
+      })),
     '人工实际工时原值导出；未到岗排班不累计实际工时。',
     '班次开始日期'
   )
@@ -953,19 +1080,21 @@ function modulesFor(snapshot) {
       ['permissions', '实际业务权限'],
       ['permissionOverrides', '个人权限覆盖', 'text', false]
     ],
-    snapshot.users
-      .filter((row) => row.role !== 'player')
-      .map((row) => ({
-        ...row,
-        role: roleNames[row.role],
-        status: row.status === 'active' ? '启用' : '停用',
-        permissions: permissionText(permissionsFor(row)),
-        permissionOverrides: Object.entries(row.permissionOverrides || {})
-          .map(([key, value]) => `${permissionNames[key] || key}：${value ? '允许' : '禁止'}`)
-          .join('；'),
-        _status: row.status,
-        _people: [row.id]
-      })),
+    () =>
+      mapRows(
+        snapshot.users.filter((row) => row.role !== 'player'),
+        (row) => ({
+          ...row,
+          role: roleNames[row.role],
+          status: row.status === 'active' ? '启用' : '停用',
+          permissions: permissionText(permissionsFor(row)),
+          permissionOverrides: Object.entries(row.permissionOverrides || {})
+            .map(([key, value]) => `${permissionNames[key] || key}：${value ? '允许' : '禁止'}`)
+            .join('；'),
+          _status: row.status,
+          _people: [row.id]
+        })
+      ),
     '当前员工和权限配置快照，仅含非打手账号，不导出密码、密码哈希或登录会话；日期范围不适用。'
   )
   add(
@@ -986,22 +1115,24 @@ function modulesFor(snapshot) {
       ['permissions', '实际业务权限'],
       ['permissionOverrides', '个人权限覆盖', 'text', false]
     ],
-    snapshot.users
-      .filter((row) => row.role === 'player')
-      .map((row) => ({
-        ...row,
-        status: row.status === 'active' ? '启用' : '停用',
-        levelName: snapshot.levels.find((level) => level.id === row.levelId)?.name || '',
-        loginAllowed: row.playerAccess?.login === false ? '禁止' : '允许',
-        claimAllowed: row.playerAccess?.claim === false ? '禁止' : '允许',
-        withdrawAllowed: row.playerAccess?.withdraw === false ? '禁止' : '允许',
-        permissions: permissionText(permissionsFor(row)),
-        permissionOverrides: Object.entries(row.permissionOverrides || {})
-          .map(([key, value]) => `${permissionNames[key] || key}：${value ? '允许' : '禁止'}`)
-          .join('；'),
-        _status: row.status,
-        _people: [row.id]
-      })),
+    () =>
+      mapRows(
+        snapshot.users.filter((row) => row.role === 'player'),
+        (row) => ({
+          ...row,
+          status: row.status === 'active' ? '启用' : '停用',
+          levelName: snapshot.levels.find((level) => level.id === row.levelId)?.name || '',
+          loginAllowed: row.playerAccess?.login === false ? '禁止' : '允许',
+          claimAllowed: row.playerAccess?.claim === false ? '禁止' : '允许',
+          withdrawAllowed: row.playerAccess?.withdraw === false ? '禁止' : '允许',
+          permissions: permissionText(permissionsFor(row)),
+          permissionOverrides: Object.entries(row.permissionOverrides || {})
+            .map(([key, value]) => `${permissionNames[key] || key}：${value ? '允许' : '禁止'}`)
+            .join('；'),
+          _status: row.status,
+          _people: [row.id]
+        })
+      ),
     '当前打手档案及操作开关，不包含密码或登录会话。登录、新接单及新提现分别控制，已有订单继续按实际权限处理；日期范围不适用。'
   )
   add(
@@ -1015,12 +1146,13 @@ function modulesFor(snapshot) {
       ['permissionCount', '权限数量', 'number'],
       ['permissions', '角色默认权限']
     ],
-    Object.entries(snapshot.roleDefaults).map(([role, permissions]) => ({
-      name: roleNames[role],
-      code: role,
-      permissionCount: permissions.length,
-      permissions: permissionText(permissions)
-    })),
+    () =>
+      mapRows(Object.entries(snapshot.roleDefaults), ([role, permissions]) => ({
+        name: roleNames[role],
+        code: role,
+        permissionCount: permissions.length,
+        permissions: permissionText(permissions)
+      })),
     '服务器实际角色默认权限；个人覆盖见人员档案。日期范围不适用。'
   )
   add(
@@ -1034,14 +1166,15 @@ function modulesFor(snapshot) {
       ['permissions', '准入权限'],
       ['rule', '授权规则']
     ],
-    menuRows.map(([name, path, permissions]) => ({
-      name,
-      path,
-      permissions: permissionText(permissions),
-      rule: permissions.length
-        ? '任意一项准入权限满足；子页按业务权限限制'
-        : '已登录账号；导出内容按数据权限限制'
-    })),
+    () =>
+      mapRows(menuRows, ([name, path, permissions]) => ({
+        name,
+        path,
+        permissions: permissionText(permissions),
+        rule: permissions.length
+          ? '任意一项准入权限满足；子页按业务权限限制'
+          : '已登录账号；导出内容按数据权限限制'
+      })),
     '工作室业务菜单的准入规则；原组件及模板演示保持独立。日期范围不适用。'
   )
   add(
@@ -1055,7 +1188,7 @@ function modulesFor(snapshot) {
       ['gameId', '客户游戏 ID'],
       ['remark', '客户备注']
     ],
-    snapshot.customers.map((row) => ({ ...row })),
+    () => mapRows(snapshot.customers, (row) => ({ ...row })),
     '当前客户配置，日期范围不适用。'
   )
   add(
@@ -1073,13 +1206,14 @@ function modulesFor(snapshot) {
       ['remark', '默认备注'],
       ['active', '是否启用']
     ],
-    snapshot.templates.map((row) => ({
-      ...row,
-      amount: yuan(row.amount),
-      reward: yuan(row.reward),
-      active: row.active ? '启用' : '停用',
-      _status: row.active ? 'active' : 'disabled'
-    })),
+    () =>
+      mapRows(snapshot.templates, (row) => ({
+        ...row,
+        amount: yuan(row.amount),
+        reward: yuan(row.reward),
+        active: row.active ? '启用' : '停用',
+        _status: row.active ? 'active' : 'disabled'
+      })),
     '当前订单项目配置，历史订单仍保留自己的快照。日期范围不适用。'
   )
   add(
@@ -1095,13 +1229,14 @@ function modulesFor(snapshot) {
       ['requiresReceipt', '收款需要付款凭证'],
       ['allowPayOnArrival', '允许落地付']
     ],
-    snapshot.platforms.map((row) => ({
-      ...row,
-      ...Object.fromEntries(
-        Object.entries(platformRules(row)).map(([key, value]) => [key, value ? '是' : '否'])
-      ),
-      _platforms: [row.id]
-    })),
+    () =>
+      mapRows(snapshot.platforms, (row) => ({
+        ...row,
+        ...Object.fromEntries(
+          Object.entries(platformRules(row)).map(([key, value]) => [key, value ? '是' : '否'])
+        ),
+        _platforms: [row.id]
+      })),
     '当前来源平台配置，日期范围不适用。'
   )
   add(
@@ -1114,11 +1249,12 @@ function modulesFor(snapshot) {
       ['platformName', '所属平台'],
       ['id', '店铺代码']
     ],
-    snapshot.shops.map((row) => ({
-      ...row,
-      platformName: platform(row.platformId),
-      _platforms: [row.platformId]
-    })),
+    () =>
+      mapRows(snapshot.shops, (row) => ({
+        ...row,
+        platformName: platform(row.platformId),
+        _platforms: [row.platformId]
+      })),
     '当前店铺配置，日期范围不适用。'
   )
   add(
@@ -1131,7 +1267,7 @@ function modulesFor(snapshot) {
       ['delaySeconds', '抢单开放延迟（秒）', 'number'],
       ['id', '等级代码']
     ],
-    snapshot.levels.map((row) => ({ ...row })),
+    () => mapRows(snapshot.levels, (row) => ({ ...row })),
     '当前打手等级配置，日期范围不适用。'
   )
   add(
@@ -1169,72 +1305,73 @@ function modulesFor(snapshot) {
       ['revision', '配置版本', 'number'],
       ['updatedAt', '保存时间']
     ],
-    snapshot.appearance
-      ? [
-          (() => {
-            const config = snapshot.appearance
-            const modeLabels = { default: '原默认背景', color: '纯色', image: '图片' }
-            const imageUrl = (image) =>
-              typeof image?.url === 'string' &&
-              /^\/api\/studio\/uploads\/[A-Za-z0-9_-]+$/.test(image.url)
-                ? image.url
-                : ''
-            const iconLabels = {
-              dashboard: '工作台',
-              orders: '订单业务',
-              finance: '财务管理',
-              personnel: '人员管理',
-              system: '系统管理',
-              reports: '数据报表',
-              createOrder: '创建与派单',
-              orderList: '订单管理',
-              customers: '老板管理',
-              users: '员工管理',
-              roles: '角色与权限',
-              business: '业务配置',
-              appearance: '界面外观',
-              logs: '操作日志',
-              attendance: '排班与到岗',
-              salary: '工资与提成',
-              export: '自选导出',
-              profile: '个人中心'
-            }
-            return {
-              studioName: config.studioName,
-              logoName: config.logo?.name || '',
-              logoUrl: imageUrl(config.logo),
-              pageMode: modeLabels[config.page.mode],
-              pageColor: config.page.color,
-              pageImageName: config.page.image?.name || '',
-              pageImageUrl: imageUrl(config.page.image),
-              pageOverlay: config.page.overlay,
-              heroMode: modeLabels[config.hero.mode],
-              heroColor: config.hero.color,
-              heroImageName: config.hero.image?.name || '',
-              heroImageUrl: imageUrl(config.hero.image),
-              heroOverlay: config.hero.overlay,
-              showDecoration: config.hero.showDecoration ? '是' : '否',
-              loginTitle: config.login?.title || '',
-              loginSubtitle: config.login?.subtitle || '',
-              loginDescription: config.login?.description || '',
-              loginIllustrationMode:
-                config.login?.illustration?.mode === 'image' ? '自定义图片' : '默认大图',
-              loginIllustrationName: config.login?.illustration?.image?.name || '',
-              loginIllustrationUrl: imageUrl(config.login?.illustration?.image),
-              loginBackgroundMode: modeLabels[config.login?.background?.mode || 'default'],
-              loginBackgroundColor: config.login?.background?.color || '',
-              loginBackgroundName: config.login?.background?.image?.name || '',
-              loginBackgroundUrl: imageUrl(config.login?.background?.image),
-              glassEnabled: config.glass?.enabled ? '启用' : '停用',
-              icons: Object.entries(APPEARANCE_ICON_DEFAULTS)
-                .map(([key, original]) => `${iconLabels[key]}：${config.icons[key] || original}`)
-                .join('；'),
-              revision: config.revision,
-              updatedAt: displayTime(config.updatedAt)
-            }
-          })()
-        ]
-      : [],
+    () =>
+      snapshot.appearance
+        ? [
+            (() => {
+              const config = snapshot.appearance
+              const modeLabels = { default: '原默认背景', color: '纯色', image: '图片' }
+              const imageUrl = (image) =>
+                typeof image?.url === 'string' &&
+                /^\/api\/studio\/uploads\/[A-Za-z0-9_-]+$/.test(image.url)
+                  ? image.url
+                  : ''
+              const iconLabels = {
+                dashboard: '工作台',
+                orders: '订单业务',
+                finance: '财务管理',
+                personnel: '人员管理',
+                system: '系统管理',
+                reports: '数据报表',
+                createOrder: '创建与派单',
+                orderList: '订单管理',
+                customers: '老板管理',
+                users: '员工管理',
+                roles: '角色与权限',
+                business: '业务配置',
+                appearance: '界面外观',
+                logs: '操作日志',
+                attendance: '排班与到岗',
+                salary: '工资与提成',
+                export: '自选导出',
+                profile: '个人中心'
+              }
+              return {
+                studioName: config.studioName,
+                logoName: config.logo?.name || '',
+                logoUrl: imageUrl(config.logo),
+                pageMode: modeLabels[config.page.mode],
+                pageColor: config.page.color,
+                pageImageName: config.page.image?.name || '',
+                pageImageUrl: imageUrl(config.page.image),
+                pageOverlay: config.page.overlay,
+                heroMode: modeLabels[config.hero.mode],
+                heroColor: config.hero.color,
+                heroImageName: config.hero.image?.name || '',
+                heroImageUrl: imageUrl(config.hero.image),
+                heroOverlay: config.hero.overlay,
+                showDecoration: config.hero.showDecoration ? '是' : '否',
+                loginTitle: config.login?.title || '',
+                loginSubtitle: config.login?.subtitle || '',
+                loginDescription: config.login?.description || '',
+                loginIllustrationMode:
+                  config.login?.illustration?.mode === 'image' ? '自定义图片' : '默认大图',
+                loginIllustrationName: config.login?.illustration?.image?.name || '',
+                loginIllustrationUrl: imageUrl(config.login?.illustration?.image),
+                loginBackgroundMode: modeLabels[config.login?.background?.mode || 'default'],
+                loginBackgroundColor: config.login?.background?.color || '',
+                loginBackgroundName: config.login?.background?.image?.name || '',
+                loginBackgroundUrl: imageUrl(config.login?.background?.image),
+                glassEnabled: config.glass?.enabled ? '启用' : '停用',
+                icons: Object.entries(APPEARANCE_ICON_DEFAULTS)
+                  .map(([key, original]) => `${iconLabels[key]}：${config.icons[key] || original}`)
+                  .join('；'),
+                revision: config.revision,
+                updatedAt: displayTime(config.updatedAt)
+              }
+            })()
+          ]
+        : [],
     '当前已保存的共享外观配置；图片仅导出名称与站内地址，地址需登录并按附件权限访问，不包含图片文件内容。日期范围不适用。'
   )
   add(
@@ -1252,14 +1389,19 @@ function modulesFor(snapshot) {
       ['before', '修改前', 'text', false],
       ['after', '修改后', 'text', false]
     ],
-    snapshot.logs.map((row) => ({
-      ...row,
-      createdAt: displayTime(row.createdAt),
-      before: row.before == null ? '' : JSON.stringify(row.before),
-      after: row.after == null ? '' : JSON.stringify(row.after),
-      _date: row.createdAt,
-      _people: [row.actorId]
-    })),
+    () =>
+      mapRows(snapshot.logs, (row) => ({
+        ...row,
+        createdAt: displayTime(row.createdAt),
+        get before() {
+          return row.before == null ? '' : JSON.stringify(row.before)
+        },
+        get after() {
+          return row.after == null ? '' : JSON.stringify(row.after)
+        },
+        _date: row.createdAt,
+        _people: [row.actorId]
+      })),
     '全量可见审计日志；工资与订单敏感内容继续按服务器权限过滤。',
     '操作日期'
   )
@@ -1275,7 +1417,7 @@ function modulesFor(snapshot) {
       ['status', '状态'],
       ['permissions', '本人业务权限']
     ],
-    [
+    () => [
       {
         name: snapshot.user.name,
         username: snapshot.user.username,
@@ -1296,14 +1438,23 @@ export function getExportCatalog(snapshot) {
     period: snapshot.exportPeriod,
     modules: modulesFor(snapshot).map(({ rows, ...item }) => ({
       ...item,
-      rowCount:
-        item.id === 'customerOrderReferences' && snapshot.customerOrderReferenceCount != null
+      rowCount: snapshot.catalogOnly
+        ? null
+        : item.id === 'customerOrderReferences' && snapshot.customerOrderReferenceCount != null
           ? snapshot.customerOrderReferenceCount
           : item.id === 'logs' && snapshot.auditLogCount != null
             ? snapshot.auditLogCount
-            : (snapshot.fundCounts?.[item.id] ?? rows.length)
+            : (snapshot.fundCounts?.[item.id] ?? countRows(rows()))
     }))
   }
+}
+function countRows(rows) {
+  if (Array.isArray(rows)) return rows.length
+  let count = 0
+  for (const row of rows) {
+    if (row) count++
+  }
+  return count
 }
 const invalid = (message, status = 400) => {
   throw new ApiError(message, status)
@@ -1380,7 +1531,7 @@ export function buildExportSheets(snapshot, request, { previewLimit } = {}) {
     invalid('所选模块中没有此可查询字段')
   const used = new Set()
   let total = 0
-  const sheets = request.modules.map((selection) => {
+  const selections = request.modules.map((selection) => {
     if (!selection || typeof selection.id !== 'string' || selection.id.length > 80)
       invalid('导出模块格式无效')
     const item = catalog.get(selection.id)
@@ -1399,7 +1550,10 @@ export function buildExportSheets(snapshot, request, { previewLimit } = {}) {
       if (!definition) invalid('导出字段无效或不可见')
       return definition
     })
-    const matching = item.rows.filter((row) => {
+    return { item, selected }
+  })
+  const sheets = selections.map(({ item, selected }) => {
+    const matches = (row) => {
       if (options.personId && row._people && !row._people.includes(options.personId)) return false
       if (options.customerId && row._customers && !row._customers.includes(options.customerId))
         return false
@@ -1433,13 +1587,18 @@ export function buildExportSheets(snapshot, request, { previewLimit } = {}) {
         if (date < dateRange[0] || date > dateRange[1]) return false
       }
       return true
-    })
-    total += matching.length
-    if (total > MAX_ROWS) invalid(`导出超过 ${MAX_ROWS} 条，请缩小范围后重试`)
-    const rows = (previewLimit == null ? matching : matching.slice(0, previewLimit)).map((row) =>
-      Object.fromEntries(selected.map((field) => [field.key, row[field.key] ?? '']))
-    )
-    return { id: item.id, name: item.label, fields: selected, rows, rowCount: matching.length }
+    }
+    let rowCount = 0
+    const rows = []
+    for (const row of item.rows()) {
+      if (!matches(row)) continue
+      rowCount++
+      total++
+      if (total > MAX_ROWS) invalid(`导出超过 ${MAX_ROWS} 条，请缩小范围后重试`)
+      if (previewLimit == null || rows.length < previewLimit)
+        rows.push(Object.fromEntries(selected.map((field) => [field.key, row[field.key] ?? ''])))
+    }
+    return { id: item.id, name: item.label, fields: selected, rows, rowCount }
   })
   return {
     month: snapshot.reports.month,

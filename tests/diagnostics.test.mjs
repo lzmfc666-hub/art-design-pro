@@ -1,3 +1,5 @@
+import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
+import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -15,7 +17,7 @@ function fixture(t, service) {
     clock: () => new Date('2026-10-13T04:00:00Z')
   })
   if (!providedService) t.after(() => service.close())
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const level = mutate('/levels', { name: '检查等级', delaySeconds: 0 })
   const staff = (role, overrides = {}) =>
     mutate('/users', {
@@ -110,7 +112,11 @@ test('真实有效待办、指定待接单、冲正和恢复不误报，缺配�
   const f = fixture(t)
   f.order()
   const complete = f.complete(f.order())
-  const withdrawal = f.mutate('/player/withdrawals', { amount: 7000 }, f.users.player.id)
+  const withdrawal = f.mutate(
+    '/player/withdrawals',
+    withdrawalBody(f.service, f.users.player.id, 7000),
+    f.users.player.id
+  )
   f.mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'approve' })
   f.mutate(`/withdrawals/${withdrawal.id}/action`, { action: 'pay', receipt: f.upload() })
   f.mutate(`/orders/${complete.id}/action`, {
@@ -513,15 +519,15 @@ test('主动归档无候选不写新日志，过期候选按实际移动数量�
   })
   t.after(() => service.close())
   for (let index = 0; index < 3; index++)
-    service.mutate('admin', '/profile', { name: `归档测试${index}` })
+    testMutate(service, 'admin', '/profile', { name: `归档测试${index}` })
   const before = service.logStorage('admin')
   const logs = service.logs('admin', { source: 'all' }).records
-  const result = service.mutate('admin', '/logs/maintenance', { action: 'archive' })
+  const result = testMutate(service, 'admin', '/logs/maintenance', { action: 'archive' })
   assert.equal(result.affectedRows, 0)
   assert.deepEqual(service.logStorage('admin'), before)
   assert.deepEqual(service.logs('admin', { source: 'all' }).records, logs)
   clock = new Date('2027-01-13T04:00:00Z')
-  const archived = service.mutate('admin', '/logs/maintenance', { action: 'archive' })
+  const archived = testMutate(service, 'admin', '/logs/maintenance', { action: 'archive' })
   assert.equal(archived.affectedRows, 3)
   assert.equal(archived.storage.archiveRows, 3)
   assert.equal(archived.storage.hotRows, 1)
@@ -538,7 +544,7 @@ test('主动归档移动后恰好达到热阈值，响应包含维护审计附�
   })
   t.after(() => service.close())
   for (let index = 0; index < 3; index++)
-    service.mutate('admin', '/profile', { name: `边界${index}` })
+    testMutate(service, 'admin', '/profile', { name: `边界${index}` })
   const raw = {
     id: 'extra-old-candidate',
     actorId: 'admin',
@@ -564,7 +570,7 @@ test('主动归档移动后恰好达到热阈值，响应包含维护审计附�
       Buffer.byteLength(payload)
     )
   const before = service.logStorage('admin').archiveRows
-  const result = service.mutate('admin', '/logs/maintenance', { action: 'archive' })
+  const result = testMutate(service, 'admin', '/logs/maintenance', { action: 'archive' })
   assert.equal(result.candidateRows, 1)
   assert.equal(result.automaticArchiveRows, 1)
   assert.equal(result.affectedRows, 2)
@@ -574,3 +580,5 @@ test('主动归档移动后恰好达到热阈值，响应包含维护审计附�
     .records[0]
   assert.equal(maintenance.after.candidateRows, 1)
 })
+
+installTestClientFetch()

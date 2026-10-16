@@ -1,3 +1,5 @@
+import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
+import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createStudioService, ApiError } from '../server/studio.mjs'
@@ -18,7 +20,7 @@ function fixture(t, existingService) {
       clock: () => currentTime
     })
   if (!existingService) t.after(() => service.close())
-  const mutate = (path, body, actor = 'admin') => service.mutate(actor, path, body)
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
   const level = mutate('/levels', { name: '真实等级', delaySeconds: 0 })
   const users = {}
   for (const role of ['finance', 'support', 'player', 'admin'])
@@ -195,7 +197,7 @@ test('储值requestId同内容复用、不同内容拒绝，金额及附件失�
   for (const amount of [-1, 0, 1.25, NaN, Number.MAX_SAFE_INTEGER])
     fail(() => f.recharge(amount), 400)
   fail(() => f.recharge(100, { reason: '' }), 400)
-  fail(() => f.recharge(100, { requestId: '' }), 400)
+  fail(() => f.recharge(100, { requestId: '' }), 409)
   const foreign = f.upload(f.users.support.id)
   fail(() => f.recharge(100, { receipt: foreign }), 403)
   const before = f.service.customerBalance('admin', f.customer.id).balance
@@ -417,9 +419,16 @@ test('三个打手开关独立鉴权，不影响已接提交、既有报酬与�
   f.mutate(`/player/orders/${active.id}/submit`, { screenshots: [f.upload(player.id)] }, player.id)
   f.mutate(`/orders/${active.id}/action`, { action: 'review-pass' })
   assert.equal(f.service.playerWallet(player.id).earned, 7000)
-  fail(() => f.mutate('/player/withdrawals', { amount: 1000 }, player.id), 403)
+  fail(
+    () => f.mutate('/player/withdrawals', withdrawalBody(f.service, player.id, 1000), player.id),
+    403
+  )
   f.mutate('/users', { ...player, playerAccess: { login: true, claim: false, withdraw: true } })
-  const withdrawal = f.mutate('/player/withdrawals', { amount: 1000 }, player.id)
+  const withdrawal = f.mutate(
+    '/player/withdrawals',
+    withdrawalBody(f.service, player.id, 1000),
+    player.id
+  )
   f.mutate('/users', { ...player, playerAccess: { login: false, claim: true, withdraw: true } })
   assert.equal(f.service.session(token), null)
   fail(() => f.service.login(player.username, PASSWORD), 401)
@@ -682,7 +691,7 @@ test('审计容量失败与资金同事务回滚，不留下余额、台账或�
   )
 })
 
-test('直接打手补款和扣款携带同requestId重试不双计，旧无ID调用仍兼容', (t) => {
+test('直接打手补款和扣款携带同requestId重试不双计，测试客户端为新操作生成编号', (t) => {
   const f = fixture(t)
   const supplementBody = {
     userId: f.users.player.id,
@@ -824,3 +833,5 @@ test('同一时刻客户与押金流水按真实登记倒序，分页和余额�
   assert.equal(secondPage.records[0].id, depositRows[1].id)
   assert.equal(secondPage.records[0].balanceAfter, 6000)
 })
+
+installTestClientFetch()
