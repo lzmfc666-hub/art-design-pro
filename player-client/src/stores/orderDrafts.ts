@@ -6,6 +6,7 @@ export interface OrderDraft {
   target: PlayerOrder
   reason: string
   returnReason: string
+  problemMessage?: string
   teammateId: string
   screenshots: Attachment[]
 }

@@ -166,10 +166,12 @@ try {
     await store.loadPlayer(true); assert.notEqual(store.playerImageKey, first)
     const card = await readFile(resolve(clientRoot, 'src/views/player/OrderCard.vue'), 'utf8')
     assert.match(card, /:key="appearance\.playerImageKey"/)
-    assert.match(card, /:data-image-key="appearance\.playerImageKey"/)
-    assert.match(card, /image === thumbnail\.value && image\.dataset\.imageKey === appearance\.playerImageKey/)
-    const handler = card.slice(card.indexOf('function imageFailed'), card.indexOf('const claimQueued'))
-    assert.doesNotMatch(handler, /loadPlayer|setTimeout|fetch\(|\.src\s*=/)
+    // Pixels now use the shared authenticated thumbnail component. The stable
+    // per-attempt key destroys old instances; its generation guard rejects late failures.
+    assert.match(card, /<PrivateImage/)
+    assert.match(card, /:context="appearance\.playerImageKey"/)
+    const component = await readFile(resolve(clientRoot, 'src/views/player/PrivateImage.vue'), 'utf8')
+    assert.match(component, /token === generation && epoch === sessionRevision\(\)/)
     assert.match(card, /<PlayerIcon v-else name="game"/)
   })
   await check('one scheduler handles first reads, ordinary/revision changes, visibility and online without duplicate listeners', async ({ store }) => {

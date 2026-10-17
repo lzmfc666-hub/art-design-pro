@@ -67,11 +67,12 @@
       @touchend="touchEnd"
       @click.capture="guardSwipeClick"
     >
-      <img
+      <PrivateImage
         v-if="bannerImage && !failedImages.has(bannerImage)"
         :key="bannerImage"
         :src="bannerImage"
         :alt="currentBanner.title"
+        variant="display"
         draggable="false"
         @error="failedImages.add(bannerImage)"
       />
@@ -126,6 +127,7 @@
   import { contentImageUrl } from '@/api/content'
   import { usePlayerContent } from './usePlayerContent'
   import PlayerIcon from './PlayerIcon.vue'
+  import PrivateImage from './PrivateImage.vue'
   import './content.css'
 
   const { announcements, banners, isActive, visible, loadedRevision } = usePlayerContent()

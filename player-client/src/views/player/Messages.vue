@@ -6,7 +6,7 @@
     <p class="p-notice p-info">新单提醒是邀请查看。已读不代表接单，只有订单接受成功后才成为执行任务。</p>
     <PlayerState :loading="resource.loading.value && !resource.data.value.records.length" :error="resource.error.value || error"
       :online="resource.online.value" :empty="!resource.data.value.records.length" empty-text="暂时没有消息"
-      hint="指定订单、退单、验收和提现进展会保留在这里" @retry="resource.refresh()" />
+      hint="指定订单、问题单、存单恢复、退款、验收和提现进展会保留在这里" @retry="resource.refresh()" />
     <div v-if="selected" class="p-card p-message-current" aria-live="polite">
       <div class="p-section-title"><h3>{{ selected.title }}</h3><button class="p-text-btn" @click="selected = null">返回消息</button></div>
       <p>{{ selected.message }}</p>
@@ -47,7 +47,8 @@
   onDeactivated(cancelReading); onBeforeUnmount(cancelReading)
   watch(() => session.epoch, cancelReading)
   watch(page, () => { selected.value = null; void resource.refresh() })
-  const notificationLabel = (item: PlayerNotification) => item.invalidatedAt ? '提醒已失效，请重新确认' : ['assigned', 'pool'].includes(item.type || item.kind || '') ? '新单提醒，仍需接受' : '业务进展'
+  const notificationLabels: Record<string, string> = { 'problem-open': '问题单提醒', 'problem-closed': '问题处理进展', 'order-stored': '存单提醒', 'order-resumed': '存单恢复', 'refund-result': '退款进展' }
+  const notificationLabel = (item: PlayerNotification) => item.invalidatedAt ? '提醒已失效，请重新确认' : ['assigned', 'pool'].includes(item.type || item.kind || '') ? '新单提醒，仍需接受' : notificationLabels[item.type || item.kind || ''] || '业务进展'
   async function readAll() {
     if (busy.value) return
     busy.value = true; error.value = ''
@@ -58,12 +59,21 @@
   }
   function currentMessage(order: PlayerOrder, item: PlayerNotification) {
     const kind = item.type || item.kind || '', newOrder = kind === 'assigned' || kind === 'pool'
+    const statusLabel = orderStatus[order.displayStatus || order.status] || '已更新'
     const target = item.target
     if (target && ((target.dispatchRound !== null && target.dispatchRound !== order.dispatchRound) ||
       (target.assignmentId !== null && target.assignmentId !== order.assignmentId) ||
-      (target.submissionId !== null && target.submissionId !== order.submissionId)))
-      return `${item.invalidatedAt ? '这条提醒已失效，请重新确认当前订单。' : ''}这条提醒对应的旧派单、接单或材料目标已变化。当前状态：${orderStatus[order.status] || '已更新'}。请重新确认当前订单，旧提醒不能用于提交操作。`
-    if (item.invalidatedAt) return `这条提醒已失效，请重新确认当前订单。当前状态：${orderStatus[order.status] || '已更新'}。历史提醒不代表本轮仍待你接受；请进入当前订单重新查看。`
+      (target.submissionId !== null && target.submissionId !== order.submissionId) ||
+      (target.problemId != null && target.problemId !== order.problem?.id)))
+      return `${item.invalidatedAt ? '这条提醒已失效，请重新确认当前订单。' : ''}这条提醒对应的旧派单、接单或材料目标已变化。当前状态：${statusLabel}。请重新确认当前订单，旧提醒不能用于提交操作。`
+    if (item.invalidatedAt) return `这条提醒已失效，请重新确认当前订单。当前状态：${statusLabel}。历史提醒不代表本轮仍待你接受；请进入当前订单重新查看。`
+    if (order.fullRefund || order.displayStatus === 'refunded') return '订单已全额退款，不能继续接单、上报或验收。问题反馈与历史处理记录请在当前订单查看。'
+    if (order.refundPending || order.displayStatus === 'refund-pending') return '订单正在退款审批中，暂停接单、上报及验收。请查看当前订单，等待后台处理。'
+    if (order.stored || order.displayStatus === 'stored') return '订单已存单，暂时停止履约且不占接单名额。请查看存单原因，等待后台恢复安排。'
+    if (kind === 'problem-open' || kind === 'problem-closed') return order.problem?.status === 'open'
+      ? `本单有待处理问题。当前状态：${statusLabel}。请进入订单查看原因并提交处理反馈，由后台确认关闭。`
+      : `请查看当前问题处理记录。当前状态：${statusLabel}。历史提醒不会重新打开已经关闭的问题。`
+    if (kind === 'order-resumed' && order.capacityExempt) return '存单已恢复到原负责人任务列表，本轮续做不占接单名额。请进入任务核对当前要求。'
     if (order.status === 'canceled') return '订单已取消，这条提醒不再代表可接单。可以查看当前处理记录。'
     if (order.status === 'completed') return '订单已完成，请查看当前记录；历史提醒不会重新创建任务。'
     if (order.status === 'pending') {
@@ -76,7 +86,7 @@
     if (order.status === 'active') return order.leaderId === session.user?.id
       ? '当前已经接受，订单在执行中。请进入任务查看最新状态与要求。'
       : '当前订单已有负责人，请以最新任务记录为准。'
-    return `当前状态：${orderStatus[order.status] || '状态已更新'}。请进入订单查看当前处理记录。`
+    return `当前状态：${statusLabel}。请进入订单查看当前处理记录。`
   }
   async function open(item: PlayerNotification) {
     if (busy.value || !resource.online.value) return
@@ -98,7 +108,8 @@
           const target = confirmedNotice.target
           const targetChanged = !!target && ((target.dispatchRound !== null && target.dispatchRound !== order.dispatchRound) ||
             (target.assignmentId !== null && target.assignmentId !== order.assignmentId) ||
-            (target.submissionId !== null && target.submissionId !== order.submissionId))
+            (target.submissionId !== null && target.submissionId !== order.submissionId) ||
+            (target.problemId != null && target.problemId !== order.problem?.id))
           selected.value = { title: item.invalidatedAt ? '这条提醒已失效' : targetChanged ? '旧提醒目标已变化' : '已核对当前订单',
             message: currentMessage(order, confirmedNotice),
             ...(!order.historyOnly ? { path: `/player/orders/${encodeURIComponent(order.id)}` } : {}), order: true }

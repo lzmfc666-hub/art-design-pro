@@ -28,7 +28,10 @@ export const orderStatus: Record<string, string> = {
   active: '接单中',
   review: '待验收',
   completed: '已完成',
-  canceled: '已取消'
+  canceled: '已取消',
+  stored: '已存单',
+  refunded: '已退款',
+  'refund-pending': '退款审批中'
 }
 export const withdrawalStatus: Record<string, string> = {
   pending: '待审核',

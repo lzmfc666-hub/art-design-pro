@@ -25,7 +25,7 @@ export interface PlayerOperation {
 }
 export type OperationLookup = (operation: PlayerOperation) => Promise<PlayerOperationResult>
 const operations = shallowReactive(new Map<OperationFamily, PlayerOperation>())
-const families = new Set<OperationFamily>(['claim', 'reject', 'return', 'submit', 'withdraw', 'cancel-withdrawal'])
+const families = new Set<OperationFamily>(['claim', 'reject', 'return', 'submit', 'problem-feedback', 'withdraw', 'cancel-withdrawal'])
 function recover(family: OperationFamily, received?: OperationGuard) {
   const current = operations.get(family)
   if (operationPending(current) && !current?.reservationWaiting) return
@@ -78,7 +78,7 @@ function freeze(value: unknown): unknown {
   return value
 }
 export const orderChangeMessage = '订单已变化，请重新确认'
-const targetConflicts = new Set(['PRECONDITION_REQUIRED', 'ORDER_REVISION_CONFLICT', 'DISPATCH_ROUND_CONFLICT', 'ASSIGNMENT_CONFLICT', 'SUBMISSION_CONFLICT'])
+const targetConflicts = new Set(['PRECONDITION_REQUIRED', 'ORDER_REVISION_CONFLICT', 'DISPATCH_ROUND_CONFLICT', 'ASSIGNMENT_CONFLICT', 'SUBMISSION_CONFLICT', 'PROBLEM_CONFLICT', 'PROBLEM_CHANGED'])
 export function operationMessage(cause: unknown) {
   if ((cause as { code?: string })?.code === 'PRINCIPAL_CHANGED') return '账号已变化，请重新登录后确认。'
   if ((cause as { code?: string })?.code === 'SESSION_EXPIRED') return '登录已失效，请重新登录后确认。'

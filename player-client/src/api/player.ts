@@ -65,6 +65,8 @@ export const playerApi = {
     studioRequest(`player/orders/${encodeURIComponent(id)}/reject`, { ...target, reason }, 'POST', undefined, { expectedActorId: owner }),
   returnOrder: (id: string, reason: string, target: AssignmentOperation, owner: string) =>
     studioRequest(`player/orders/${encodeURIComponent(id)}/return-request`, { ...target, reason }, 'POST', undefined, { expectedActorId: owner }),
+  problemFeedback: (id: string, problemId: string, message: string, target: Omit<AssignmentOperation, 'assignmentId'> & { assignmentId: string | null }, owner: string) =>
+    studioRequest(`player/orders/${encodeURIComponent(id)}/problem-feedback`, { ...target, problemId, message }, 'POST', undefined, { expectedActorId: owner }),
   submit: (id: string, screenshots: Attachment[], teammateId: string | null, target: AssignmentOperation, owner: string) =>
     studioRequest(
       `player/orders/${encodeURIComponent(id)}/submit`,
