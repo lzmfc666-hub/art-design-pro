@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { studioRequest, uploadStudioImage } from '@/api/studio'
 import type { Staff, StudioData } from '@/types/studio'
+import { clearStudioImageSession } from '@/utils/studio-image'
 
 /** 与原框架共用 Pinia；人员和业务数据不持久化到浏览器。 */
 export const useStudioStore = defineStore('studio', () => {
@@ -21,6 +22,7 @@ export const useStudioStore = defineStore('studio', () => {
   let refreshVersion = 0
 
   function clearSession() {
+    clearStudioImageSession()
     refreshVersion++
     loading.value = false
     user.value = null
@@ -80,6 +82,7 @@ export const useStudioStore = defineStore('studio', () => {
     return result
   }
   async function login(username: string, password: string) {
+    clearStudioImageSession()
     const result = await request<{ user: Staff; maintenanceNotice?: string }>(
       'login',
       { username, password },

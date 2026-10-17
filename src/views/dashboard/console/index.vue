@@ -212,7 +212,7 @@
     if (!url || !/^\/api\/studio\/uploads\/[A-Za-z0-9_-]+$/.test(url)) return {}
     const shade = `rgba(8,31,69,${Math.max(0, Math.min(70, hero.overlay)) / 100})`
     return {
-      backgroundImage: `linear-gradient(${shade},${shade}),url("${url}")`,
+      backgroundImage: `linear-gradient(${shade},${shade}),url("${url}?variant=display&v=${hero.image?.id}")`,
       backgroundSize: 'cover',
       backgroundPosition: 'center',
       '--hero-text': '#ffffff',

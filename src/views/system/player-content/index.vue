@@ -65,7 +65,8 @@
             <div class="content-summary" :data-testid="`content-row-${row.id}`">
               <img
                 v-if="row.type === 'banner' && row.image?.url"
-                :src="row.image.url"
+                :src="studioImageUrl(row.image.url)"
+                loading="lazy"
                 :alt="row.title"
               />
               <div>
@@ -374,7 +375,8 @@
                   <div class="content-image-control" :class="{ 'is-disabled': busy }">
                     <img
                       v-if="form.image?.url"
-                      :src="form.image.url"
+                      :src="studioImageUrl(form.image.url)"
+                      loading="lazy"
                       :alt="form.title || '轮播图片'"
                     />
                     <div v-else
@@ -515,6 +517,7 @@
 </template>
 
 <script setup lang="ts">
+  import { studioImageUrl } from '@/utils/studio-image'
   import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, onMounted, onUnmounted, ref, watch, type VNode } from 'vue'
   import { onBeforeRouteLeave } from 'vue-router'

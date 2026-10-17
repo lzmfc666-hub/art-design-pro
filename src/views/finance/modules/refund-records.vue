@@ -184,6 +184,14 @@
           <ElFormItem label="实际退款金额（元）" required
             ><BusinessAmount v-model="refund.amount" placeholder="实际退款金额"
           /></ElFormItem>
+          <ElAlert
+            v-if="revisionError"
+            :title="revisionError"
+            type="error"
+            :closable="false"
+            class="mb-4"
+          />
+          <p v-if="revisionLoading" class="text-g-500 mb-3">正在读取关联订单版本，请稍候。</p>
           <p class="text-g-500 mb-4"
             >可登记余额 {{ money(refundableAmount) }}，已扣除待审核申请占用。</p
           >
@@ -208,9 +216,13 @@
       </BusinessDetailSection>
       <template #footer
         ><ElButton :disabled="saving" @click="refund.open = false">取消</ElButton
-        ><ElButton type="primary" :loading="saving" @click="saveRefund">{{
-          refundIsBalance ? '确认退回储值' : '确认实际退款并登记'
-        }}</ElButton></template
+        ><ElButton
+          type="primary"
+          :loading="saving"
+          :disabled="revisionLoading || refund.expectedRevision == null || !!revisionError"
+          @click="saveRefund"
+          >{{ refundIsBalance ? '确认退回储值' : '确认实际退款并登记' }}</ElButton
+        ></template
       >
     </BusinessDetailPanel>
     <BusinessDetailPanel
@@ -290,6 +302,7 @@
   import { useRouter } from 'vue-router'
   import { ElMessage, ElMessageBox } from 'element-plus'
   import { createStudioRequestId } from '@/api/studio-mutation'
+  import { studioRequest } from '@/api/studio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { formatTime, money, useStudio } from '@/hooks/business/useStudio'
@@ -297,13 +310,13 @@
   import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
   import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
   import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
-  import type { Refund } from '@/types/studio'
+  import type { Refund, OrderDetailResponse } from '@/types/studio'
   import { useFinanceActions } from './useFinanceActions'
   import OrderDetail from '@/views/orders/modules/order-detail.vue'
   import { businessConfirmMessage } from '@/utils/business/confirm-message'
 
-  const { data, loading, can } = useStudio()
-  const { saving, submit, reload } = useFinanceActions()
+  const { data, user, loading, can, clearSession } = useStudio()
+  const { saving, submit, reload, lastFailure } = useFinanceActions()
   const emit = defineEmits<{ busy: [value: boolean] }>()
   const detailId = ref('')
   const refundDetailId = ref('')
@@ -377,24 +390,50 @@
     },
     { prop: 'actions', label: '操作', width: 270, fixed: 'right', useSlot: true }
   ])
-  const refund = reactive({ open: false, orderId: '', amount: null as number | null, reason: '' })
-  let refundRequestId = createStudioRequestId()
+  const refund = reactive({
+    open: false,
+    orderId: '',
+    amount: null as number | null,
+    reason: '',
+    expectedRevision: null as number | null
+  })
+  const revisionLoading = ref(false)
+  const revisionError = ref('')
+  let revisionVersion = 0
   watch(
-    () => JSON.stringify([refund.orderId, refund.amount, refund.reason]),
-    () => {
-      refundRequestId = createStudioRequestId()
-    },
-    { flush: 'sync' }
+    () => [refund.orderId, user.value?.id],
+    async () => {
+      const version = ++revisionVersion
+      refund.expectedRevision = null
+      revisionError.value = ''
+      revisionLoading.value = false
+      if (!refund.orderId || !refund.open) return
+      revisionLoading.value = true
+      try {
+        const result = await studioRequest<OrderDetailResponse>(
+          `orders/${encodeURIComponent(refund.orderId)}`
+        )
+        if (version === revisionVersion) refund.expectedRevision = result.order.revision
+      } catch (cause) {
+        if (version === revisionVersion)
+          revisionError.value =
+            cause instanceof Error ? cause.message : '订单版本读取失败，请重新选择订单'
+        if ((cause as { status?: number }).status === 401) clearSession()
+      } finally {
+        if (version === revisionVersion) revisionLoading.value = false
+      }
+    }
   )
   const refundIsBalance = computed(
     () => data.value?.orders.find((row) => row.id === refund.orderId)?.paymentMethod === 'balance'
   )
-  const approveRequestIds = new Map<string, string>()
+  const approveRequests = new Map<string, { requestId: string; expectedRevision: number }>()
   const reason = reactive({
     open: false,
     id: '',
     action: '' as 'reject' | 'resolve' | '',
-    text: ''
+    text: '',
+    expectedRevision: null as number | null
   })
   const reasonRecord = computed(() => data.value?.refunds.find((row) => row.id === reason.id))
   const restoreError = ref('')
@@ -488,11 +527,59 @@
     if (saving.value || detailBusy.value) return
     Object.assign(refund, { open: true, orderId: '', amount: null, reason: '' })
   }
-  function openReason(row: Refund, action: 'reject' | 'resolve') {
+  async function openReason(row: Refund, action: 'reject' | 'resolve') {
     if (saving.value || detailBusy.value) return
-    Object.assign(reason, { open: true, id: row.id, action, text: '' })
+    let expectedRevision: number | null = null
+    if (action === 'reject') {
+      detailBusy.value = true
+      try {
+        const accountId = user.value?.id
+        const result = await studioRequest<OrderDetailResponse>(
+          `orders/${encodeURIComponent(row.orderId)}`
+        )
+        if (accountId !== user.value?.id) {
+          detailBusy.value = false
+          return
+        }
+        expectedRevision = result.order.revision
+      } catch (cause) {
+        ElMessage.error(
+          cause instanceof Error
+            ? cause.message
+            : '无权读取关联订单，请由有订单查看权限的人员核对后处理'
+        )
+        return
+      } finally {
+        detailBusy.value = false
+      }
+    }
+    Object.assign(reason, { open: true, id: row.id, action, text: '', expectedRevision })
   }
   async function approve(row: Refund) {
+    if (saving.value || detailBusy.value) return
+    const accountId = user.value?.id
+    let request = approveRequests.get(row.id)
+    detailBusy.value = true
+    if (!request) {
+      try {
+        const result = await studioRequest<OrderDetailResponse>(
+          `orders/${encodeURIComponent(row.orderId)}`
+        )
+        if (accountId !== user.value?.id) {
+          detailBusy.value = false
+          return
+        }
+        request = { requestId: createStudioRequestId(), expectedRevision: result.order.revision }
+      } catch (cause) {
+        detailBusy.value = false
+        ElMessage.error(
+          cause instanceof Error
+            ? cause.message
+            : '无权读取关联订单，请由有订单查看权限的人员核对后处理'
+        )
+        return
+      }
+    }
     const isBalance =
       data.value?.orders.find((order) => order.id === row.orderId)?.paymentMethod === 'balance'
     try {
@@ -525,13 +612,29 @@
         }
       )
     } catch {
+      detailBusy.value = false
       return
     }
-    const requestId = approveRequestIds.get(row.id) || createStudioRequestId()
-    approveRequestIds.set(row.id, requestId)
-    await submit(`/refunds/${row.id}/action`, { action: 'approve', requestId }, '退款已登记')
+    detailBusy.value = false
+    if (accountId !== user.value?.id || !request) return
+    approveRequests.set(row.id, request)
+    const success = await submit(
+      `/refunds/${row.id}/action`,
+      { action: 'approve', ...request },
+      '退款已登记'
+    )
+    const failureStatus = (lastFailure.value as { status?: number } | null)?.status
+    if (
+      success ||
+      (failureStatus &&
+        failureStatus < 500 &&
+        (lastFailure.value as { code?: string } | null)?.code !== 'LOCAL_PENDING_REQUEST')
+    )
+      approveRequests.delete(row.id)
   }
   async function saveRefund() {
+    if (revisionLoading.value || revisionError.value || refund.expectedRevision == null)
+      return void ElMessage.warning(revisionError.value || '请先读取关联订单，核对后登记退款')
     if (
       !refund.orderId ||
       !refund.reason.trim() ||
@@ -545,9 +648,9 @@
         '/refunds',
         {
           orderId: refund.orderId,
+          expectedRevision: refund.expectedRevision,
           amount: refund.amount,
-          reason: refund.reason,
-          requestId: refundRequestId
+          reason: refund.reason
         },
         '实际退款已登记'
       )
@@ -559,7 +662,11 @@
     if (
       await submit(
         `/refunds/${reason.id}/action`,
-        { action: reason.action, reason: reason.text },
+        {
+          action: reason.action,
+          reason: reason.text,
+          ...(reason.action === 'reject' ? { expectedRevision: reason.expectedRevision } : {})
+        },
         '处理结果已保存'
       )
     )

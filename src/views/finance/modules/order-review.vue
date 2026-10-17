@@ -146,7 +146,7 @@
   const rows = computed(() =>
     (data.value?.orders || []).filter(
       (row) =>
-        (row.status === 'review' ||
+        ((row.status === 'review' && !row.executionBlockedReason) ||
           (row.status === 'canceled' && row.compensationPending && !row.compensationSettled)) &&
         (!applied.value.status || row.status === applied.value.status) &&
         row.orderNo.toLowerCase().includes(applied.value.orderNo.trim().toLowerCase()) &&

@@ -84,13 +84,14 @@
   import { useAppearance, appearanceBackgroundTextStyle } from '@/hooks/business/useAppearance'
   import loginIcon from '@imgs/svg/login_icon.svg'
   import { themeAnimation } from '@/utils/ui/animation'
+  import { studioImageUrl } from '@/utils/studio-image'
   const { config } = useAppearance()
   const displayTextStyle = computed(() =>
     appearanceBackgroundTextStyle(config.value.login.background)
   )
   const illustrationUrl = computed(() =>
     config.value.login.illustration.mode === 'image'
-      ? config.value.login.illustration.image?.url
+      ? studioImageUrl(config.value.login.illustration.image?.url, 'display')
       : undefined
   )
 

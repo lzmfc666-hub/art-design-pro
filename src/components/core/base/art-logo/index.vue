@@ -17,6 +17,7 @@
 <script setup lang="ts">
   import { computed, ref, watch } from 'vue'
   import { useAppearance } from '@/hooks/business/useAppearance'
+  import { studioImageUrl } from '@/utils/studio-image'
 
   defineOptions({ name: 'ArtLogo' })
 
@@ -37,7 +38,7 @@
     const url = config.value.logo?.url
     return typeof url === 'string' &&
       /^\/api\/studio\/(?:uploads|public-assets)\/[A-Za-z0-9_-]+$/.test(url)
-      ? url
+      ? studioImageUrl(url)
       : ''
   })
   watch([logoUrl, () => config.value.revision], () => (failedLogoUrl.value = ''))

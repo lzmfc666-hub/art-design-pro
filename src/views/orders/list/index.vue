@@ -111,9 +111,12 @@
           ><p class="text-xs text-g-500">打手 {{ money(row.reward) }}</p></template
         >
         <template #status="{ row }"
-          ><ElTag :type="tagType(row.status)">{{
-            row.dispatchState === 'unassigned' ? '待分配' : statusLabels[row.status as OrderStatus]
+          ><ElTag :type="orderStatusType(row.displayStatus || row.status)">{{
+            orderStatusLabel(row)
           }}</ElTag
+          ><p v-if="row.problem?.status === 'open'" class="text-xs text-danger">问题单待处理</p
+          ><p v-if="row.capacityExempt && !row.stored && !row.fullRefund" class="text-xs text-g-500"
+            >原负责人续做 · 不占名额</p
           ><p v-if="hasPendingReturn(row)" class="text-xs text-warning">退单待处理</p
           ><p v-if="row.compensationPending" class="text-xs text-warning">报酬待确认</p></template
         >
@@ -134,10 +137,13 @@
             row.leaderId
               ? staffName(row.leaderId)
               : row.assignedTo
-                ? staffName(row.assignedTo) + '（待接单）'
-                : row.dispatchState === 'unassigned'
-                  ? '待客服分配'
-                  : '抢单池'
+                ? staffName(row.assignedTo) +
+                  (row.executionBlockedReason ? '（原指定）' : '（待接单）')
+                : row.executionBlockedReason
+                  ? '无当前负责人'
+                  : row.dispatchState === 'unassigned'
+                    ? '待客服分配'
+                    : '抢单池'
           }}<p v-if="row.teammateId" class="text-xs text-g-500"
             >队友 {{ staffName(row.teammateId) }}</p
           ></template
@@ -171,9 +177,16 @@
 </template>
 <script setup lang="ts">
   import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
-  import { useStudio, money, formatTime, statusLabels } from '@/hooks/business/useStudio'
+  import {
+    useStudio,
+    money,
+    formatTime,
+    orderDisplayStatusLabels,
+    orderStatusLabel,
+    orderStatusType
+  } from '@/hooks/business/useStudio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
-  import type { Order, OrderPage, OrderStatus } from '@/types/studio'
+  import type { Order, OrderPage } from '@/types/studio'
   import OrderDetail from '../modules/order-detail.vue'
   import BusinessPageHeader from '@/components/business/BusinessPageHeader.vue'
   import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
@@ -343,7 +356,8 @@
   }
   function validStatus(value: unknown) {
     return typeof value === 'string' &&
-      (value in statusLabels || value === 'unassigned' || value === 'return-pending')
+      (value in orderDisplayStatusLabels ||
+        ['unassigned', 'return-pending', 'problem'].includes(value))
       ? value
       : ''
   }
@@ -358,7 +372,8 @@
       { value: 'all', label: '全部订单' },
       { value: 'unassigned', label: '待分配' },
       { value: 'return-pending', label: '退单待办' },
-      ...Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
+      { value: 'problem', label: '问题单' },
+      ...Object.entries(orderDisplayStatusLabels).map(([value, label]) => ({ value, label }))
     ].map((item) => ({
       ...item,
       count: counts.value[item.value] || 0
@@ -366,20 +381,10 @@
   )
   const staffName = (id: string | null) => data.value?.users.find((u) => u.id === id)?.name || '—'
   const hasPendingReturn = (order: Order) =>
-    order.returnRequests?.some((row) => row.status === 'pending')
+    !order.executionBlockedReason && order.returnRequests?.some((row) => row.status === 'pending')
   const customerName = (id: string) => data.value?.customers.find((c) => c.id === id)?.name || '—'
   const platformName = (id: string) => data.value?.platforms.find((p) => p.id === id)?.name || '—'
   const shopName = (id: string | null) => data.value?.shops.find((s) => s.id === id)?.name || ''
-  const tagType = (s: OrderStatus) =>
-    (
-      ({
-        pending: 'info',
-        active: 'primary',
-        review: 'warning',
-        completed: 'success',
-        canceled: 'danger'
-      }) as const
-    )[s]
   const reviewCount = computed(() => counts.value.review || 0)
   const searchItems = computed(() => [
     {
@@ -426,9 +431,10 @@
       props: {
         clearable: true,
         options: [
-          ...Object.entries(statusLabels).map(([value, label]) => ({ value, label })),
+          ...Object.entries(orderDisplayStatusLabels).map(([value, label]) => ({ value, label })),
           { value: 'unassigned', label: '待分配' },
-          { value: 'return-pending', label: '退单待办' }
+          { value: 'return-pending', label: '退单待办' },
+          { value: 'problem', label: '问题单' }
         ]
       }
     },
@@ -573,7 +579,9 @@
       typeof id !== 'string' ||
       !id ||
       id.length > 512 ||
-      /[\u0000-\u001f\u007f]/.test(id) ||
+      Array.from(id).some(
+        (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127
+      ) ||
       to.query.secondary !== undefined
     )
       return

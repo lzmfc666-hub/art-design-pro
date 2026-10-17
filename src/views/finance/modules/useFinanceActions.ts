@@ -6,6 +6,7 @@ import { createStudioMutationIntent } from '@/api/studio-mutation'
 export function useFinanceActions() {
   const { mutate, refresh, loading, error } = useStudio()
   const saving = ref(false)
+  const lastFailure = ref<unknown>(null)
   const intent = createStudioMutationIntent()
   async function submit(path: string, body: Record<string, unknown>, message: string) {
     if (saving.value) return false
@@ -16,12 +17,14 @@ export function useFinanceActions() {
       return false
     }
     saving.value = true
+    lastFailure.value = null
     try {
       await mutate(path, intent.prepare(path, body))
       intent.complete()
       ElMessage.success(message)
       return true
     } catch (cause) {
+      lastFailure.value = cause
       intent.fail(cause)
       const status = (cause as { status?: number } | null)?.status
       if (!status || status >= 500) {
@@ -39,5 +42,5 @@ export function useFinanceActions() {
       ElMessage.error(cause instanceof Error ? cause.message : '刷新失败')
     }
   }
-  return { saving, submit, reload }
+  return { saving, submit, reload, lastFailure }
 }

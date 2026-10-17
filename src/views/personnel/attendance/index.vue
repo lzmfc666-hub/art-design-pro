@@ -2,7 +2,7 @@
   <div class="attendance-page">
     <BusinessPageHeader
       title="排班与考勤"
-      description="按日展示启用人员，可为每人设置固定班次；未登记默认为正常，实际工时单独登记。"
+      description="按日展示公司内部员工，可设置固定班次；未登记默认为正常，实际工时单独登记。打手不参与员工排班。"
       icon="ri:calendar-check-line"
     />
     <ElRow :gutter="16" class="mb-4">
@@ -176,7 +176,7 @@
           <ElFormItem label="人员" prop="userId"
             ><ElSelect v-model="form.userId" :disabled="!!form.id" filterable class="w-full"
               ><ElOption
-                v-for="item in data?.users.filter(
+                v-for="item in employees.filter(
                   (item) => item.status === 'active' || item.id === form.userId
                 )"
                 :key="item.id"
@@ -524,8 +524,12 @@
 
   defineOptions({ name: 'Attendance' })
   const { data, loading, can, mutate, refresh } = useStudio()
+  const employees = computed(() =>
+    (data.value?.users || []).filter((person) => person.role !== 'player')
+  )
+  const employeeIds = computed(() => new Set(employees.value.map((person) => person.id)))
   const activePeople = computed(() =>
-    (data.value?.users || []).filter((person) => person.status === 'active')
+    employees.value.filter((person) => person.status === 'active')
   )
   const schedulePersonId = ref('')
   const scheduleOpen = ref(false)
@@ -547,6 +551,7 @@
   const schedulesByPerson = computed(() => {
     const grouped = new Map<string, WorkSchedule[]>()
     for (const schedule of data.value?.workSchedules || []) {
+      if (!employeeIds.value.has(schedule.userId)) continue
       const records = grouped.get(schedule.userId) || []
       records.push(schedule)
       grouped.set(schedule.userId, records)
@@ -585,7 +590,12 @@
     scheduleFormRef.value?.clearValidate()
   }
   function editSchedule(effectiveFrom = today()) {
-    if (!can('attendance.manage') || scheduleSaving.value || !schedulePersonId.value) return
+    if (
+      !can('attendance.manage') ||
+      scheduleSaving.value ||
+      !employeeIds.value.has(schedulePersonId.value)
+    )
+      return
     scheduleForm.userId = schedulePersonId.value
     scheduleForm.effectiveFrom = effectiveFrom
     loadScheduleVersion()
@@ -593,6 +603,8 @@
   }
   async function saveSchedule() {
     if (!can('attendance.manage') || scheduleSaving.value) return
+    if (!employeeIds.value.has(scheduleForm.userId))
+      return void ElMessage.warning('只能为公司内部员工安排班次')
     scheduleSaving.value = true
     try {
       if (!(await scheduleFormRef.value?.validate().catch(() => false))) return
@@ -649,7 +661,7 @@
       props: {
         clearable: true,
         filterable: true,
-        options: (data.value?.users || []).map((item) => ({ value: item.id, label: item.name }))
+        options: employees.value.map((item) => ({ value: item.id, label: item.name }))
       }
     },
     {
@@ -676,11 +688,13 @@
   const rows = computed<AttendanceRow[]>(() => {
     const range = search.value.dates
     const date = range ? (range[0] === range[1] ? range[0] : null) : search.value.date || today()
-    const recorded = (data.value?.attendance || []).filter((row) =>
-      range ? row.date >= range[0] && row.date <= range[1] : row.date === date
+    const recorded = (data.value?.attendance || []).filter(
+      (row) =>
+        employeeIds.value.has(row.userId) &&
+        (range ? row.date >= range[0] && row.date <= range[1] : row.date === date)
     )
     const projected: AttendanceRow[] = date
-      ? (data.value?.users || [])
+      ? employees.value
           .filter(
             (user) => user.status === 'active' && !recorded.some((row) => row.userId === user.id)
           )
@@ -742,14 +756,17 @@
   const detailId = ref('')
   const attendanceDetail = computed<AttendanceRow | undefined>(
     () =>
-      data.value?.attendance.find((row) => row.id === detailId.value) ||
-      rows.value.find((row) => row.id === detailId.value)
+      data.value?.attendance.find(
+        (row) => row.id === detailId.value && employeeIds.value.has(row.userId)
+      ) || rows.value.find((row) => row.id === detailId.value)
   )
   function restoredAttendance(recordId?: string): AttendanceRow | undefined {
-    const existing = data.value?.attendance.find((row) => row.id === recordId)
+    const existing = data.value?.attendance.find(
+      (row) => row.id === recordId && employeeIds.value.has(row.userId)
+    )
     if (existing) return existing
     const match = recordId?.match(/^unregistered:(\d{4}-\d{2}-\d{2}):(.+)$/)
-    if (!match || !data.value?.users.some((person) => person.id === match[2])) return
+    if (!match || !employeeIds.value.has(match[2])) return
     search.value.dates = null
     search.value.date = match[1]
     return rows.value.find((row) => row.id === recordId)
@@ -807,7 +824,7 @@
       if (
         separator < 0 ||
         !/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) ||
-        !data.value?.users.some((person) => person.id === owner)
+        !employeeIds.value.has(owner)
       )
         return
       schedulePersonId.value = owner
@@ -931,6 +948,7 @@
   }
   function edit(row?: AttendanceRow) {
     if (!can('attendance.manage') || saving.value) return
+    if (row && !employeeIds.value.has(row.userId)) return
     Object.assign(
       form,
       emptyForm(),
@@ -973,6 +991,8 @@
   )
   async function save() {
     if (!can('attendance.manage') || saving.value) return
+    if (!employeeIds.value.has(form.userId))
+      return void ElMessage.warning('只能为公司内部员工登记考勤')
     saving.value = true
     try {
       if (!(await formRef.value?.validate().catch(() => false))) return

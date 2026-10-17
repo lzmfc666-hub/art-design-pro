@@ -2,6 +2,7 @@ import { computed, type CSSProperties } from 'vue'
 import type { AppearanceBackground } from '@/types/appearance'
 import { useAppearanceStore } from '@/store/modules/appearance'
 import { APPEARANCE_ICON_OPTIONS } from '@/types/appearance'
+import { studioImageUrl } from '@/utils/studio-image'
 
 export function useAppearance() {
   const store = useAppearanceStore()
@@ -25,7 +26,7 @@ export function appearanceBackgroundStyle(background: AppearanceBackground): CSS
   const opacity = Math.max(0, Math.min(90, background.overlay)) / 100
   return {
     backgroundColor: 'var(--default-bg-color)',
-    backgroundImage: `linear-gradient(var(--appearance-veil),var(--appearance-veil)),url("${url}")`,
+    backgroundImage: `linear-gradient(var(--appearance-veil),var(--appearance-veil)),url("${studioImageUrl(url, 'display')}")`,
     backgroundSize: 'cover',
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat',

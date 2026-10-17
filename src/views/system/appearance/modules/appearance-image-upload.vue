@@ -14,7 +14,8 @@
       >
         <img
           v-if="displayUrl"
-          :src="displayUrl"
+          :src="localUrl || studioImageUrl(displayUrl)"
+          loading="lazy"
           :alt="label + '预览'"
           :class="{ 'image-contain': variant === 'square' }"
         />
@@ -51,6 +52,7 @@
   import { ElMessage, type UploadFile } from 'element-plus'
   import { useStudio } from '@/hooks/business/useStudio'
   import type { Attachment } from '@/types/studio'
+  import { studioImageUrl } from '@/utils/studio-image'
 
   const props = withDefaults(
     defineProps<{

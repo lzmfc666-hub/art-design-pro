@@ -1,6 +1,6 @@
 import { storeToRefs } from 'pinia'
 import { useStudioStore } from '@/store/modules/studio'
-import type { Role, OrderStatus } from '@/types/studio'
+import type { Role, OrderStatus, OrderDisplayStatus, Order } from '@/types/studio'
 
 export function useStudio() {
   const store = useStudioStore()
@@ -34,6 +34,32 @@ export const statusLabels: Record<OrderStatus, string> = {
   review: '待验收',
   completed: '已完成',
   canceled: '已取消'
+}
+export const orderDisplayStatusLabels: Record<OrderDisplayStatus, string> = {
+  ...statusLabels,
+  stored: '已存单',
+  refunded: '已退款',
+  'refund-pending': '全额退款审批中'
+}
+export function orderStatusLabel(order: Pick<Order, 'status' | 'displayStatus' | 'dispatchState'>) {
+  const status = order.displayStatus || order.status
+  return status === 'pending' && order.dispatchState === 'unassigned'
+    ? '待分配'
+    : orderDisplayStatusLabels[status]
+}
+export function orderStatusType(status: OrderDisplayStatus) {
+  return (
+    {
+      pending: 'info',
+      active: 'primary',
+      review: 'warning',
+      completed: 'success',
+      canceled: 'danger',
+      stored: 'info',
+      refunded: 'danger',
+      'refund-pending': 'warning'
+    } as const
+  )[status]
 }
 export function money(value: number | null | undefined) {
   return value == null

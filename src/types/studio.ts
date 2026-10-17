@@ -12,6 +12,7 @@ export type Role =
   | 'super_admin'
   | 'player'
 export type OrderStatus = 'pending' | 'active' | 'review' | 'completed' | 'canceled'
+export type OrderDisplayStatus = OrderStatus | 'stored' | 'refunded' | 'refund-pending'
 export interface Staff {
   id: string
   createdAt?: string
@@ -89,6 +90,7 @@ export interface Attachment {
   mime: string
   size: number
   url: string
+  thumbnailUrl?: string
   retentionStatus?: 'deleted'
   deletedAt?: string
 }
@@ -144,6 +146,30 @@ export interface PlayerPaymentSnapshot {
   qrCode: Attachment
   updatedAt: string
 }
+export interface OrderStorage {
+  id: string
+  active: boolean
+  reason: string
+  storedAt: string
+  storedBy: string
+  leaderId: string | null
+  teammateId?: string | null
+  assignmentId: string | null
+  resumedAt?: string
+  resumedBy?: string
+  resumeMode?: 'original' | 'pool'
+}
+export interface OrderProblem {
+  id: string
+  status: 'open' | 'closed'
+  reason: string
+  openedAt: string
+  openedBy: string
+  feedback: { id: string; userId: string; userName?: string; message: string; createdAt: string }[]
+  closedAt?: string
+  closedBy?: string
+  resolution?: string
+}
 export interface Order {
   id: string
   revision: number
@@ -171,6 +197,24 @@ export interface Order {
   balanceTransactionId?: string
   balanceCustomerId?: string
   status: OrderStatus
+  displayStatus?: OrderDisplayStatus
+  fullRefund?: boolean
+  refundPending?: boolean
+  stored?: boolean
+  capacityExempt?: boolean
+  countsTowardsCapacity?: boolean
+  executionBlockedReason?: { code: string; message: string } | null
+  refundSummary?: {
+    paid: number
+    pending: number
+    remaining: number
+    fullRefund: boolean
+    refundPending: boolean
+  }
+  storage?: OrderStorage | null
+  storageHistory?: OrderStorage[]
+  problem?: OrderProblem | null
+  problemHistory?: OrderProblem[]
   dispatchMode: 'pool' | 'direct'
   dispatchState?: 'ready' | 'unassigned'
   assignedTo: string | null

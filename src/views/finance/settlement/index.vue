@@ -110,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, ref, watch } from 'vue'
+  import { computed, onMounted, onActivated, ref, watch } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import { ElMessage } from 'element-plus'
   import { useStudio, money } from '@/hooks/business/useStudio'
@@ -129,7 +129,10 @@
   const route = useRoute()
   const router = useRouter()
   const reviewCount = computed(
-    () => (data.value?.orders || []).filter((row) => row.status === 'review').length
+    () =>
+      (data.value?.orders || []).filter(
+        (row) => row.status === 'review' && !row.executionBlockedReason
+      ).length
   )
   const compensationCount = computed(
     () =>
@@ -259,6 +262,18 @@
       ElMessage.error(cause instanceof Error ? cause.message : '刷新失败')
     }
   }
+  // Order pages keep a light snapshot. Entering finance needs its authorized
+  // full order projection; one in-flight read covers mount + cache activation.
+  let entryRefresh: Promise<void> | null = null
+  function refreshEntry() {
+    if (!entryRefresh)
+      entryRefresh = reload().finally(() => {
+        entryRefresh = null
+      })
+    return entryRefresh
+  }
+  onMounted(refreshEntry)
+  onActivated(refreshEntry)
 </script>
 
 <style scoped lang="scss">

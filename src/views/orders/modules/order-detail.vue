@@ -1,8 +1,15 @@
 <script setup lang="ts">
+  import BusinessImage from '@/components/business/BusinessImage.vue'
   import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, reactive, ref, watch } from 'vue'
   import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
-  import { useStudio, money, formatTime, statusLabels } from '@/hooks/business/useStudio'
+  import {
+    useStudio,
+    money,
+    formatTime,
+    statusLabels,
+    orderStatusLabel
+  } from '@/hooks/business/useStudio'
   import type {
     Attachment,
     AuditLog,
@@ -101,6 +108,10 @@
     | 'correct-status'
     | 'return-approve'
     | 'return-reject'
+    | 'store'
+    | 'resume'
+    | 'problem-open'
+    | 'problem-close'
     | null
   >(null)
   const saving = ref(false)
@@ -115,6 +126,8 @@
     reward: null as number | null,
     reason: '',
     returnRequestId: '',
+    problemId: '',
+    resumeMode: 'original' as 'original' | 'pool',
     paidAt: '',
     receipt: null as Attachment | null,
     paymentMethod: 'cash' as 'cash' | 'balance',
@@ -271,6 +284,30 @@
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   )
   const canEdit = computed(() => can('orders.edit'))
+  const executionAllowed = computed(
+    () =>
+      !!order.value && !order.value.fullRefund && !order.value.refundPending && !order.value.stored
+  )
+  const canStore = computed(
+    () =>
+      canEdit.value &&
+      executionAllowed.value &&
+      ['pending', 'active'].includes(order.value?.status || '')
+  )
+  const canResume = computed(
+    () =>
+      canEdit.value && order.value?.stored && !order.value.fullRefund && !order.value.refundPending
+  )
+  const problems = computed(() =>
+    [order.value?.problem, ...(order.value?.problemHistory || [])].filter(
+      (item): item is NonNullable<typeof item> => !!item
+    )
+  )
+  const storageRecords = computed(() =>
+    [order.value?.storage, ...(order.value?.storageHistory || [])].filter(
+      (item): item is NonNullable<typeof item> => !!item
+    )
+  )
   const cashAmountChanged = computed(
     () =>
       !!order.value &&
@@ -292,6 +329,7 @@
   const canCorrectStatus = computed(
     () =>
       can('orders.edit') &&
+      executionAllowed.value &&
       ['finance', 'manager', 'owner', 'super_admin'].includes(user.value?.role || '')
   )
   const canCancel = computed(
@@ -317,7 +355,11 @@
         'review-return': '退回完成材料',
         'correct-status': '财务订单状态更正',
         'return-approve': '批准打手退单',
-        'return-reject': '驳回打手退单'
+        'return-reject': '驳回打手退单',
+        store: '客户存单',
+        resume: '恢复存单',
+        'problem-open': '标记问题单',
+        'problem-close': '确认问题已解决'
       })[dialog.value ?? 'payment']
   )
   const staffName = (id: string | null | undefined) =>
@@ -335,21 +377,20 @@
       'review-return': '针对当前完成材料填写退回原因，原材料记录继续保留。',
       'correct-status': '登记真实状态及实际履约人员，并核对对应资金影响。',
       'return-approve': '核对申请人和退单原因，批准后进入重新分配流程。',
-      'return-reject': '保留原负责人继续执行，并明确说明驳回依据。'
+      'return-reject': '保留原负责人继续执行，并明确说明驳回依据。',
+      store: '暂停履约并释放名额，保留负责人、进度备注与原始材料，暂不结算报酬。',
+      resume: '恢复无人接单订单进入大厅；原负责人续做不占接单名额，重新分配按普通订单计算。',
+      'problem-open':
+        '填写具体问题，相关负责人和队友会收到问题单提醒。问题标记不改变履约状态及名额。',
+      'problem-close': '核对打手反馈并填写处理结果，确认后关闭本次问题，历史记录继续保留。'
     }
     return descriptions[dialog.value || ''] || '核对当前订单后操作。'
   })
   const toCents = (amount: number | null) => Math.round(Number(amount) * 100)
   const errorText = (error: unknown) =>
     error instanceof Error ? error.message : '操作失败，请稍后重试'
-  const tagType = (value: OrderStatus) =>
-    ({
-      pending: 'info',
-      active: 'primary',
-      review: 'warning',
-      completed: 'success',
-      canceled: 'danger'
-    })[value] as 'info' | 'primary' | 'warning' | 'success' | 'danger'
+  const thumbnail = (image: Attachment) =>
+    image.thumbnailUrl || `${image.url}${image.url.includes('?') ? '&' : '?'}variant=thumb`
 
   watch(
     [() => props.orderId, () => user.value?.id, () => data.value?.permissions.join('|')],
@@ -384,6 +425,8 @@
       reward: order.value.reward / 100,
       reason: '',
       returnRequestId: pendingReturn.value?.id || '',
+      problemId: order.value.problem?.id || '',
+      resumeMode: order.value.storage?.leaderId ? 'original' : 'pool',
       paidAt: new Date().toISOString(),
       receipt: null,
       paymentMethod: 'cash',
@@ -425,17 +468,21 @@
     if (!row || saving.value || uploading.value) return
     const permitted: Record<NonNullable<typeof dialog.value>, boolean> = {
       payment: canEdit.value && row.status !== 'canceled' && !row.receivedAmount,
-      dispatch: canEdit.value && row.status === 'pending',
-      release: canEdit.value && row.status === 'active',
+      dispatch: canEdit.value && executionAllowed.value && row.status === 'pending',
+      release: canEdit.value && executionAllowed.value && row.status === 'active',
       cancel: canCancel.value,
       refund: canRefund.value,
       edit: canEdit.value && ['pending', 'active', 'review'].includes(row.status),
       adjust: canReview.value && ['completed', 'canceled'].includes(row.status),
       'cancel-settle': canReview.value && row.status === 'canceled' && !!row.compensationPending,
-      'review-return': canReview.value && row.status === 'review',
+      'review-return': canReview.value && executionAllowed.value && row.status === 'review',
       'correct-status': canCorrectStatus.value,
-      'return-approve': canEdit.value && !!pendingReturn.value,
-      'return-reject': canEdit.value && !!pendingReturn.value
+      'return-approve': canEdit.value && executionAllowed.value && !!pendingReturn.value,
+      'return-reject': canEdit.value && executionAllowed.value && !!pendingReturn.value,
+      store: canStore.value,
+      resume: !!canResume.value,
+      'problem-open': canEdit.value && row.status !== 'canceled' && row.problem?.status !== 'open',
+      'problem-close': canEdit.value && row.problem?.status === 'open'
     }
     if (permitted[action]) openAction(action)
     else ElMessage.warning('这项操作当前不可用，请返回订单核对最新状态和权限')
@@ -491,7 +538,11 @@
       'review-return',
       'correct-status',
       'return-approve',
-      'return-reject'
+      'return-reject',
+      'store',
+      'resume',
+      'problem-open',
+      'problem-close'
     ].includes(action)
     if (requiresReason && !fields.reason.trim()) {
       ElMessage.warning('请填写本次操作的原因或处理说明')
@@ -595,6 +646,8 @@
         }
         if (action === 'return-approve' || action === 'return-reject')
           body.returnRequestId = fields.returnRequestId
+        if (action === 'resume') body.mode = fields.resumeMode
+        if (action === 'problem-close') body.problemId = fields.problemId
         if (action === 'payment')
           Object.assign(body, {
             action: 'confirm-payment',
@@ -685,7 +738,7 @@
   }
 
   async function passReview() {
-    if (!order.value || saving.value) return
+    if (!order.value || saving.value || !executionAllowed.value) return
     const captured = expectedState(order.value)
     const path = `/orders/${encodeURIComponent(order.value.id)}/action`
     saving.value = true
@@ -745,7 +798,12 @@
     claim: '打手接单',
     submit: '提交完成材料',
     refund: '退款处理',
-    edit: '编辑实际订单'
+    edit: '编辑实际订单',
+    store: '客户存单',
+    resume: '恢复存单',
+    'problem-open': '标记问题单',
+    'problem-close': '确认问题已解决',
+    'problem-feedback': '打手提交问题反馈'
   }
   function logAction(action: string) {
     if (action.startsWith('订单：')) {
@@ -822,7 +880,7 @@
         :title="order.title"
         :description="order.orderNo"
         icon="ri:file-list-3-line"
-        :badge="order.dispatchState === 'unassigned' ? '待分配' : statusLabels[order.status]"
+        :badge="orderStatusLabel(order)"
         :context="`${staffName(order.creatorId)} 创建于 ${formatTime(order.createdAt)} · 当前版本 ${order.revision} · 派单第 ${order.dispatchRound} 轮`"
       >
         <template #actions>
@@ -844,7 +902,32 @@
         ]"
       />
       <ElAlert
-        v-if="order.dispatchState === 'unassigned'"
+        v-if="order.executionBlockedReason"
+        :title="orderStatusLabel(order)"
+        :description="order.executionBlockedReason.message"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mb-4"
+      />
+      <ElAlert
+        v-if="order.capacityExempt && !order.stored && !order.fullRefund"
+        title="原负责人恢复续做，本次接单不占接单名额；重新分配后按普通订单计算。"
+        type="info"
+        :closable="false"
+        class="mb-4"
+      />
+      <ElAlert
+        v-if="order.problem?.status === 'open'"
+        title="问题单待处理"
+        :description="order.problem.reason"
+        type="error"
+        :closable="false"
+        show-icon
+        class="mb-4"
+      />
+      <ElAlert
+        v-if="order.dispatchState === 'unassigned' && executionAllowed"
         title="订单待客服重新分配"
         description="请调整派单，重新指定打手或放回公共抢单池。"
         type="warning"
@@ -853,7 +936,7 @@
         class="mb-4"
       />
       <ElAlert
-        v-if="pendingReturn"
+        v-if="pendingReturn && executionAllowed"
         :title="'打手申请退单：' + staffName(pendingReturn.leaderId)"
         :description="pendingReturn.reason + '；批准前继续占用该打手的执行名额。'"
         type="warning"
@@ -884,14 +967,14 @@
       />
       <ElSpace wrap class="mb-5">
         <ElButton
-          v-if="canEdit && pendingReturn"
+          v-if="canEdit && pendingReturn && executionAllowed"
           type="warning"
           :disabled="saving || uploading"
           @click="openAction('return-approve')"
           >批准退单</ElButton
         >
         <ElButton
-          v-if="canEdit && pendingReturn"
+          v-if="canEdit && pendingReturn && executionAllowed"
           :disabled="saving || uploading"
           @click="openAction('return-reject')"
           >驳回退单</ElButton
@@ -918,30 +1001,54 @@
           >确认收款</ElButton
         >
         <ElButton
-          v-if="canEdit && order.status === 'pending'"
+          v-if="canEdit && order.status === 'pending' && executionAllowed"
           :disabled="saving"
           @click="openAction('dispatch')"
           >调整派单</ElButton
         >
         <ElButton
-          v-if="canEdit && order.status === 'active'"
+          v-if="canEdit && order.status === 'active' && executionAllowed"
           :disabled="saving"
           @click="openAction('release')"
           >解除接单</ElButton
         >
         <ElButton
-          v-if="canReview && order.status === 'review'"
+          v-if="canReview && order.status === 'review' && executionAllowed"
           type="success"
           :loading="saving"
           @click="passReview"
           >验收通过</ElButton
         >
         <ElButton
-          v-if="canReview && order.status === 'review'"
+          v-if="canReview && order.status === 'review' && executionAllowed"
           type="warning"
           :disabled="saving"
           @click="openAction('review-return')"
           >退回材料</ElButton
+        >
+        <ElButton v-if="canStore" :disabled="saving || uploading" @click="openAction('store')"
+          >客户存单</ElButton
+        >
+        <ElButton
+          v-if="canResume"
+          type="primary"
+          :disabled="saving || uploading"
+          @click="openAction('resume')"
+          >恢复存单</ElButton
+        >
+        <ElButton
+          v-if="canEdit && order.status !== 'canceled' && order.problem?.status !== 'open'"
+          type="warning"
+          :disabled="saving || uploading"
+          @click="openAction('problem-open')"
+          >标记问题单</ElButton
+        >
+        <ElButton
+          v-if="canEdit && order.problem?.status === 'open'"
+          type="success"
+          :disabled="saving || uploading"
+          @click="openAction('problem-close')"
+          >确认问题已解决</ElButton
         >
         <ElButton v-if="canRefund" :disabled="saving" @click="openAction('refund')">{{
           can('finance.refunds') ? '登记退款' : '申请退款'
@@ -1000,8 +1107,11 @@
                 order.leaderId
                   ? staffName(order.leaderId)
                   : order.assignedTo
-                    ? staffName(order.assignedTo) + '（待接单）'
-                    : '待接单'
+                    ? staffName(order.assignedTo) +
+                      (order.executionBlockedReason ? '（原指定）' : '（待接单）')
+                    : order.executionBlockedReason
+                      ? '无当前负责人'
+                      : '待接单'
               }}</ElDescriptionsItem
               ><ElDescriptionsItem label="队友">{{
                 order.teammateId ? staffName(order.teammateId) : '独自完成 / 未上报'
@@ -1268,15 +1378,20 @@
                   class="w-32 h-24 rounded-lg flex items-center justify-center border border-dashed p-2 text-center text-xs text-gray-500"
                   >订单完成满30天，图片已删除</div
                 >
-                <ElImage
+                <BusinessImage
                   v-else
-                  :src="image.url"
-                  :preview-src-list="submission.screenshots.filter((s) => s.retentionStatus !== 'deleted').map((s) => s.url)"
+                  :src="thumbnail(image)"
+                  lazy
+                  :preview-src-list="
+                    submission.screenshots
+                      .filter((s) => s.retentionStatus !== 'deleted')
+                      .map((s) => s.url)
+                  "
                   :alt="image.name"
                   fit="cover"
                   class="w-32 h-24 rounded-lg"
-                  preview-teleported />
-              </template></ElSpace
+                  preview-teleported
+                /> </template></ElSpace
             ><ElAlert
               v-if="submission.reason"
               :title="submission.reason"
@@ -1330,6 +1445,72 @@
               }}</template></ElTableColumn
             ><ElTableColumn prop="reason" label="解除原因" /></ArtTable
         ></ElTabPane>
+        <ElTabPane :label="'存单记录 (' + storageRecords.length + ')'" name="storage">
+          <ElEmpty v-if="!storageRecords.length" description="暂无存单记录" />
+          <BusinessDetailSection
+            v-for="record in storageRecords"
+            :key="record.id"
+            :title="record.active ? '当前存单' : '历史存单'"
+          >
+            <ElDescriptions :column="2" border>
+              <ElDescriptionsItem label="存单时间">{{
+                formatTime(record.storedAt)
+              }}</ElDescriptionsItem>
+              <ElDescriptionsItem label="经办人">{{
+                staffName(record.storedBy)
+              }}</ElDescriptionsItem>
+              <ElDescriptionsItem label="原负责人">{{
+                record.leaderId ? staffName(record.leaderId) : '无人接单'
+              }}</ElDescriptionsItem>
+              <ElDescriptionsItem label="恢复时间">{{
+                formatTime(record.resumedAt)
+              }}</ElDescriptionsItem>
+              <ElDescriptionsItem label="存单原因 / 已做进度" :span="2"
+                ><p class="whitespace-pre-wrap break-all">{{
+                  record.reason
+                }}</p></ElDescriptionsItem
+              >
+              <ElDescriptionsItem v-if="record.resumedAt" label="恢复安排" :span="2"
+                >{{
+                  record.resumeMode === 'original'
+                    ? '原负责人续做，不占名额'
+                    : '返回公共大厅，重新接取按普通名额计算'
+                }}
+                · {{ staffName(record.resumedBy) }}</ElDescriptionsItem
+              >
+            </ElDescriptions>
+          </BusinessDetailSection>
+        </ElTabPane>
+        <ElTabPane :label="'问题记录 (' + problems.length + ')'" name="problems">
+          <ElEmpty v-if="!problems.length" description="暂无问题记录" />
+          <BusinessDetailSection
+            v-for="problem in problems"
+            :key="problem.id"
+            :title="problem.status === 'open' ? '问题单待处理' : '问题单已关闭'"
+          >
+            <p class="text-xs text-g-500 mb-3"
+              >{{ staffName(problem.openedBy) }} · {{ formatTime(problem.openedAt) }}</p
+            >
+            <p class="whitespace-pre-wrap break-all mb-4">{{ problem.reason }}</p>
+            <ElTimeline v-if="problem.feedback.length"
+              ><ElTimelineItem
+                v-for="feedback in problem.feedback"
+                :key="feedback.id"
+                :timestamp="formatTime(feedback.createdAt)"
+                ><p>{{ feedback.userName || staffName(feedback.userId) }}</p
+                ><p class="whitespace-pre-wrap break-all">{{ feedback.message }}</p></ElTimelineItem
+              ></ElTimeline
+            >
+            <p v-else class="text-g-500">尚无打手反馈</p>
+            <ElAlert
+              v-if="problem.status === 'closed'"
+              :title="'关闭说明：' + (problem.resolution || '—')"
+              :description="staffName(problem.closedBy) + ' · ' + formatTime(problem.closedAt)"
+              type="success"
+              :closable="false"
+            />
+          </BusinessDetailSection>
+        </ElTabPane>
         <ElTabPane :label="'操作记录 (' + logs.length + ')'" name="logs"
           ><BusinessDetailHeader
             description="显示该订单及退款最近最多 200 条授权操作记录，按最新时间排序。"
@@ -1368,7 +1549,7 @@
           :title="order.title"
           :description="actionDescription"
           icon="ri:file-list-3-line"
-          :badge="statusLabels[order.status]"
+          :badge="orderStatusLabel(order)"
           :context="order.orderNo"
         />
         <BusinessDetailSummary
@@ -1472,6 +1653,53 @@
                 type="info"
                 :closable="false"
             /></template>
+            <template v-if="dialog === 'resume'">
+              <ElFormItem label="恢复安排" required
+                ><ElRadioGroup v-model="fields.resumeMode"
+                  ><ElRadio v-if="order.storage?.leaderId" value="original"
+                    >原负责人续做（不占名额）</ElRadio
+                  ><ElRadio value="pool">返回公共大厅（重新接取占普通名额）</ElRadio></ElRadioGroup
+                ></ElFormItem
+              >
+              <ElAlert
+                :title="
+                  fields.resumeMode === 'original'
+                    ? '原负责人不可用时将保留存单，请核对账号后重试或手动放回大厅。'
+                    : '重新开放大厅并重算等级开放时间；旧负责人身份不再授予续做资格。'
+                "
+                type="warning"
+                :closable="false"
+                class="mb-4"
+              />
+            </template>
+            <ElAlert
+              v-if="dialog === 'store'"
+              title="请在下面保留客户存单原因和已做进度。存单暂停履约并释放名额，暂不结算打手报酬。"
+              type="info"
+              :closable="false"
+              class="mb-4"
+            />
+            <ElAlert
+              v-if="dialog === 'problem-close'"
+              :title="order.problem?.reason || '核对本次问题'"
+              :description="`已收到 ${order.problem?.feedback.length || 0} 条打手反馈；请填写核对后的处理结果。`"
+              type="info"
+              :closable="false"
+              class="mb-4"
+            />
+            <ElTimeline
+              v-if="dialog === 'problem-close' && order.problem?.feedback.length"
+              class="mb-4"
+            >
+              <ElTimelineItem
+                v-for="feedback in order.problem.feedback"
+                :key="feedback.id"
+                :timestamp="formatTime(feedback.createdAt)"
+              >
+                <p>{{ feedback.userName || staffName(feedback.userId) }}</p>
+                <p class="whitespace-pre-wrap break-all">{{ feedback.message }}</p>
+              </ElTimelineItem>
+            </ElTimeline>
             <template v-if="dialog === 'refund'"
               ><ElAlert
                 :title="'剩余可退 ' + money(refundAvailable) + '，已扣除待审核申请'"
@@ -1689,7 +1917,11 @@
             />
             <ElAlert
               v-if="dialog === 'review-return'"
-              title="退回绑定当前材料。退回后保留原负责人，订单回到接单中并占用名额；即使超限仍保留此单，达到上限后禁止新增接单。"
+              :title="
+                order.capacityExempt
+                  ? '退回绑定当前材料，原负责人继续执行；本次恢复续做仍不占接单名额。'
+                  : '退回绑定当前材料。退回后保留原负责人，订单回到接单中并占用名额；即使超限仍保留此单，达到上限后禁止新增接单。'
+              "
               type="info"
               :closable="false"
               class="mb-4"

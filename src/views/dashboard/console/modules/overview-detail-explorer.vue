@@ -153,7 +153,7 @@
     money,
     formatTime,
     roleLabels,
-    statusLabels
+    orderDisplayStatusLabels
   } from '@/hooks/business/useStudio'
   import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import ArtBarChart from '@/components/core/charts/art-bar-chart/index.vue'
@@ -163,7 +163,7 @@
     OverviewRange,
     OverviewReport
   } from '@/types/overview'
-  import type { OrderStatus, Role } from '@/types/studio'
+  import type { OrderDisplayStatus, Role } from '@/types/studio'
   const props = defineProps<{ metric: string; range: OverviewRange; masked: boolean }>()
   const emit = defineEmits<{ refreshed: [report: OverviewReport]; navigate: [] }>()
   const { user, data, can, clearSession } = useStudio()
@@ -319,9 +319,9 @@
         ['received', 'orders', 'customers', 'profit', 'accepted', 'personal'].includes(
           props.metric
         ) &&
-        statusLabels[value as OrderStatus]
+        orderDisplayStatusLabels[value as OrderDisplayStatus]
       )
-        return statusLabels[value as OrderStatus]
+        return orderDisplayStatusLabels[value as OrderDisplayStatus]
       return (
         (
           {
@@ -334,7 +334,7 @@
             complete: '完整'
           } as Record<string, string>
         )[String(value)] ||
-        statusLabels[value as OrderStatus] ||
+        orderDisplayStatusLabels[value as OrderDisplayStatus] ||
         String(value)
       )
     }
