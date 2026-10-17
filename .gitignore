@@ -17,3 +17,4 @@ src/types/import/components.d.ts
 ops-private/
 backups/
 playwright-report/
+/outputs/production-fixes-20261018/

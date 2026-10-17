@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url'
 import { sourceFingerprint } from './studio-source-fingerprint.mjs'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
+export const RUNTIME_CAPABILITIES = Object.freeze([
+  'refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1',
+  'binary-uploads-v1', 'private-thumbnails-v1'
+])
 const hash = value => createHash('sha256').update(value).digest('hex')
 export function buildFingerprint(directory) {
   directory = resolve(directory)
@@ -41,6 +45,7 @@ export function recordRelease(path = join(root, '.data/releases/current.json')) 
   const facts = currentReleaseFacts()
   if (!facts.id) throw new Error('两端生产构建均存在后才能记录发布对应关系')
   const manifest = { format: 'studio-release-v1', id: facts.id, generatedAt: new Date().toISOString(),
+    runtimeCapabilities: [...RUNTIME_CAPABILITIES],
     sourceDigest: facts.source.digest, adminDigest: facts.admin.digest, playerDigest: facts.player.digest,
     sourceFiles: facts.source.files, adminFiles: facts.admin.files, playerFiles: facts.player.files,
     appVersion: JSON.parse(readFileSync(join(root, 'package.json'))).version }
