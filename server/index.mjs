@@ -15,6 +15,8 @@ import { readReleaseManifest } from '../scripts/studio-release.mjs'
 import { createOpsEvents } from './ops-events.mjs'
 import { privateOpsDirectory } from './ops-config.mjs'
 import { readLocalMonitorBinding } from './local-monitor-binding.mjs'
+import { createHash } from 'node:crypto'
+import { createImageVariants, ImageVariantError } from './image-variants.mjs'
 
 const PREFIX = '/api/studio'
 const COOKIE_NAME = 'studio_session'
@@ -69,6 +71,29 @@ async function parseBody(req) {
     throw new ApiError('请求内容必须为有效JSON对象')
   }
 }
+async function parseImageBody(req) {
+  const mime = String(req.headers['content-type'] || '').toLowerCase().split(';')[0].trim()
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime))
+    throw new ApiError('仅支持 PNG、JPEG 或 WebP 图片', 415)
+  const encodedName = req.headers['x-upload-name']
+  if (typeof encodedName !== 'string' || encodedName.length > 2400)
+    throw new ApiError('请提供有效图片文件名')
+  let name
+  try { name = decodeURIComponent(encodedName) } catch { throw new ApiError('图片文件名编码无效') }
+  const maximum = 8 * 1024 * 1024
+  if (Number(req.headers['content-length'] || 0) > maximum) throw new ApiError('图片不能超过8MB', 413)
+  let size = 0
+  const chunks = []
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > maximum) throw new ApiError('图片不能超过8MB', 413)
+    chunks.push(chunk)
+  }
+  return { name, mime, data: Buffer.concat(chunks) }
+}
+const imageEtag = attachment => attachment.etag || `"${createHash('sha256').update(attachment.data).digest('hex')}"`
+const matchesImageEtag = (header, etag) => typeof header === 'string' &&
+  header.split(',').map(value => value.trim().replace(/^W\//, '')).some(value => value === etag || value === '*')
 const loopback = (hostname) => ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(hostname)
 function checkOrigin(req) {
   if (!req.headers.origin) return
@@ -191,13 +216,22 @@ export function createStudioServer(options = {}) {
       return backupOptions?.onEvent?.(event)
     }
   })
+  const imageVariants = createImageVariants(options.imageVariants)
   const uploadCleanup = createUploadCleanup({
     ...cleanupOptions,
     clock: options.clock,
     completedRetentionDays: imageArchiveOptions.retentionDays,
     archive: imageArchiveOptions.enabled ? input => service.archiveCompletedOrderImages(input) : undefined,
-    removeCompleted: imageArchiveOptions.deletionEnabled ? input => service.deleteCompletedOrderImages(input) : undefined,
-    collect: (input) => service.collectAbandonedUploads(input)
+    removeCompleted: imageArchiveOptions.deletionEnabled ? async input => {
+      const result = await service.deleteCompletedOrderImages(input)
+      if (result.deleted) imageVariants.clear()
+      return result
+    } : undefined,
+    collect: (input) => {
+      const result = service.collectAbandonedUploads(input)
+      if (result.deleted) imageVariants.clear()
+      return result
+    }
   })
   const service = createStudioService({
     ...options,
@@ -293,11 +327,23 @@ export function createStudioServer(options = {}) {
           return json(res, 200, service.publicAppearance())
         const publicAssetMatch = path.match(/^\/public-assets\/([^/]+)$/)
         if (req.method === 'GET' && publicAssetMatch) {
-          const attachment = service.publicAsset(publicAssetMatch[1])
+          // Current public-slot authorization precedes even a conditional/cache hit.
+          let attachment = service.publicAsset(publicAssetMatch[1])
+          const variant = url.searchParams.get('variant')
+          if (variant) {
+            attachment = await imageVariants.get(attachment, variant)
+            service.publicAsset(publicAssetMatch[1])
+          }
+          const etag = imageEtag(attachment)
+          const headers = { ETag: etag, 'Cache-Control': 'public, max-age=0, must-revalidate' }
+          if (matchesImageEtag(req.headers['if-none-match'], etag)) {
+            res.writeHead(304, headers)
+            return res.end()
+          }
           res.writeHead(200, {
+            ...headers,
             'Content-Type': attachment.mime,
-            'Content-Length': attachment.size,
-            'Cache-Control': 'no-store'
+            'Content-Length': attachment.size
           })
           return res.end(attachment.data)
         }
@@ -433,11 +479,19 @@ export function createStudioServer(options = {}) {
             /^\/(player\/content-assets|player-content\/assets)\/([^/]+)$/
           )
           if (contentAssetMatch) {
-            const attachment = service.playerContentAsset(
+            let attachment = service.playerContentAsset(
               user.id,
               contentAssetMatch[2],
               contentAssetMatch[1] === 'player/content-assets' ? 'player' : 'admin'
             )
+            const variant = url.searchParams.get('variant')
+            if (variant) {
+              attachment = await imageVariants.get(attachment, variant)
+              const current = service.session(token)
+              if (!current || current.id !== user.id) throw new ApiError('请先登录', 401)
+              service.playerContentAsset(user.id, contentAssetMatch[2],
+                contentAssetMatch[1] === 'player/content-assets' ? 'player' : 'admin')
+            }
             res.writeHead(200, {
               'Content-Type': attachment.mime,
               'Content-Length': attachment.size,
@@ -688,7 +742,16 @@ export function createStudioServer(options = {}) {
             return json(res, 200, notifications.deliveryStatus(user.id))
           const uploadMatch = path.match(/^\/uploads\/([^/]+)$/)
           if (uploadMatch) {
-            const attachment = service.download(user.id, uploadMatch[1])
+            let attachment = service.download(user.id, uploadMatch[1])
+            const variant = url.searchParams.get('variant')
+            if (variant) {
+              attachment = await imageVariants.get(attachment, variant)
+              // Native processing yields: logout, ownership/role changes or deletion
+              // during that time must revoke this response as well.
+              const current = service.session(token)
+              if (!current || current.id !== user.id) throw new ApiError('请先登录', 401)
+              service.download(user.id, uploadMatch[1])
+            }
             res.writeHead(200, {
               'Content-Type': attachment.mime,
               'Content-Length': attachment.size,
@@ -709,7 +772,9 @@ export function createStudioServer(options = {}) {
           if (path === '/uploads') releaseUpload = runtime.acquireUpload(user.id, requestAddress)
           if (path === '/exports/download') releaseExport = await runtime.acquireExport()
           if (req.destroyed) throw new ApiError('请求已取消', 400)
-          const body = await parseBody(req)
+          const binaryImage = path === '/uploads' &&
+            !String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')
+          const body = binaryImage ? await parseImageBody(req) : await parseBody(req)
           const noticeReadMatch = path.match(/^\/notifications\/([^/]+)\/read$/)
           if (noticeReadMatch)
             return json(res, 200, notifications.readStaff(user.id, noticeReadMatch[1]))
@@ -735,7 +800,7 @@ export function createStudioServer(options = {}) {
             res,
             200,
             path === '/uploads'
-              ? service.upload(user.id, body, {
+              ? (binaryImage ? service.uploadBinary.bind(service) : service.upload.bind(service))(user.id, body, {
                   sessionToken: token,
                   expectedActorId: req.headers['x-studio-actor']
                 })
@@ -749,12 +814,14 @@ export function createStudioServer(options = {}) {
         throw new ApiError('接口不存在', 404)
       } catch (error) {
         if (
-          error instanceof ApiError ||
+          error instanceof ApiError || error instanceof ImageVariantError ||
           error?.runtimeProtection ||
           (error?.publicBusinessError === true &&
             error.status === 409 &&
             typeof error.code === 'string')
         ) {
+          if (error instanceof ImageVariantError && error.status === 429)
+            res.setHeader('Retry-After', '2')
           if (error.details?.retryAfter)
             res.setHeader('Retry-After', String(error.details.retryAfter))
           return json(res, error.status, {
@@ -777,6 +844,7 @@ export function createStudioServer(options = {}) {
   server.runtime = runtime
   server.backups = backups
   server.uploadCleanup = uploadCleanup
+  server.imageVariants = imageVariants
   server.readiness = readiness
   const tick = () => {
     try {
@@ -796,6 +864,7 @@ export function createStudioServer(options = {}) {
     runtime.close()
     backups.close()
     uploadCleanup.close()
+    imageVariants.close()
     notifications.close()
     readiness.close()
     service.close()

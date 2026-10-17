@@ -36,6 +36,7 @@ export function completedMaterialEligibility(state, id, cutoff, holds = new Set(
     const latest = order.submissions.at(-1)
     const completed = Date.parse(order.completedAt), reviewed = Date.parse(latest?.reviewedAt)
     if (order.status !== 'completed' || latest?.review !== 'passed' ||
+        order.storage?.active === true || order.problem?.status === 'open' ||
         !Number.isFinite(completed) || !Number.isFinite(reviewed) ||
         (deletion ? completed > cutoff : Math.max(completed, reviewed) >= cutoff) ||
         holds.has(order.id) || order.receivedAmount !== order.amount ||
