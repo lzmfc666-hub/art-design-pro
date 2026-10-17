@@ -1,5 +1,43 @@
 # 工作室本地开发协作契约
 
+## 公网问题修复的统一双端交付（2026-10-18）
+
+本节按用户本轮确认覆盖下方历史分工及冲突规则：本对话统一维护后台、服务端、独立打手端并联调；仅在 `codex/production-fixes-20261018` 独立工作区交付本地预览、报告和更新包，正式站仍由用户审核后部署。本轮不读写正式库、不重置人员/订单/图片、不向真实渠道发送测试通知。
+
+### 统一订单执行资格及退款
+
+保留原 `status:pending|active|review|completed|canceled`、原收款时间及金额，新增只读投影 `displayStatus`（原五态或 `stored|refunded|refund-pending`）、`fullRefund`、`refundPending`、`stored`、`capacityExempt`、`countsTowardsCapacity`、`executionBlockedReason:{code,message}|null`。后台另有 `refundSummary:{paid,pending,remaining,fullRefund,refundPending}`；打手端不返回客户退款金额。列表、筛选、计数、派单目标、接单/上报/验收写入和通知统一使用服务端执行规则；问题标记与原履约状态并行。
+
+累计已实际退款达到原实收，或已有全退执行关闭记录，显示已退款、禁止再次派单/抢单/上报/验收、移出大厅并释放未完成单名额。读取与执行同时适配旧库中全退却仍 pending/active/review 的异常单，不以新字段存在为前提，不重发退款或报酬。全退生效后的写操作保留 `refundExecutionClosedAt`，历史金额更正不能偷偷重开执行。已完成后退款保留完成时间、材料及原付款日；打手报酬继续遵循原人工核对/补偿/扣补规则。
+
+已退金额加待审批金额达到全部实收，冻结抢单、上报、验收，原来已占名额暂留；驳回仅解除退款冻结，不能解除存单。部分退款不自动结束履约。退款创建及 approve/reject 要求所关联订单的 `expectedRevision`，与 requestId 幂等一同使用；提交后订单版本推进，待接单资格改变时推进派单轮次，旧请求及待发新单提醒失效。resolve 人工差额处理仍按原退款身份和幂等流程。`ORDER_REFUNDED/REFUND_PENDING/ORDER_STORED` 为执行冲突码。财务历史日志按当时保存值投影，不能用今日退款情况覆盖旧快照。
+
+### 存单与免名额续做
+
+POST `/orders/:id/action` 新增 `store`、`resume`，需 `orders.edit`、原因、订单版本和 requestId。只允许 pending/active 存单，保留原负责人、接单身份、材料及进度备注，暂不结算；存单不进大厅、停止履约并释放名额。待验收须先处理验收，不直接存单。当前 `storage` 与先前 `storageHistory` 记录每轮原因、原身份、保存与恢复时间及操作者，不覆盖历史。
+
+resume 的 `mode:'original'|'pool'`：无人接单默认 pool，重新发布公共大厅及轮次；有原负责人默认 original，直接恢复原任务，不需重新接受，服务端将本轮 `capacityExemption` 绑定存单编号、原负责人和原 assignmentId，直到该轮结束免名额，验收退回仍有效。原负责人停用、关登录或接单身份结束时拒绝恢复并保持存单；单独关闭新接单开关不禁止处理原存单。后台可显式选择 pool 重新分配，清原接单关系；换人/重接按普通单计名额。完成、取消、解除或状态更正不产生新的免名额资格。新字段不能由任意前端附加内容直接赋值。
+
+### 问题单及通知
+
+POST `/orders/:id/action` 新增 `problem-open` 和 `problem-close`，需 `orders.edit`、原因、版本、requestId；close 另须匹配当前 `problemId`。每单最多一个 open 问题；`problem` 保存当前问题，`problemHistory` 保存前轮，含发起、反馈、关闭及处理结果。可以对未接单、执行中和已完成订单登记；已取消不新增。问题不改变履约和名额，退款/存单限制优先。
+
+POST `/player/orders/:id/problem-feedback` 接收 `{problemId,message,expectedRevision,assignmentId,leaderId,requestId}`，仅当前负责人及队友可写；匹配未关闭问题及当前版本/接单身份，单条最多2000字、单问题最多100条反馈。打手不能关闭问题。仅旧 completed 且服务端 assignmentId 为 null 时接受精确匹配的 null，不能放宽 active 的接单身份。原结果核对新增 family=`problem-feedback`，沿用未知提交及原 requestId 重试保护。
+
+站内通知新增 `problem-open/problem-closed/order-stored/order-resumed/refund-result`。问题发给相关负责人及队友；未接单先记录，后续人员接入再提醒。问题目标附 `problemId`，旧问题/旧接单身份不可操作当前目标，关闭后旧问题提醒及外发任务失效。公共大厅非参与者只看到问题标记，不提前获得原因、反馈、房间或客户私密信息。实际手机到达仍取决于正式推送配置、授权和设备验收。
+
+### 图片与员工排班
+
+POST `/uploads` 保留 JSON/Base64，新增 `Content-Type:image/png|image/jpeg|image/webp` 二进制正文、`X-Upload-Name:encodeURIComponent(name)`，写入仍复用 Actor、会话、8MiB、签名、并发、事务与审计限制，原图字节不变。GET 原附件/内容图片支持 `?variant=thumb|display`（默认保留原图），变体使用有界异步队列并在返回前再次核对当前会话及原附件授权；不以衍生缓存绕过删除、归档、撤权或换号。
+
+私图继续 `private,no-store`，客户端仅有界、账号/会话隔离的内存复用，退出/换号撤销对象URL并拒绝晚响应。公开品牌图在每次公开用途核对后才可条件304；更换或撤销不能借旧ETag绕过。缩略图可再生成，不能替换原始凭证。完成截图现有30天规则保持，open 问题或 active 存单保护材料；问题关闭后回原规则；已删除图片不因开问题或恢复备份复活。
+
+`work-schedules` 与 `attendance` 写入拒绝 player；员工排班选择、默认行、读取、工时及导出排除打手。旧打手考勤和班次不删除，原审计和完整备份保留。
+
+### 数据与发布兼容
+
+新存单、问题及执行关闭记录采用原订单JSON的可选字段，缺省为无存单/无问题；没有清库或重建账号。发布清单提供 `runtimeCapabilities`，核心能力为 `refund-execution-v1/stored-orders-v1/problem-orders-v1`。升级和兼容回退前使用只读数据库检查核对旧全退异常、新存单/问题数据及候选程序能力；无新规则能力的旧程序不得直接承接新业务库。Git标签只保留代码，不能代替SQLite一致性备份及配置、私有归档保护；上线后新交易不能用旧库直接覆盖。本轮报告、原始证据及真实公网/手机待验收项目另列。
+
 ## 最终上线预检的备份发现与覆盖口径（2026-10-17）
 
 只读上线检查复用既有同源计划备份清单：在已配置的私有备份根目录内有界发现本工具、同一业务库、已声明完成的最新恢复点，再校验SHA、完整性、数据/应用版本及新鲜度。正常轮换淘汰旧 `latestMetadata` 文件名后，不要求人工不断修改启动配置；显式旧手工清单仍兼容。最新同源完成副本损坏、版本不符或过期时不能降级挑旧好副本冒充成功；目录/文件链接、越界及超出扫描边界拒绝判通过。检查不修改清单、备份或业务数据。

@@ -5,6 +5,7 @@ const operationPaths = {
   reject: /^\/player\/orders\/[^/]+\/reject$/,
   return: /^\/player\/orders\/[^/]+\/return-request$/,
   submit: /^\/player\/orders\/[^/]+\/submit$/,
+  'problem-feedback': /^\/player\/orders\/[^/]+\/problem-feedback$/,
   withdraw: /^\/player\/withdrawals$/,
   'cancel-withdrawal': /^\/player\/withdrawals\/[^/]+\/cancel$/
 }

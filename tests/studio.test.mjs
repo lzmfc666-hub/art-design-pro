@@ -260,7 +260,10 @@ test('旧版管理员迁移为超管，重启仍保留原订单、密码和会�
   try {
     assert.equal(second.session(loggedIn.token).role, 'super_admin')
     assert.equal(second.login('admin', PASSWORD).user.id, 'admin')
-    assert.deepEqual(second.bootstrap('admin').orders, oldState.orders)
+    // Read-only lifecycle projections may grow; the persisted original orders must not change.
+    second.bootstrap('admin')
+    const migrated = JSON.parse(second.db.prepare('SELECT json FROM studio_state').get().json)
+    assert.deepEqual(migrated.orders, oldState.orders)
   } finally {
     second.close()
   }

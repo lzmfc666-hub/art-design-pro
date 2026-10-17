@@ -1,20 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { ApiError } from './studio.mjs'
+import { orderLifecycle, createLifecycleContext, orderExecutable } from './order-lifecycle.mjs'
 
 export function conflict(code, message, details) {
   throw Object.assign(new ApiError(message, 409), { code, details, publicBusinessError: true })
 }
 export const paymentConfirmed = (order) =>
   order.receivedAmount > 0 && Boolean(order.paidAt) && order.receivedAmount === order.amount
-export const activeOrderCount = (state, userId) =>
+export const activeOrderCount = (state, userId, lifecycle = createLifecycleContext(state)) =>
   state.orders.filter(
     (order) =>
-      order.status === 'active' &&
-      order.leaderId === userId &&
-      (!order.assignmentId ||
-        order.assignments?.some(
-          (row) => row.id === order.assignmentId && !row.releasedAt && row.leaderId === userId
-        ))
+      order.leaderId === userId && orderLifecycle(state, order, lifecycle).countsTowardsCapacity
   ).length
 
 export function normalizeOrderIdentity(order) {
@@ -62,12 +58,13 @@ export function normalizeOrderIdentity(order) {
 }
 
 export function claimEligibility(state, user, order, now, context = {}) {
-  const activeOrders = context.activeCount ?? activeOrderCount(state, user.id)
+  const lifecycle = context.lifecycle || createLifecycleContext(state)
+  const activeOrders = context.activeCount ?? activeOrderCount(state, user.id, lifecycle)
   const maxActiveOrders = user.maxActiveOrders || 1
   const pendingAssignments =
     context.pendingAssignments ??
     state.orders.filter(
-      (o) => o.status === 'pending' && o.dispatchState !== 'unassigned' && o.assignedTo === user.id
+      (o) => orderExecutable(state, o, lifecycle) && o.status === 'pending' && o.dispatchState !== 'unassigned' && o.assignedTo === user.id
     ).length
   const level = context.level ?? state.levels.find((row) => row.id === user.levelId)
   const availableAt =
@@ -83,6 +80,10 @@ export function claimEligibility(state, user, order, now, context = {}) {
   if (user.status !== 'active' || user.role !== 'player' || user.playerAccess?.login === false)
     block('PLAYER_DISABLED', '账号已停用或关闭登录')
   else if (user.playerAccess?.claim === false) block('CLAIM_DISABLED', '账号已关闭新接单')
+  else if (orderLifecycle(state, order, lifecycle).executionBlockedReason) {
+    const blocked = orderLifecycle(state, order, lifecycle).executionBlockedReason
+    block(blocked.code, blocked.message)
+  }
   else if (order.status !== 'pending' || order.leaderId)
     block('ORDER_NOT_CLAIMABLE', '订单已被接取或已经结束')
   else if (order.dispatchState === 'unassigned') block('DISPATCH_NOT_READY', '订单等待重新分配')
@@ -103,12 +104,16 @@ export function claimEligibility(state, user, order, now, context = {}) {
   }
 }
 
-export function submitEligibility(user, order) {
+export function submitEligibility(user, order, state = { refunds: [] }) {
   let code = null,
     message = null
   if (order.leaderId !== user.id || !order.assignmentId) {
     code = 'NOT_CURRENT_LEADER'
     message = '只有当前有效负责人可以上报'
+  } else if (orderLifecycle(state, order).executionBlockedReason) {
+    const blocked = orderLifecycle(state, order).executionBlockedReason
+    code = blocked.code
+    message = blocked.message
   } else if (order.status !== 'active') {
     code = 'ORDER_NOT_ACTIVE'
     message = '只有接单中订单可以上报'
@@ -129,8 +134,10 @@ export function checkOrderPreconditions(order, body, action) {
     if (body.dispatchRound !== order.dispatchRound)
       conflict('DISPATCH_ROUND_CONFLICT', '订单已重新派单，请刷新后重新确认')
   }
-  if (['release', 'submit', 'return-request', 'return-approve', 'return-reject'].includes(action)) {
-    if (typeof body.assignmentId !== 'string' || typeof body.leaderId !== 'string')
+  if (['release', 'submit', 'return-request', 'return-approve', 'return-reject', 'problem-feedback'].includes(action)) {
+    const legacyCompletedFeedback = action === 'problem-feedback' && order.status === 'completed' &&
+      order.assignmentId === null && body.assignmentId === null
+    if ((!legacyCompletedFeedback && typeof body.assignmentId !== 'string') || typeof body.leaderId !== 'string')
       conflict('PRECONDITION_REQUIRED', '缺少接单身份，请刷新后重新确认')
     if (body.assignmentId !== order.assignmentId || body.leaderId !== order.leaderId)
       conflict('ASSIGNMENT_CONFLICT', '负责人或本次接单记录已变化，请刷新后重新确认')

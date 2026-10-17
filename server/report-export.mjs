@@ -1,6 +1,7 @@
 import { ApiError, permissionsFor, shanghaiDate } from './studio.mjs'
 import { APPEARANCE_ICON_DEFAULTS } from './appearance.mjs'
 import { platformRules } from './platform-rules.mjs'
+import { orderLifecycle } from './order-lifecycle.mjs'
 
 const MAX_ROWS = 100000
 const roleNames = {
@@ -21,6 +22,9 @@ const statuses = {
   review: '待验收',
   completed: '已完成',
   canceled: '已取消',
+  stored: '已存单',
+  refunded: '已退款',
+  'refund-pending': '退款审批中',
   paid: '已发放 / 已退款',
   rejected: '已驳回',
   approved: '审核通过',
@@ -543,6 +547,10 @@ function modulesFor(snapshot) {
     ['shopName', '来源店铺'],
     ['externalOrderNo', '平台订单号'],
     ['status', '订单状态'],
+    ['problemStatus', '问题单状态'],
+    ['problemReason', '当前问题原因', 'text', false],
+    ['storageReason', '存单原因', 'text', false],
+    ['capacityExempt', '原打手续做免名额', 'text', false],
     ['creatorName', '创建人'],
     ['leaderName', '负责人'],
     ['teammateName', '队友'],
@@ -592,8 +600,15 @@ function modulesFor(snapshot) {
           active: '接单中',
           review: '待验收',
           completed: '已完成',
-          canceled: '已取消'
-        }[row.status],
+          canceled: '已取消',
+          stored: '已存单',
+          refunded: '已退款',
+          'refund-pending': '退款审批中'
+        }[row.displayStatus || orderLifecycle(snapshot, row).displayStatus],
+        problemStatus: row.problem?.status === 'open' ? '待处理' : row.problem?.status === 'closed' ? '已关闭' : '无问题',
+        problemReason: row.problem?.reason || '',
+        storageReason: row.storage?.reason || '',
+        capacityExempt: orderLifecycle(snapshot, row).capacityExempt ? '是' : '否',
         dispatchMode: row.dispatchMode === 'direct' ? '指定打手' : '抢单池',
         dispatchState: row.dispatchState === 'unassigned' ? '待客服分配' : '已发布 / 已指定',
         ...receipt(row.receipt),
@@ -604,7 +619,7 @@ function modulesFor(snapshot) {
           ])
         ),
         _dates: { createdAt: row.createdAt, paidAt: row.paidAt, completedAt: row.completedAt },
-        _status: row.status,
+        _status: row.displayStatus || orderLifecycle(snapshot, row).displayStatus,
         _people: [row.creatorId, row.leaderId, row.teammateId, row.assignedTo],
         _platforms: [row.platformId]
       })),
@@ -1027,7 +1042,7 @@ function modulesFor(snapshot) {
       ['updatedAt', '设置时间']
     ],
     () =>
-      mapRows(snapshot.workSchedules || [], (row) => ({
+      mapRows((snapshot.workSchedules || []).filter(row => snapshot.users.some(person => person.id === row.userId && person.role !== 'player')), (row) => ({
         ...row,
         name: person(row.userId),
         enabled: row.enabled ? '启用' : '停用',
@@ -1056,7 +1071,7 @@ function modulesFor(snapshot) {
       ['remark', '备注']
     ],
     () =>
-      mapRows(snapshot.attendance, (row) => ({
+      mapRows(snapshot.attendance.filter(row => snapshot.users.some(person => person.id === row.userId && person.role !== 'player')), (row) => ({
         ...row,
         name: person(row.userId),
         status: statuses[row.status],

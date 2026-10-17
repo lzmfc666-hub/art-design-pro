@@ -1,4 +1,5 @@
 import { ApiError, shanghaiDate } from './studio.mjs'
+import { orderLifecycle } from './order-lifecycle.mjs'
 
 const has = (permissions, ...keys) => keys.every((key) => permissions.includes(key))
 const any = (permissions, ...keys) => keys.some((key) => permissions.includes(key))
@@ -145,7 +146,7 @@ export function buildOverviewDetails(snapshots, overview, query, facts = {}) {
     game: game(order), projectName: project(order),
     platformName: platforms.get(order.platformId) || '平台待确认',
     shopName: shops.get(order.shopId) || (order.shopId ? '店铺待确认' : '无店铺'),
-    status: order.status, eventAt: eventAt || null,
+    status: orderLifecycle(snapshot, order).displayStatus, eventAt: eventAt || null,
     ...financial(order),
     reward: order.reward
   })
@@ -327,7 +328,7 @@ export function buildOverviewDetails(snapshots, overview, query, facts = {}) {
         assignmentId: row.id || `${order.id}:assignment:${index}`,
         orderId: order.id, orderNo: order.orderNo, title: order.title,
         userId: row.leaderId, name: users.get(row.leaderId)?.name || '打手档案待确认',
-        game: game(order), status: order.status, eventAt: row.acceptedAt
+        game: game(order), status: orderLifecycle(snapshot, order).displayStatus, eventAt: row.acceptedAt
       })))
     if (view === 'assignments') {
       records = assignments
@@ -382,7 +383,10 @@ export function buildOverviewDetails(snapshots, overview, query, facts = {}) {
         if (view === 'by-project') return { key: JSON.stringify([order.snapshot?.name || null,
           order.snapshot?.amount ?? null, order.snapshot?.reward ?? null, order.snapshot?.game || null]), label: project(order) }
         if (view === 'by-platform') return { key: order.platformId || 'unknown', label: platforms.get(order.platformId) || '平台待确认' }
-        if (view === 'by-status') return { key: order.status, label: order.status }
+        if (view === 'by-status') {
+          const status = orderLifecycle(snapshot, order).displayStatus
+          return { key: status, label: status }
+        }
         return { key: game(order), label: game(order) }
       }
       records = aggregateOrders(cohort, keyFor)
