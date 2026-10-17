@@ -5,11 +5,30 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
-import { gzipSync } from 'node:zlib'
+import { gzipSync, gunzipSync } from 'node:zlib'
 import { buildFingerprint } from '../scripts/studio-release.mjs'
 import { candidatePathAllowed, createStudioPackage } from '../scripts/studio-package.mjs'
 
 const hash = value => createHash('sha256').update(value).digest('hex')
+function archiveNames(bytes) {
+  const tar = gunzipSync(bytes), names = []
+  let offset = 0, paxPath
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512)
+    if (header.every(value => value === 0)) break
+    const field = (start, end) => header.subarray(start, end).toString('utf8').replace(/\0.*$/s, '')
+    const size = parseInt(field(124, 136).trim() || '0', 8), type = String.fromCharCode(header[156])
+    if (type === 'x') {
+      const attributes = tar.subarray(offset + 512, offset + 512 + size).toString('utf8')
+      paxPath = attributes.match(/(?:^|\n)[0-9]+ path=([^\n]*)\n/)?.[1]
+    } else if (type === '0' || type === '\0') {
+      names.push(paxPath || [field(345, 500), field(0, 100)].filter(Boolean).join('/'))
+      paxPath = undefined
+    }
+    offset += 512 + Math.ceil(size / 512) * 512
+  }
+  return names
+}
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'studio-package-isolated-'))
   assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
@@ -130,6 +149,38 @@ test('源码或构建与发布清单不一致时不能生成候选', t => {
   f.write('src/app.mjs', 'export const isolated = true\n')
   f.write('dist/assets/app.js', 'changed build\n')
   assert.throws(() => f.pack('changed-build'), /构建与发布清单不一致/)
+})
+
+test('中文多层文档及跨目录构建完整解包，超长参数总量分批后跨秒SHA仍一致', async t => {
+  const f = fixture(t)
+  const names = ['docs/上线前运维操作手册-2026-10-15.md', 'docs/最终交付结果-生产修复-2026-10-18.md',
+    'docs/上线前检查/服务端与打手端联调/中文多层记录.md']
+  // Exceed one Windows command-line batch while keeping individual filenames
+  // within the portable filesystem and USTAR boundaries used by GNU tar.
+  for (let index = 0; index < 320; index++)
+    names.push(`docs/上线前检查/服务端与打手端联调/记录-${String(index).padStart(4, '0')}-${'a'.repeat(48)}.md`)
+  for (const name of names) { f.write(name, `中文文档内容：${name}\n`); f.tracked.push({ path: name, mode: '100644' }) }
+  f.saveTracked()
+  f.write('dist/assets/中文界面.js', 'console.log("中文后台界面")\n')
+  f.write('dist/assets/中文界面.js.gz', gzipSync('console.log("中文后台界面")\n'))
+  f.write('player-client/dist/assets/打手界面.js', 'console.log("中文打手界面")\n')
+  const admin = buildFingerprint(join(f.root, 'dist')), player = buildFingerprint(join(f.root, 'player-client/dist'))
+  const changed = { ...f.manifest, adminFiles: admin.files, adminDigest: admin.digest, playerFiles: player.files, playerDigest: player.digest }
+  changed.id = hash([changed.sourceDigest, changed.adminDigest, changed.playerDigest].join(':'))
+  f.write('.data/releases/current.json', JSON.stringify(changed))
+  const result = f.pack('unicode-batches')
+  await new Promise(resolve => setTimeout(resolve, 1200))
+  assert.equal(f.pack('unicode-batches-again').sha256, result.sha256)
+  assert.deepEqual(archiveNames(readFileSync(result.output)), result.files.map(row => row.path))
+  const extracted = join(f.root, 'extracted-unicode')
+  mkdirSync(extracted)
+  const unpack = spawnSync('tar', ['-xzf', result.output, '-C', extracted], { encoding: 'utf8', windowsHide: true })
+  assert.equal(unpack.status, 0, unpack.stderr)
+  for (const row of result.files)
+    assert.equal(hash(readFileSync(join(extracted, row.path))), row.sha256, row.path)
+  assert.ok(names.every(name => result.files.some(row => row.path === name)))
+  assert.equal(result.files.some(row => row.path.includes('source.tar')), false)
+  assert.equal(JSON.parse(readFileSync(join(extracted, '.data/releases/current.json'), 'utf8')).id, changed.id)
 })
 
 test('输入链接不能把私有目录或文件借源码名带入更新包', t => {

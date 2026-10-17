@@ -127,10 +127,33 @@ function tarArchive(stage, fileList, output) {
   const gnu = /GNU tar/.test(version.stdout)
   const options = gnu
     ? ['--format=ustar', '--owner=0', '--group=0', '--numeric-owner', '--mtime=@0']
-    : ['--format=ustar', '--uid', '0', '--gid', '0', '--uname', '', '--gname', '']
-  const result = spawnSync('tar', ['-czf', output, ...options, '-C', stage, '--null', '-T', fileList],
-    { encoding: 'utf8', windowsHide: true, maxBuffer: 1024 * 1024 })
-  if (result.status !== 0 || result.error) throw new Error(`更新包归档失败：${String(result.stderr || result.error?.message || '').slice(0, 500)}`)
+    : ['--format=paxr', '--uid', '0', '--gid', '0', '--uname', '', '--gname', '']
+  const run = args => {
+    const result = spawnSync('tar', args, { encoding: 'utf8', windowsHide: true, maxBuffer: 1024 * 1024 })
+    if (result.status !== 0 || result.error)
+      throw new Error(`更新包归档失败：${String(result.stderr || result.error?.message || '').slice(0, 500)}`)
+  }
+  if (process.platform === 'win32' && !gnu) {
+    // Windows bsdtar decodes -T with the current ANSI code page, unlike the
+    // Unicode command line. Pass sorted names as wide arguments in bounded
+    // batches; append to an uncompressed tar, then let bsdtar copy its entries
+    // into gzip. Restricted PAX preserves UTF-8 names on Windows AND Linux
+    // without volatile ctime/atime fields from full PAX.
+    const paths = readFileSync(fileList, 'utf8').split('\0').filter(Boolean)
+    const batches = []
+    let batch = [], length = 0
+    for (const path of paths) {
+      const cost = path.length * 2 + 3
+      if (cost > 20_000) throw new Error('单个归档路径超出系统参数边界')
+      if (batch.length && length + cost > 20_000) { batches.push(batch); batch = []; length = 0 }
+      batch.push(path); length += cost
+    }
+    if (batch.length) batches.push(batch)
+    const intermediate = output + '.source.tar'
+    for (const [index, names] of batches.entries())
+      run([index === 0 ? '-cf' : '-rf', intermediate, ...options, '-C', stage, '--', ...names])
+    run(['-czf', output, ...options, '@' + intermediate])
+  } else run(['-czf', output, ...options, '-C', stage, '--null', '-T', fileList])
   // bsdtar writes wall-clock seconds into the gzip wrapper even when every
   // tar entry has epoch mtime. Gzip CRC covers decompressed data, not this
   // header (FHCRC is deliberately rejected), so normalizing MTIME preserves
