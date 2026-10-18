@@ -256,10 +256,14 @@ try {
     await detail().getByText(current(id).orderNo, { exact: true }).first().waitFor()
     await detail().getByRole('button', { name: '刷新订单并重新确认操作', exact: true }).waitFor()
   }
-  async function action(id, label, reason, path = `/orders/${id}/action`) {
+  async function action(id, label, reason, path = `/orders/${id}/action`, amount) {
     await detail().getByRole('button', { name: label, exact: true }).click()
     await field(panel(), '原因 / 处理说明').locator('textarea').fill(reason)
-    if (label === '登记退款') {
+    if (label === '退款处理') {
+      if (amount !== undefined) {
+        await field(panel(), '本次退款金额（元）').locator('input').fill(String(amount))
+        await field(panel(), '本次退款金额（元）').locator('input').press('Tab')
+      }
       await field(panel(), '线下退款渠道').locator('.el-select').click()
       await page.getByRole('option', { name: '微信', exact: true }).click()
       await panel().locator('label.el-checkbox').filter({ hasText: '我已完成实际线下退款' }).click()
@@ -269,7 +273,7 @@ try {
     )
     await panel()
       .getByRole('button', {
-        name: label === '登记退款' ? '确认退款处理' : '确认保存',
+        name: label === '退款处理' ? '确认退款处理' : '确认保存',
         exact: true
       })
       .click()
@@ -280,7 +284,46 @@ try {
       .getByRole('button', { name: '刷新订单并重新确认操作', exact: true })
       .click({ trial: true })
   }
+  async function assertSingleOrderEntry(label) {
+    await detail().getByRole('button', { name: label, exact: true }).waitFor()
+    assert.equal(await detail().getByRole('button', { name: label, exact: true }).count(), 1)
+    assert.equal(
+      await detail()
+        .getByRole('button', { name: /^(登记退款|申请退款|取消订单)$/ })
+        .count(),
+      0
+    )
+    const alternate = label === '退款处理' ? '取消订单／退款' : '退款处理'
+    assert.equal(await detail().getByRole('button', { name: alternate, exact: true }).count(), 0)
+  }
+  async function financeRefund(row, amount, reason) {
+    await page.goto(`${base}/#/finance/settlement?tab=refunds`)
+    await page.reload()
+    await page.getByRole('heading', { name: '财务结算', exact: true }).waitFor()
+    await page.getByRole('button', { name: '登记实际退款', exact: true }).click()
+    const register = page
+      .locator('.business-detail-page-panel[data-page-key="finance-refund-register"]:visible')
+      .last()
+    await field(register, '关联订单（不含大厅来源）').locator('.el-select').click()
+    await page.getByRole('option', { name: `${row.orderNo} · ${row.title}`, exact: true }).click()
+    await field(register, '实际退款金额（元）').locator('input').fill(String(amount))
+    await field(register, '退款原因').locator('textarea').fill(reason)
+    await field(register, '线下退款渠道').locator('.el-select').click()
+    await page.getByRole('option', { name: '微信', exact: true }).click()
+    await register.locator('label.el-checkbox').filter({ hasText: '我已完成实际线下退款' }).click()
+    const response = page.waitForResponse(
+      (reply) =>
+        new URL(reply.url()).pathname.endsWith('/refunds') && reply.request().method() === 'POST'
+    )
+    await register.getByRole('button', { name: '确认实际退款并登记', exact: true }).click()
+    const result = await response
+    assert.equal(result.status(), 200, JSON.stringify(await result.json()))
+    await register.waitFor({ state: 'hidden' })
+  }
   await visit(idle.id)
+  await assertSingleOrderEntry('取消订单／退款')
+  await page.screenshot({ path: join(output, 'order-entry-merged-desktop.png'), fullPage: true })
+  pass('可取消订单详情仅显示一个取消订单／退款入口，不再并排登记退款或申请退款')
   await action(idle.id, '客户存单', '客户暂时不打，保留原订单')
   assert.equal(current(idle.id).stored, true)
   await detail().getByRole('button', { name: '恢复存单', exact: true }).waitFor()
@@ -411,8 +454,9 @@ try {
   await page.keyboard.press('Escape')
   await page.screenshot({ path: join(output, 'materials-desktop.png'), fullPage: true })
   pass('后台材料先取缩略图并真实解码，点击预览后才读取原图')
+  await financeRefund(refunded, 100, '客户整单全额退款，禁止继续接单')
+  assert.equal(current(refunded.id).status, 'pending')
   await visit(refunded.id)
-  await action(refunded.id, '登记退款', '客户整单全额退款，禁止继续接单', '/refunds')
   assert.equal(current(refunded.id).displayStatus, 'refunded')
   assert.equal(await detail().getByRole('button', { name: '调整派单', exact: true }).count(), 0)
   await detail().getByText('已退款', { exact: true }).first().waitFor()
@@ -434,7 +478,7 @@ try {
   await playerPage.getByText(idle.orderNo, { exact: true }).first().waitFor()
   assert.equal(await playerPage.getByText(refunded.orderNo, { exact: true }).count(), 0)
   await playerPage.screenshot({ path: join(output, 'refund-player-lobby-390.png'), fullPage: true })
-  pass('后台真实全额退款显示已退款，真实打手大厅不再展示该单')
+  pass('财务模块仅退款不取消：履约原状态保留、展示已退款，真实打手大厅不再展示该单')
   await visit(refunded.id)
   await page.screenshot({ path: join(output, 'refunded-desktop.png'), fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })
@@ -516,27 +560,7 @@ try {
   assert.equal(current(rejectOrder.id).refundPending, false)
   assert.equal(current(rejectOrder.id).displayStatus, 'pending')
   pass('财务真实驳回带订单版本，解除全额退款审批暂停')
-  await page.getByRole('button', { name: '登记实际退款', exact: true }).click()
-  const registerPanel = page
-    .locator('.business-detail-page-panel[data-page-key="finance-refund-register"]:visible')
-    .last()
-  await field(registerPanel, '关联订单（不含大厅来源）').locator('.el-select').click()
-  await page.getByRole('option', { name: `${idle.orderNo} · ${idle.title}`, exact: true }).click()
-  await field(registerPanel, '实际退款金额（元）').locator('input').fill('10.00')
-  await field(registerPanel, '退款原因').locator('textarea').fill('独立财务表单部分实际退款')
-  await field(registerPanel, '线下退款渠道').locator('.el-select').click()
-  await page.getByRole('option', { name: '微信', exact: true }).click()
-  await registerPanel
-    .locator('label.el-checkbox')
-    .filter({ hasText: '我已完成实际线下退款' })
-    .click()
-  const registerResponse = page.waitForResponse(
-    (reply) =>
-      new URL(reply.url()).pathname.endsWith('/refunds') && reply.request().method() === 'POST'
-  )
-  await registerPanel.getByRole('button', { name: '确认实际退款并登记', exact: true }).click()
-  assert.equal((await registerResponse).status(), 200)
-  await registerPanel.waitFor({ state: 'hidden' })
+  await financeRefund(idle, 10, '独立财务表单部分实际退款')
   assert.equal(current(idle.id).refundSummary.paid, 1000)
   assert.equal(current(idle.id).displayStatus, 'pending')
   pass('独立财务登记表单读取订单版本再提交，部分退款保持原履约状态')
@@ -558,7 +582,8 @@ try {
     service.bootstrap('admin').customers.find((row) => row.id === customer.id).balance
   async function cancelOrder(row, options = {}) {
     await visit(row.id)
-    await detail().getByRole('button', { name: '取消订单', exact: true }).click()
+    await assertSingleOrderEntry('取消订单／退款')
+    await detail().getByRole('button', { name: '取消订单／退款', exact: true }).click()
     const amountInput = field(panel(), '本次退款金额（元，0表示仅取消）').locator('input')
     assert.equal(Number(await amountInput.inputValue()), options.defaultAmount ?? 100)
     if (options.amount !== undefined) {
@@ -651,6 +676,13 @@ try {
   assert.equal(orderRefunds(zeroCancel.id).length, 0)
   assert.equal(current(zeroCancel.id).effectiveReward, 0)
   pass('金额0仅取消，原因标签无需重复输入，不生成退款记录')
+  await assertSingleOrderEntry('退款处理')
+  await page.screenshot({ path: join(output, 'canceled-refund-only-desktop.png'), fullPage: true })
+  await action(zeroCancel.id, '退款处理', '取消历史补充实际部分退款', '/refunds', 10)
+  assert.equal(current(zeroCancel.id).status, 'canceled')
+  assert.equal(current(zeroCancel.id).effectiveReward, 0)
+  assert.equal(orderRefunds(zeroCancel.id)[0].amount, 1000)
+  pass('已取消且仍有额度的订单仅显示退款处理，可补登记退款而不恢复订单')
   const balanceCancel = order('现金订单回余额取消')
   await cancelOrder(balanceCancel, { destination: 'balance' })
   assert.equal(orderRefunds(balanceCancel.id)[0].destination, 'balance')
@@ -821,6 +853,44 @@ try {
   await supportContext.close()
   page = adminPage
   pass('只有订单编辑权限的客服看不到实际退款确认，取消只生成待处理申请，不加余额')
+  const financeOnly = mutate('/users', {
+    username: `qa-finance-only-${randomUUID()}`,
+    name: '仅退款权限财务',
+    role: 'finance',
+    status: 'active',
+    maxActiveOrders: 1,
+    permissionOverrides: { 'orders.edit': false, 'finance.review': false },
+    password
+  })
+  const financeOnlyOrder = order('财务无编辑权限仅退款')
+  const financeContext = await browser.newContext({ viewport: { width: 1440, height: 1050 } })
+  await financeContext.route('**/*', (route) => {
+    const url = new URL(route.request().url())
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname !== '127.0.0.1'
+      ? route.abort('blockedbyclient')
+      : route.continue()
+  })
+  assert.equal(
+    (
+      await financeContext.request.post(api + '/api/studio/login', {
+        data: { username: financeOnly.username, password }
+      })
+    ).status(),
+    200
+  )
+  page = await newQaPage(financeContext)
+  await visit(financeOnlyOrder.id)
+  await assertSingleOrderEntry('退款处理')
+  await page.screenshot({
+    path: join(output, 'finance-only-refund-entry-desktop.png'),
+    fullPage: true
+  })
+  await action(financeOnlyOrder.id, '退款处理', '仅退款权限财务登记部分实际退款', '/refunds', 10)
+  assert.equal(current(financeOnlyOrder.id).status, 'pending')
+  assert.equal(current(financeOnlyOrder.id).refundSummary.paid, 1000)
+  await financeContext.close()
+  page = adminPage
+  pass('没有订单编辑及验收权限的财务仅见退款处理，实际退款成功且不能取消订单')
   assert.deepEqual(report.pageErrors, [])
   assert.deepEqual(report.serverErrors, [])
   report.passed = true

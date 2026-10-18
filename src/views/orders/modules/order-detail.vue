@@ -1175,9 +1175,6 @@
           @click="openAction('problem-close')"
           >确认问题已解决</ElButton
         >
-        <ElButton v-if="canRefund" :disabled="saving" @click="openAction('refund')">{{
-          can('finance.refunds') ? '登记退款' : '申请退款'
-        }}</ElButton>
         <ElButton
           v-if="
             canReview &&
@@ -1207,13 +1204,14 @@
           >打手补款 / 扣款</ElButton
         >
         <ElButton
-          v-if="canCancel"
+          v-if="canCancel || canRefund"
           type="danger"
           plain
           :disabled="saving"
-          @click="openAction('cancel')"
-          >取消订单</ElButton
+          @click="openAction(canCancel ? 'cancel' : 'refund')"
         >
+          {{ canCancel ? '取消订单／退款' : '退款处理' }}
+        </ElButton>
       </ElSpace>
       <ElTabs v-model="activeTab">
         <ElTabPane label="订单信息" name="information">
