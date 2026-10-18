@@ -38,7 +38,7 @@
         personName(row.leaderId || row.assignedTo || row.assignments.at(-1)?.leaderId || '')
       }}</template>
       <template #receivedAmount="{ row }">{{ money(row.receivedAmount) }}</template>
-      <template #reward="{ row }">{{ money(row.reward) }}</template>
+      <template #reward="{ row }">{{ money(effectiveOrderReward(row)) }}</template>
       <template #status="{ row }"
         ><ElTag :type="row.status === 'review' ? 'primary' : 'warning'">{{
           row.status === 'review' ? '待验收' : '取消补偿待确认'
@@ -82,6 +82,7 @@
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
   import { money, useStudio } from '@/hooks/business/useStudio'
+  import { effectiveOrderReward } from '@/utils/business/refund-options'
   import type { Order } from '@/types/studio'
   import { useFinanceActions } from './useFinanceActions'
   import OrderDetail from '@/views/orders/modules/order-detail.vue'

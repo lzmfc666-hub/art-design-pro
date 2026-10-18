@@ -89,12 +89,7 @@
             { label: '退款金额', value: money(refundDetail.amount), tone: 'primary' },
             {
               label: '退款方式',
-              value:
-                refundDetail.refundMethod === 'balance'
-                  ? '退回客户储值'
-                  : refundDetail.refundMethod === 'cash'
-                    ? '现金退款'
-                    : '历史记录未登记'
+              value: destinationLabel(refundDetail)
             },
             { label: '申请时间', value: formatTime(refundDetail.createdAt) },
             {
@@ -109,6 +104,12 @@
         />
         <BusinessDetailSection title="退款依据与经办记录">
           <ElDescriptions :column="1" border
+            ><ElDescriptionsItem label="退款渠道"
+              >{{
+                refundDetail.channel ? refundChannelLabels[refundDetail.channel] : '历史记录未登记'
+              }}{{
+                refundDetail.channelNote ? ' · ' + refundDetail.channelNote : ''
+              }}</ElDescriptionsItem
             ><ElDescriptionsItem label="退款原因">{{ refundDetail.reason }}</ElDescriptionsItem
             ><ElDescriptionsItem label="申请人">{{
               personName(refundDetail.requestedBy)
@@ -142,7 +143,7 @@
       @restore="queueRestore('new', $event)"
       :restore-error="restoreError"
       v-model="refund.open"
-      title="登记已实际发生的退款"
+      title="退款处理"
       :close-on-click-modal="false"
       :close-on-press-escape="!saving"
       :show-close="!saving"
@@ -151,7 +152,7 @@
       <BusinessDetailHeader
         description="选择原订单，核对可退额度和退款方式后登记。退款调整原付款日统计。"
         icon="ri:refund-2-line"
-        :badge="refundIsBalance ? '客户储值退款' : '实际退款登记'"
+        :badge="refund.destination === 'balance' ? '回客户余额' : '线下退给老板'"
       />
       <BusinessDetailSummary
         :items="[
@@ -166,11 +167,7 @@
       />
       <BusinessDetailSection
         title="退款金额与原因"
-        :description="
-          refundIsBalance
-            ? '保存后自动退回原客户储值账户，避免重复线下退款。'
-            : '完成客户实际退款后再登记本次金额。'
-        "
+        description="按本次选择的去向处理，不根据原付款方式自动改去向。"
       >
         <ElForm label-position="top" :disabled="saving" @submit.prevent="saveRefund">
           <ElFormItem label="关联订单（不含大厅来源）" required
@@ -203,14 +200,14 @@
               maxlength="2000"
               show-word-limit
           /></ElFormItem>
-          <ElAlert
-            :title="
-              refundIsBalance
-                ? '保存后自动退回原客户储值账户，不再重复线下退款。'
-                : '保存即视为实际退款，请完成客户退款后再登记。'
-            "
-            type="warning"
-            :closable="false"
+          <BusinessRefundOptions
+            v-if="refund.amount != null && refund.amount > 0"
+            v-model:destination="refund.destination"
+            v-model:channel="refund.channel"
+            v-model:channel-note="refund.channelNote"
+            v-model:actual-refund-confirmed="refund.actualRefundConfirmed"
+            :can-confirm="can('finance.refunds')"
+            :amount="refund.amount"
           />
         </ElForm>
       </BusinessDetailSection>
@@ -221,7 +218,13 @@
           :loading="saving"
           :disabled="revisionLoading || refund.expectedRevision == null || !!revisionError"
           @click="saveRefund"
-          >{{ refundIsBalance ? '确认退回储值' : '确认实际退款并登记' }}</ElButton
+          >{{
+            refund.destination === 'balance'
+              ? '确认退回余额'
+              : refund.actualRefundConfirmed
+                ? '确认实际退款并登记'
+                : '提交线下退款待处理'
+          }}</ElButton
         ></template
       >
     </BusinessDetailPanel>
@@ -314,6 +317,14 @@
   import { useFinanceActions } from './useFinanceActions'
   import OrderDetail from '@/views/orders/modules/order-detail.vue'
   import { businessConfirmMessage } from '@/utils/business/confirm-message'
+  import BusinessRefundOptions from '@/components/business/BusinessRefundOptions.vue'
+  import {
+    refundDestinationOf,
+    refundChannelLabels,
+    refundOutcome,
+    validateRefundRoute
+  } from '@/utils/business/refund-options'
+  import type { RefundDestination } from '@/types/studio'
 
   const { data, user, loading, can, clearSession } = useStudio()
   const { saving, submit, reload, lastFailure } = useFinanceActions()
@@ -395,6 +406,10 @@
     orderId: '',
     amount: null as number | null,
     reason: '',
+    destination: 'cash' as RefundDestination,
+    channel: '',
+    channelNote: '',
+    actualRefundConfirmed: false,
     expectedRevision: null as number | null
   })
   const revisionLoading = ref(false)
@@ -424,9 +439,13 @@
       }
     }
   )
-  const refundIsBalance = computed(
-    () => data.value?.orders.find((row) => row.id === refund.orderId)?.paymentMethod === 'balance'
-  )
+  const destinationLabel = (row: Refund) =>
+    refundDestinationOf(
+      row,
+      data.value?.orders.find((order) => order.id === row.orderId)
+    ) === 'balance'
+      ? '回客户余额'
+      : '退给老板（线下退款，不加账户余额）'
   const approveRequests = new Map<string, { requestId: string; expectedRevision: number }>()
   const reason = reactive({
     open: false,
@@ -525,7 +544,16 @@
   }
   function openRefund() {
     if (saving.value || detailBusy.value) return
-    Object.assign(refund, { open: true, orderId: '', amount: null, reason: '' })
+    Object.assign(refund, {
+      open: true,
+      orderId: '',
+      amount: null,
+      reason: '',
+      destination: 'cash',
+      channel: '',
+      channelNote: '',
+      actualRefundConfirmed: false
+    })
   }
   async function openReason(row: Refund, action: 'reject' | 'resolve') {
     if (saving.value || detailBusy.value) return
@@ -581,12 +609,15 @@
       }
     }
     const isBalance =
-      data.value?.orders.find((order) => order.id === row.orderId)?.paymentMethod === 'balance'
+      refundDestinationOf(
+        row,
+        data.value?.orders.find((order) => order.id === row.orderId)
+      ) === 'balance'
     try {
       await ElMessageBox.confirm(
         businessConfirmMessage(
           isBalance
-            ? `确认将 ${money(row.amount)} 退回原客户储值账户？本次无需线下再退款。`
+            ? `确认将 ${money(row.amount)} 退回申请时记录的客户余额？本次无需线下再退款。`
             : `确认已向客户实际退款 ${money(row.amount)}？退款将归属原订单付款日统计。`,
           [
             { label: '退款编号', value: row.id },
@@ -600,7 +631,15 @@
                 data.value?.orders.find((order) => order.id === row.orderId)?.paidAt
               )
             },
-            { label: '退款方式', value: isBalance ? '退回原客户储值' : '确认实际现金退款' }
+            { label: '退款方式', value: isBalance ? '退回原客户储值' : '确认实际现金退款' },
+            { label: '申请时退款去向', value: destinationLabel(row) },
+            {
+              label: '线下渠道',
+              value: row.channel
+                ? refundChannelLabels[row.channel] +
+                  (row.channelNote ? ' · ' + row.channelNote : '')
+                : '历史记录未登记'
+            }
           ],
           '退款仍归原订单付款日，申请与财务处理记录继续保留。'
         ),
@@ -620,7 +659,7 @@
     approveRequests.set(row.id, request)
     const success = await submit(
       `/refunds/${row.id}/action`,
-      { action: 'approve', ...request },
+      { action: 'approve', actualRefundConfirmed: !isBalance, ...request },
       '退款已登记'
     )
     const failureStatus = (lastFailure.value as { status?: number } | null)?.status
@@ -643,6 +682,13 @@
       refund.amount > refundableAmount.value
     )
       return void ElMessage.warning('请选择订单，并填写有效退款金额与原因')
+    const routeWarning = validateRefundRoute(
+      refund.destination,
+      refund.channel,
+      refund.channelNote,
+      refund.amount
+    )
+    if (routeWarning) return void ElMessage.warning(routeWarning)
     if (
       await submit(
         '/refunds',
@@ -650,9 +696,22 @@
           orderId: refund.orderId,
           expectedRevision: refund.expectedRevision,
           amount: refund.amount,
+          destination: refund.destination,
+          channel: refund.destination === 'cash' ? refund.channel : undefined,
+          channelNote:
+            refund.destination === 'cash' && refund.channel === 'other'
+              ? refund.channelNote.trim()
+              : undefined,
+          actualRefundConfirmed:
+            can('finance.refunds') && refund.destination === 'cash' && refund.actualRefundConfirmed,
           reason: refund.reason
         },
-        '实际退款已登记'
+        refundOutcome(
+          refund.destination,
+          can('finance.refunds'),
+          refund.actualRefundConfirmed,
+          refund.amount
+        )
       )
     )
       refund.open = false

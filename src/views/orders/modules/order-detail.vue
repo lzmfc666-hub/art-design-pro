@@ -27,8 +27,19 @@
   import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
   import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
   import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
+  import BusinessRefundOptions from '@/components/business/BusinessRefundOptions.vue'
+  import {
+    effectiveOrderReward,
+    refundOutcome,
+    validateRefundRoute,
+    refundDestinationOf,
+    refundChannelLabels
+  } from '@/utils/business/refund-options'
+  import { useRouter } from 'vue-router'
+  import type { RefundDestination } from '@/types/studio'
 
   const props = defineProps<{ orderId: string }>()
+  const router = useRouter()
   const emit = defineEmits<{ busy: [value: boolean] }>()
   const { data, user, can, mutate, upload, clearSession } = useStudio()
   const detail = ref<Order | null>(null)
@@ -125,6 +136,11 @@
     amount: null as number | null,
     reward: null as number | null,
     reason: '',
+    cancelReasonChoice: '老板取消订单',
+    refundDestination: 'cash' as RefundDestination,
+    refundChannel: '',
+    refundChannelNote: '',
+    actualRefundConfirmed: false,
     returnRequestId: '',
     problemId: '',
     resumeMode: 'original' as 'original' | 'pool',
@@ -329,26 +345,53 @@
   const canCorrectStatus = computed(
     () =>
       can('orders.edit') &&
+      !order.value?.cancellationPolicyVersion &&
       executionAllowed.value &&
       ['finance', 'manager', 'owner', 'super_admin'].includes(user.value?.role || '')
   )
   const canCancel = computed(
     () =>
       !!order.value &&
-      ((canEdit.value && ['pending', 'active', 'review'].includes(order.value.status)) ||
+      canEdit.value &&
+      (['pending', 'active', 'review'].includes(order.value.status) ||
         (canReview.value && order.value.status === 'completed'))
   )
   const canRefund = computed(
     () => !isHall.value && refundAvailable.value > 0 && (canEdit.value || can('finance.refunds'))
   )
+  const cancelReasons = ['老板取消订单', '重复下单', '下错订单', '无人接单', '自定义']
+  const cancelSubmitText = computed(() =>
+    !toCents(fields.amount)
+      ? '确认取消订单'
+      : fields.refundDestination === 'balance' && can('finance.refunds')
+        ? '确认取消并退回余额'
+        : can('finance.refunds') && fields.actualRefundConfirmed
+          ? '确认取消并登记退款'
+          : '确认取消并提交退款申请'
+  )
+  function chooseCancelReason(value: string) {
+    fields.cancelReasonChoice = value
+    fields.reason = value === '自定义' ? '' : value
+  }
+  function openPlayerAdjustment() {
+    if (!order.value || saving.value || !can('finance.withdrawals')) return
+    void router.push({
+      path: '/finance/settlement',
+      query: {
+        tab: 'adjustments',
+        adjustOrderId: order.value.id,
+        adjustPlayerId: order.value.leaderId || order.value.assignments.at(-1)?.leaderId || ''
+      }
+    })
+  }
   const dialogTitle = computed(
     () =>
       ({
         payment: '确认客户收款',
         dispatch: '重新派单',
         release: '解除当前接单',
-        cancel: '取消订单',
-        refund: can('finance.refunds') ? '登记实际退款' : '发起退款申请',
+        cancel: '取消订单与退款',
+        refund: '退款处理',
         edit: '编辑实际订单',
         adjust: '财务金额更正',
         'cancel-settle': '确认取消订单打手报酬',
@@ -369,8 +412,9 @@
       payment: '核对付款方式、实际金额与付款时间后登记收款。',
       dispatch: '调整本轮派单安排；指定打手仍需本人接受订单。',
       release: '核对当前负责人后解除接单，原履约与接单记录继续保留。',
-      cancel: '终止履约并说明原因，退款与最终报酬分别处理。',
-      refund: '核对可退额度与原付款方式，记录申请或实际退款。',
+      cancel:
+        '一次保存取消订单及本次退款。按实收扣除已退和待审批金额核对可退额度；取消不在此填写打手报酬。',
+      refund: '选择本次退款去向和渠道，核实实际完成情况后提交。退款去向不由原付款方式自动决定。',
       edit: '修改当前履约资料与备注，历史记录和下单快照继续保留。',
       adjust: '核对原金额与报酬，按实际业务填写更正依据。',
       'cancel-settle': '核对取消订单的实际履约人员，确认最终整单报酬。',
@@ -424,9 +468,18 @@
     }
     expected.value = expectedState(order.value)
     Object.assign(fields, {
-      amount: action === 'refund' ? refundAvailable.value / 100 : order.value.amount / 100,
+      amount: ['refund', 'cancel'].includes(action)
+        ? isHall.value
+          ? 0
+          : refundAvailable.value / 100
+        : order.value.amount / 100,
       reward: order.value.reward / 100,
-      reason: '',
+      reason: action === 'cancel' ? '老板取消订单' : '',
+      cancelReasonChoice: '老板取消订单',
+      refundDestination: 'cash',
+      refundChannel: '',
+      refundChannelNote: '',
+      actualRefundConfirmed: false,
       returnRequestId: pendingReturn.value?.id || '',
       problemId: order.value.problem?.id || '',
       resumeMode: order.value.storage?.leaderId ? 'original' : 'pool',
@@ -476,8 +529,15 @@
       cancel: canCancel.value,
       refund: canRefund.value,
       edit: canEdit.value && ['pending', 'active', 'review'].includes(row.status),
-      adjust: canReview.value && ['completed', 'canceled'].includes(row.status),
-      'cancel-settle': canReview.value && row.status === 'canceled' && !!row.compensationPending,
+      adjust:
+        canReview.value &&
+        !row.cancellationPolicyVersion &&
+        ['completed', 'canceled'].includes(row.status),
+      'cancel-settle':
+        canReview.value &&
+        !row.cancellationPolicyVersion &&
+        row.status === 'canceled' &&
+        !!row.compensationPending,
       'review-return': canReview.value && executionAllowed.value && row.status === 'review',
       'correct-status': canCorrectStatus.value,
       'return-approve': canEdit.value && executionAllowed.value && !!pendingReturn.value,
@@ -597,6 +657,28 @@
       return
     }
     if (
+      action === 'cancel' &&
+      (fields.amount === null ||
+        !Number.isFinite(fields.amount) ||
+        fields.amount < 0 ||
+        toCents(fields.amount) > refundAvailable.value ||
+        (isHall.value && fields.amount !== 0))
+    ) {
+      ElMessage.warning(
+        isHall.value ? '游戏大厅来源仅取消订单，不提供退款' : '退款金额应在0至剩余可退额度之间'
+      )
+      return
+    }
+    if (['refund', 'cancel'].includes(action)) {
+      const warning = validateRefundRoute(
+        fields.refundDestination,
+        fields.refundChannel,
+        fields.refundChannelNote,
+        toCents(fields.amount)
+      )
+      if (warning) return void ElMessage.warning(warning)
+    }
+    if (
       ['edit', 'adjust', 'cancel-settle'].includes(action) &&
       (fields.reward === null || fields.reward < 0 || !Number.isFinite(fields.reward))
     ) {
@@ -638,6 +720,16 @@
             orderId: order.value.id,
             expectedRevision: expected.value.expectedRevision,
             amount: toCents(fields.amount),
+            destination: fields.refundDestination,
+            channel: fields.refundDestination === 'cash' ? fields.refundChannel : undefined,
+            channelNote:
+              fields.refundDestination === 'cash' && fields.refundChannel === 'other'
+                ? fields.refundChannelNote.trim()
+                : undefined,
+            actualRefundConfirmed:
+              can('finance.refunds') &&
+              fields.refundDestination === 'cash' &&
+              fields.actualRefundConfirmed,
             reason: fields.reason.trim()
           })
         )
@@ -647,6 +739,24 @@
           reason: fields.reason.trim(),
           ...expected.value
         }
+        if (action === 'cancel')
+          Object.assign(body, {
+            action: 'cancel-refund',
+            refundAmount: toCents(fields.amount),
+            refundDestination: fields.refundDestination,
+            refundChannel:
+              toCents(fields.amount) > 0 && fields.refundDestination === 'cash'
+                ? fields.refundChannel
+                : undefined,
+            refundChannelNote:
+              fields.refundChannel === 'other' && fields.refundDestination === 'cash'
+                ? fields.refundChannelNote.trim()
+                : undefined,
+            actualRefundConfirmed:
+              can('finance.refunds') &&
+              fields.refundDestination === 'cash' &&
+              fields.actualRefundConfirmed
+          })
         if (action === 'return-approve' || action === 'return-reject')
           body.returnRequestId = fields.returnRequestId
         if (action === 'resume') body.mode = fields.resumeMode
@@ -703,9 +813,16 @@
       dialog.value = null
       await loadOrder()
       ElMessage.success(
-        action === 'refund' && !can('finance.refunds')
-          ? '退款申请已提交财务审核'
-          : '处理已保存，并记录操作日志'
+        action === 'cancel'
+          ? `取消已保存；${refundOutcome(fields.refundDestination, can('finance.refunds'), fields.actualRefundConfirmed, toCents(fields.amount))}`
+          : action === 'refund'
+            ? refundOutcome(
+                fields.refundDestination,
+                can('finance.refunds'),
+                fields.actualRefundConfirmed,
+                toCents(fields.amount)
+              )
+            : '处理已保存，并记录操作日志'
       )
     } catch (error) {
       actionIntent.fail(error)
@@ -758,7 +875,7 @@
               label: '队友',
               value: order.value.teammateId ? staffName(order.value.teammateId) : '无，独自完成'
             },
-            { label: '整单报酬', value: money(order.value.reward) }
+            { label: '实际报酬', value: money(effectiveOrderReward(order.value)) }
           ],
           '以上为发起确认时的订单信息；状态或材料变化后须刷新并重新核对。'
         ),
@@ -954,9 +1071,11 @@
         v-if="order.status === 'canceled'"
         :title="'订单已取消：' + (order.cancelReason || '')"
         :description="
-          order.compensationPending
-            ? '最终打手报酬待财务确认；取消与实际退款分别记录。'
-            : '取消记录与报酬结算记录均已保留。'
+          order.cancellationPolicyVersion
+            ? '本订单不可恢复。原约定报酬仅作历史保留，特殊补款或扣款请使用已有打手补扣入口。'
+            : order.compensationPending
+              ? '最终打手报酬待财务确认；取消与实际退款分别记录。'
+              : '取消记录与报酬结算记录均已保留。'
         "
         type="warning"
         :closable="false"
@@ -1060,17 +1179,32 @@
           can('finance.refunds') ? '登记退款' : '申请退款'
         }}</ElButton>
         <ElButton
-          v-if="canReview && ['completed', 'canceled'].includes(order.status)"
+          v-if="
+            canReview &&
+            !order.cancellationPolicyVersion &&
+            ['completed', 'canceled'].includes(order.status)
+          "
           :disabled="saving"
           @click="openAction('adjust')"
           >金额 / 报酬更正</ElButton
         >
         <ElButton
-          v-if="canReview && order.status === 'canceled' && order.compensationPending"
+          v-if="
+            canReview &&
+            !order.cancellationPolicyVersion &&
+            order.status === 'canceled' &&
+            order.compensationPending
+          "
           type="warning"
           :disabled="saving"
           @click="openAction('cancel-settle')"
           >确认最终报酬</ElButton
+        >
+        <ElButton
+          v-if="order.status === 'canceled' && can('finance.withdrawals')"
+          :disabled="saving"
+          @click="openPlayerAdjustment"
+          >打手补款 / 扣款</ElButton
         >
         <ElButton
           v-if="canCancel"
@@ -1131,11 +1265,14 @@
               ><ElDescriptionsItem label="客服确认时间">{{
                 formatTime(order.receivedAt)
               }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="整单打手报酬"
-                >{{ money(order.reward)
+              <ElDescriptionsItem label="实际打手报酬"
+                >{{ money(effectiveOrderReward(order))
                 }}<ElTag v-if="order.compensationPending" size="small" type="warning" class="ml-2"
                   >待财务确认</ElTag
                 ></ElDescriptionsItem
+              ><ElDescriptionsItem label="原约定报酬（历史）">{{
+                money(order.reward)
+              }}</ElDescriptionsItem
               ><ElDescriptionsItem label="订单完成时间">{{
                 formatTime(order.completedAt)
               }}</ElDescriptionsItem>
@@ -1215,6 +1352,20 @@
                       ? '财务人工处理：' + row.manualResolution
                       : '打手已提现，报酬差额待财务人工确认登记'
                   }}</p></template
+                ></ElTableColumn
+              ><ElTableColumn label="退款去向 / 渠道" min-width="190"
+                ><template #default="{ row }"
+                  >{{
+                    refundDestinationOf(row, order) === 'balance'
+                      ? '回客户余额'
+                      : '退给老板（线下）'
+                  }}<p class="text-xs text-g-500"
+                    >{{
+                      row.channel
+                        ? refundChannelLabels[row.channel as keyof typeof refundChannelLabels]
+                        : '历史未登记渠道'
+                    }}{{ row.channelNote ? ' · ' + row.channelNote : '' }}</p
+                  ></template
                 ></ElTableColumn
               ><ElTableColumn label="时间" min-width="170"
                 ><template #default="{ row }">{{
@@ -1562,10 +1713,11 @@
           :context="order.orderNo"
         />
         <BusinessDetailSummary
+          v-if="dialog !== 'cancel'"
           :items="[
             { label: '当前订单金额', value: money(order.amount) },
             { label: '已收款', value: money(order.receivedAmount) },
-            { label: '整单打手报酬', value: money(order.reward) },
+            { label: '实际打手报酬', value: money(effectiveOrderReward(order)) },
             { label: '当前负责人', value: staffName(order.leaderId || order.assignedTo) }
           ]"
         />
@@ -1580,6 +1732,58 @@
             title="本次操作填写内容"
             description="请核对下方填写内容及现有业务提示；保存后保留原历史记录。"
           >
+            <template v-if="dialog === 'cancel'">
+              <ElAlert
+                title="取消后订单不可恢复；本次只保存一次取消与退款，不会自动向微信、支付宝或银行卡转账。"
+                type="warning"
+                :closable="false"
+                class="mb-4"
+              />
+              <ElDescriptions :column="1" border class="mb-4"
+                ><ElDescriptionsItem label="订单号">{{ order.orderNo }}</ElDescriptionsItem
+                ><ElDescriptionsItem label="真实可退额度"
+                  >{{
+                    money(isHall ? 0 : refundAvailable)
+                  }}（已扣除已退及待审批）</ElDescriptionsItem
+                ></ElDescriptions
+              >
+              <ElFormItem label="本次退款金额（元，0表示仅取消）" required
+                ><ElInputNumber
+                  v-model="fields.amount"
+                  :min="0"
+                  :max="isHall ? 0 : refundAvailable / 100"
+                  :precision="2"
+                  :disabled="isHall || refundAvailable === 0"
+                  class="!w-full"
+              /></ElFormItem>
+              <ElAlert
+                v-if="isHall"
+                title="游戏大厅来源不提供退款，本次仅取消订单。"
+                type="info"
+                :closable="false"
+                class="mb-4"
+              />
+              <BusinessRefundOptions
+                v-model:destination="fields.refundDestination"
+                v-model:channel="fields.refundChannel"
+                v-model:channel-note="fields.refundChannelNote"
+                v-model:actual-refund-confirmed="fields.actualRefundConfirmed"
+                :can-confirm="can('finance.refunds')"
+                :amount="toCents(fields.amount)"
+              />
+              <ElFormItem label="取消原因" required
+                ><ElSpace wrap
+                  ><ElButton
+                    v-for="reason in cancelReasons"
+                    :key="reason"
+                    :type="fields.cancelReasonChoice === reason ? 'primary' : 'default'"
+                    plain
+                    @click="chooseCancelReason(reason)"
+                    >{{ reason }}</ElButton
+                  ></ElSpace
+                ></ElFormItem
+              >
+            </template>
             <template v-if="dialog === 'payment'"
               ><ElFormItem label="收款方式" required
                 ><ElRadioGroup v-model="fields.paymentMethod"
@@ -1589,7 +1793,7 @@
               >
               <ElAlert
                 v-if="fields.paymentMethod === 'balance'"
-                :title="`本次扣款 ${money(order.amount)}；可用储值 ${balanceLoading ? '读取中' : money(balance)}。确认后将扣款并记录付款时间；按原来源规则允许退款时退回原储值账户。`"
+                :title="`本次扣款 ${money(order.amount)}；可用储值 ${balanceLoading ? '读取中' : money(balance)}。确认后将扣款并记录付款时间；后续退款按另行选择的去向处理。`"
                 type="info"
                 :closable="false"
                 class="mb-4" />
@@ -1714,27 +1918,26 @@
                 :title="'剩余可退 ' + money(refundAvailable) + '，已扣除待审核申请'"
                 type="info"
                 :closable="false"
-                class="mb-4"
-              /><ElFormItem label="本次退款金额（元）" required
+                class="mb-4" /><ElFormItem label="本次退款金额（元）" required
                 ><ElInputNumber
                   v-model="fields.amount"
                   :min="0.01"
                   :max="refundAvailable / 100"
                   :precision="2"
                   class="!w-full" /></ElFormItem
-              ><p class="text-xs text-g-500 mb-4">{{
-                can('finance.refunds')
-                  ? order.paymentMethod === 'balance'
-                    ? '确认后退款会自动回原客户储值账户，不再重复线下转账。'
-                    : '确认保存表示已完成实际退款，统计回到原付款日更新。'
-                  : '申请提交财务审核，实际退款另行登记。'
-              }}</p></template
-            >
+              ><BusinessRefundOptions
+                v-model:destination="fields.refundDestination"
+                v-model:channel="fields.refundChannel"
+                v-model:channel-note="fields.refundChannelNote"
+                v-model:actual-refund-confirmed="fields.actualRefundConfirmed"
+                :can-confirm="can('finance.refunds')"
+                :amount="toCents(fields.amount)"
+            /></template>
             <template v-if="dialog === 'edit'"
               ><ElAlert
                 :title="
                   order.paymentMethod === 'balance'
-                    ? '储值已支付订单的客户金额固定；可修改履约信息及报酬并记录原因，退款走原储值账户。'
+                    ? '储值已支付订单的客户金额固定；可修改履约信息及报酬并记录原因，退款时须另行选择去向。'
                     : '保留原创建人和模板快照。已付款现金金额仅允许明确的历史录错更正，未付款改价不产生实收；实际退款单独登记，不能用改价代替追加收款。'
                 "
                 type="info"
@@ -1898,7 +2101,7 @@
             ></template>
             <ElAlert
               v-if="dialog === 'cancel'"
-              title="终止订单履约并保留历史记录。有履约历史的最终报酬由财务确认；实际退款须另行登记。"
+              title="本次取消与退款一次提交；特殊打手补扣在取消历史中进入已有调整窗口办理。"
               type="warning"
               :closable="false"
               class="mb-4"
@@ -1936,7 +2139,11 @@
               class="mb-4"
             />
             <ElFormItem
-              v-if="dialog && !['payment', 'dispatch'].includes(dialog)"
+              v-if="
+                dialog &&
+                !['payment', 'dispatch'].includes(dialog) &&
+                (dialog !== 'cancel' || fields.cancelReasonChoice === '自定义')
+              "
               label="原因 / 处理说明"
               required
               ><ElInput
@@ -1962,7 +2169,14 @@
             :disabled="uploading"
             @click="submitAction"
             >{{
-              dialog === 'refund' && !can('finance.refunds') ? '提交退款申请' : '确认保存'
+              dialog === 'cancel'
+                ? cancelSubmitText
+                : dialog === 'refund'
+                  ? can('finance.refunds') &&
+                    (fields.refundDestination === 'balance' || fields.actualRefundConfirmed)
+                    ? '确认退款处理'
+                    : '提交退款申请'
+                  : '确认保存'
             }}</ElButton
           ></template
         >

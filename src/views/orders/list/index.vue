@@ -2,7 +2,7 @@
   <div>
     <BusinessPageHeader
       title="订单管理"
-      description="查看履约进度、收款情况与历史处理记录，按状态快速定位需要处理的订单。"
+      description="日常订单不含已取消订单；取消后的订单可从已取消历史中查看。"
       icon="ri:file-list-3-line"
       :badge="`${pagination.total} 笔符合筛选订单`"
     />
@@ -108,7 +108,9 @@
         >
         <template #amount="{ row }"
           ><span>{{ money(row.amount) }}</span
-          ><p class="text-xs text-g-500">打手 {{ money(row.reward) }}</p></template
+          ><p class="text-xs text-g-500"
+            >实际报酬 {{ money(effectiveOrderReward(row)) }}</p
+          ></template
         >
         <template #status="{ row }"
           ><ElTag :type="orderStatusType(row.displayStatus || row.status)">{{
@@ -193,6 +195,7 @@
   import type { LocationQuery, LocationQueryRaw } from 'vue-router'
   import { ElMessage } from 'element-plus'
   import { studioRequest } from '@/api/studio'
+  import { effectiveOrderReward } from '@/utils/business/refund-options'
   defineOptions({ name: 'OrderList' })
   const { data, user, can, clearSession } = useStudio()
   const route = useRoute()
@@ -369,11 +372,14 @@
   })
   const statusTabs = computed(() =>
     [
-      { value: 'all', label: '全部订单' },
+      { value: 'all', label: '日常订单' },
       { value: 'unassigned', label: '待分配' },
       { value: 'return-pending', label: '退单待办' },
       { value: 'problem', label: '问题单' },
-      ...Object.entries(orderDisplayStatusLabels).map(([value, label]) => ({ value, label }))
+      ...Object.entries(orderDisplayStatusLabels).map(([value, label]) => ({
+        value,
+        label: value === 'canceled' ? '已取消历史' : label
+      }))
     ].map((item) => ({
       ...item,
       count: counts.value[item.value] || 0

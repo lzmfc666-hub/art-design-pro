@@ -13,6 +13,8 @@ export type Role =
   | 'player'
 export type OrderStatus = 'pending' | 'active' | 'review' | 'completed' | 'canceled'
 export type OrderDisplayStatus = OrderStatus | 'stored' | 'refunded' | 'refund-pending'
+export type RefundDestination = 'cash' | 'balance'
+export type RefundChannel = 'wechat' | 'alipay' | 'platform' | 'bank' | 'other'
 export interface Staff {
   id: string
   createdAt?: string
@@ -189,6 +191,15 @@ export interface Order {
   map: string
   amount: number
   reward: number
+  effectiveReward?: number
+  rewardDisposition?: {
+    mode: string
+    trigger: string
+    policyVersion: number
+    decidedAt: string
+    decidedBy: string
+  }
+  cancellationPolicyVersion?: number
   receivedAmount: number
   paidAt: string | null
   receivedAt: string | null
@@ -300,6 +311,10 @@ export interface Refund {
   manualResolution?: string
   requestId?: string
   refundMethod?: 'cash' | 'balance'
+  destination?: RefundDestination
+  channel?: RefundChannel
+  channelNote?: string
+  destinationCustomerId?: string
   balanceTransactionId?: string
 }
 export interface Withdrawal {

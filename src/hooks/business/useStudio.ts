@@ -43,6 +43,12 @@ export const orderDisplayStatusLabels: Record<OrderDisplayStatus, string> = {
 }
 export function orderStatusLabel(order: Pick<Order, 'status' | 'displayStatus' | 'dispatchState'>) {
   const status = order.displayStatus || order.status
+  if (order.status === 'canceled')
+    return status === 'refunded'
+      ? '已取消 · 已退款'
+      : status === 'refund-pending'
+        ? '已取消 · 退款待处理'
+        : '已取消'
   return status === 'pending' && order.dispatchState === 'unassigned'
     ? '待分配'
     : orderDisplayStatusLabels[status]
