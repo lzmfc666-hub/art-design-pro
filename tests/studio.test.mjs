@@ -1,4 +1,5 @@
 import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
+import { legacyCancellationFixture } from './helpers/legacy-cancellation.mjs'
 import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -421,7 +422,7 @@ test('待验收不占名额；验收退回保留负责人且允许超上限，�
   rejects(() => f.mutate(`/player/orders/${third.id}/claim`, {}, f.users.player1.id), 409)
 })
 
-test('取消保留执行历史和预计成本；财务单独确认补偿且不可重复结算', (t) => {
+test('新取消零元保留原报价，升级前取消补偿待办仍可财务结算且不可重复', (t) => {
   const f = fixture(t)
   const untouched = f.order()
   f.mutate(
@@ -429,7 +430,8 @@ test('取消保留执行历史和预计成本；财务单独确认补偿且不�
     { action: 'cancel', reason: '客户取消' },
     f.users.support.id
   )
-  assert.equal(f.data().orders.find((o) => o.id === untouched.id).reward, 0)
+  assert.equal(f.data().orders.find((o) => o.id === untouched.id).reward, 7000)
+  assert.equal(f.data().orders.find((o) => o.id === untouched.id).effectiveReward, 0)
   const executed = f.order()
   f.mutate(`/player/orders/${executed.id}/claim`, {}, f.users.player1.id)
   f.mutate(
@@ -437,11 +439,7 @@ test('取消保留执行历史和预计成本；财务单独确认补偿且不�
     { action: 'release', reason: '换人' },
     f.users.support.id
   )
-  f.mutate(
-    `/orders/${executed.id}/action`,
-    { action: 'cancel', reason: '不再继续' },
-    f.users.support.id
-  )
+  legacyCancellationFixture(f.service, executed, '不再继续')
   assert.equal(f.data().orders.find((o) => o.id === executed.id).compensationPending, true)
   assert.equal(f.data().orders.find((o) => o.id === executed.id).reward, 7000)
   f.mutate(`/orders/${executed.id}/action`, {
@@ -619,7 +617,7 @@ test('未配置比例不能静默按零发工资，固定工资不计提成，�
   assert.ok(order.id)
 })
 
-test('固定工资客服和运营订单提成明确为零，财务独立权限可取消完成单', (t) => {
+test('固定工资客服和运营提成明确为零，取消完成单同时需要订单编辑及财务权限', (t) => {
   const f = fixture(t)
   for (const user of [f.users.support, f.users.operations, f.users.finance])
     f.mutate('/salary-plans', {
@@ -636,6 +634,8 @@ test('固定工资客服和运营订单提成明确为零，财务独立权限�
   assert.equal(order.commissionSnapshot.operationsRate, 0)
   assert.equal(f.data().reports.days.find((d) => d.date === '2026-10-10').incomplete, false)
   f.mutate('/users', { ...f.users.finance, permissionOverrides: { 'orders.edit': false } })
+  rejects(() => f.mutate(`/orders/${order.id}/action`, { action: 'cancel', reason: '财务取消已完成订单' }, f.users.finance.id), 403)
+  f.mutate('/users', { ...f.users.finance, permissionOverrides: {} })
   f.mutate(
     `/orders/${order.id}/action`,
     { action: 'cancel', reason: '财务取消已完成订单' },

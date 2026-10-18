@@ -7,7 +7,8 @@ import { sourceFingerprint } from './studio-source-fingerprint.mjs'
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 export const RUNTIME_CAPABILITIES = Object.freeze([
   'refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1', 'problem-staff-only-v1',
-  'binary-uploads-v1', 'private-thumbnails-v1'
+  'binary-uploads-v1', 'private-thumbnails-v1',
+  'cancel-refund-v1', 'reward-disposition-v1', 'refund-destination-v1'
 ])
 const hash = value => createHash('sha256').update(value).digest('hex')
 export function buildFingerprint(directory) {

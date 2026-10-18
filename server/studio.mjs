@@ -21,6 +21,7 @@ import { buildPeriodExportSnapshot, exportPeriod } from './export-period.mjs'
 import { buildDiagnosticsReport } from './diagnostics.mjs'
 import { createFundsStore } from './funds-store.mjs'
 import { orderLifecycle, orderExecutable, playerOrderExecutable, refundSummary, createLifecycleContext } from './order-lifecycle.mjs'
+import { effectiveOrderReward, decideOrderReward } from './order-reward-policy.mjs'
 import { readPlayerOperationResult } from './operation-results.mjs'
 import { createImageArchive, archivedImageRecord, readArchivedImage, deletedImageRecord } from './image-archive.mjs'
 import {
@@ -770,7 +771,9 @@ export function createStudioService({
       'status',
       'leaderId',
       'resolution',
-      'teammateId'
+      'teammateId',
+      'refundAmount', 'refundDestination', 'refundChannel', 'refundChannelNote',
+      'destination', 'channel', 'channelNote', 'actualRefundConfirmed'
     ]
     const payload = Object.fromEntries(
       keys
@@ -1110,6 +1113,8 @@ export function createStudioService({
       title: order.title,
       status: order.status,
       reward: order.reward,
+      ...(order.rewardDisposition ? { rewardDisposition: Object.fromEntries(['mode', 'trigger', 'policyVersion'].map(key => [key, order.rewardDisposition[key]])) } : {}),
+      ...(order.cancellationPolicyVersion ? { cancellationPolicyVersion: order.cancellationPolicyVersion } : {}),
       map: order.map,
       requirements: order.snapshot?.description || '',
       snapshot: Object.fromEntries(
@@ -1302,7 +1307,7 @@ export function createStudioService({
             'compensationPending',
             'compensationSettled'
           ])
-          for (const key of ['storage', 'storageHistory', 'capacityExemption', 'problem', 'problemHistory', 'refundExecutionClosedAt'])
+          for (const key of ['storage', 'storageHistory', 'capacityExemption', 'problem', 'problemHistory', 'refundExecutionClosedAt', 'rewardDisposition', 'cancellationPolicyVersion'])
             if (Object.hasOwn(clean, key)) result[key] = clone(clean[key])
           if (Object.hasOwn(clean, 'receipt')) result.receipt = safeAttachment(clean.receipt)
           if (clean.snapshot && typeof clean.snapshot === 'object')
@@ -1381,7 +1386,7 @@ export function createStudioService({
                 'processedAt',
                 'processedBy',
                 'manualRewardReview',
-                'manualResolution'
+                'manualResolution', 'destination', 'channel', 'channelNote', 'destinationCustomerId', 'refundMethod', 'balanceTransactionId'
               ])
             : null
         case 'withdrawal': {
@@ -1848,11 +1853,12 @@ export function createStudioService({
   function settleReward(state, order, user) {
     restoreStatusReward(state, order, user)
     const allocations = new Map()
-    if (order.leaderId && order.reward > 0) {
+    const effectiveReward = effectiveOrderReward(order)
+    if (order.leaderId && effectiveReward > 0) {
       if (order.teammateId) {
-        allocations.set(order.leaderId, Math.ceil(order.reward / 2))
-        allocations.set(order.teammateId, Math.floor(order.reward / 2))
-      } else allocations.set(order.leaderId, order.reward)
+        allocations.set(order.leaderId, Math.ceil(effectiveReward / 2))
+        allocations.set(order.teammateId, Math.floor(effectiveReward / 2))
+      } else allocations.set(order.leaderId, effectiveReward)
     }
     const existing = state.rewardCredits.filter((row) => row.orderId === order.id)
     const priorAmounts = new Map(existing.map((row) => [row.id, row.amount]))
@@ -1881,7 +1887,7 @@ export function createStudioService({
       state.rewardReviews.push({
         id: id(),
         orderId: order.id,
-        expectedReward: order.reward,
+        expectedReward: effectiveReward,
         reason: '报酬调整涉及已发放提现，由财务人工处理；系统未自动扣减打手余额',
         createdAt: now(),
         actorId: user.id
@@ -2103,9 +2109,10 @@ export function createStudioService({
       const day = days[Number(shanghaiDate(order.paidAt).slice(8)) - 1]
       day.received += order.receivedAmount
       day.refunds += paidRefunds(state, order.id)
-      day.reward += order.reward
+      const effectiveReward = effectiveOrderReward(order)
+      day.reward += effectiveReward
       if (order.status !== 'completed' && !order.compensationSettled)
-        day.estimatedReward += order.reward
+        day.estimatedReward += effectiveReward
       const amounts = orderCommissions(state, order)
       day.supportCommission += amounts.support || 0
       day.operationsCommission += amounts.operations || 0
@@ -2248,7 +2255,7 @@ export function createStudioService({
         levels: state.levels,
         templates: [],
         orders: state.orders
-          .filter((order) => visibleOrder(state, user, order, context))
+          .filter((order) => order.status !== 'canceled' && visibleOrder(state, user, order, context))
           .map((order) => playerOrder(state, user, order, context)),
         refunds: [],
         withdrawals: state.withdrawals.filter((row) => row.userId === user.id),
@@ -2616,7 +2623,15 @@ export function createStudioService({
   function orderAction(state, user, orderId, body) {
     const order = find(state, 'orders', orderId, '订单'),
       before = clone(order)
-    const action = body.action
+    // Setting the canceled state is a cancellation, including the older correction entry.
+    const action = body.action === 'correct-status' && body.status === 'canceled' ? 'cancel' : body.action
+    if (['cancel', 'cancel-refund'].includes(action)) {
+      requirePermission(user, 'orders.edit')
+      if (order.status === 'completed' || order.completedAt || order.canceledFrom === 'completed') requirePermission(user, 'finance.review')
+    }
+    if (order.status === 'canceled' && order.cancellationPolicyVersion === 1 &&
+        !['remark', 'problem-close'].includes(action))
+      conflict('ORDER_CANCELED', '订单已取消，不能恢复或更改原报酬；特殊补扣款请另行登记')
     // A settled full refund is a durable execution closure, even after a later
     // historical amount correction. Never reactivate it through a side action.
     if (refundSummary(state, order).fullRefund)
@@ -2932,7 +2947,7 @@ export function createStudioService({
       order.compensationPending = false
       order.compensationSettled = true
     } else {
-      if (action === 'cancel' && order.status === 'completed')
+      if (['cancel', 'cancel-refund'].includes(action) && order.status === 'completed')
         requirePermission(user, 'finance.review')
       else requirePermission(user, 'orders.edit')
       if (action === 'remark') {
@@ -3006,20 +3021,31 @@ export function createStudioService({
         order.dispatchMode = 'pool'
         order.dispatchState = 'ready'
         order.publishedAt = now()
-      } else if (action === 'cancel') {
+      } else if (action === 'cancel' || action === 'cancel-refund') {
         const reason = requiredReason(body)
         if (order.status === 'canceled') fail('订单已经取消', 409)
-        if (order.status === 'completed') requirePermission(user, 'finance.review')
+        if (order.status === 'completed' || order.canceledFrom === 'completed') requirePermission(user, 'finance.review')
+        const refundAmount = action === 'cancel-refund' ? cents(body.refundAmount, '退款金额') : 0
+        const refundBody = refundAmount > 0 ? {
+          orderId: order.id, amount: refundAmount, reason, requestId: body.requestId,
+          destination: body.refundDestination, channel: body.refundChannel,
+          channelNote: body.refundChannelNote, actualRefundConfirmed: body.actualRefundConfirmed
+        } : null
+        // Decide against the original fulfillment/settlement history, before canceling.
+        decideOrderReward(state, order, { trigger: 'cancel', decidedAt: now(), decidedBy: user.id })
         order.canceledFrom = order.status
         order.rewardBeforeCancellation = order.reward
         order.status = 'canceled'
+        order.cancellationPolicyVersion = 1
         order.dispatchState = 'ready'
         order.canceledAt = now()
         order.cancelReason = reason
-        order.compensationPending = order.assignments.length > 0
-        order.compensationSettled = !order.compensationPending
-        if (!order.compensationPending) order.reward = 0
+        order.compensationPending = false
+        order.compensationSettled = true
+        for (const assignment of order.assignments)
+          if (!assignment.releasedAt) Object.assign(assignment, { releasedAt: now(), reason })
         recordCommissionAdjustment(state, order, order.id, reason)
+        if (refundBody) refundCreate(state, user, refundBody, { skipPreconditions: true, deferIdentity: true, requireDestination: true })
       } else fail('未知订单操作')
     }
     if (
@@ -3045,13 +3071,34 @@ export function createStudioService({
     return safeOrder(state, user, order)
   }
 
+  const refundChannels = ['wechat', 'alipay', 'platform', 'bank', 'other']
+  function requestedRefundRoute(order, body, required = false) {
+    const explicit = required || ['destination', 'channel', 'channelNote', 'actualRefundConfirmed'].some(key => Object.hasOwn(body, key))
+    if (!explicit) return null // Upgrade compatibility: old callers retain the original payment route.
+    const destination = choice(body.destination, ['cash', 'balance'], '退款去向')
+    const route = { destination }
+    if (destination === 'cash' || body.channel !== undefined)
+      route.channel = choice(body.channel, refundChannels, '退款渠道')
+    if (body.channelNote !== undefined || route.channel === 'other')
+      route.channelNote = text(body.channelNote, '退款渠道说明', { required: route.channel === 'other', max: 500 })
+    if (Object.hasOwn(body, 'actualRefundConfirmed') && typeof body.actualRefundConfirmed !== 'boolean')
+      fail('实际退款确认必须为有效开关')
+    if (destination === 'cash' && typeof body.actualRefundConfirmed !== 'boolean')
+      fail('请明确确认是否已完成线下退款')
+    if (destination === 'balance') {
+      route.destinationCustomerId = order.balanceCustomerId || order.customerId
+      if (!route.destinationCustomerId) fail('该订单没有可退回的客户储值账户', 409)
+    }
+    return route
+  }
+  const refundDestination = (order, refund) => refund.destination || (order.paymentMethod === 'balance' ? 'balance' : 'cash')
   function markRefund(state, user, refund, requestId = refund.requestId) {
     const order = find(state, 'orders', refund.orderId)
     if (paidRefunds(state, order.id) + refund.amount > order.receivedAmount)
       fail('退款总额不能超过实收金额', 409)
     refund.status = 'paid'
-    if (order.paymentMethod === 'balance') {
-      const customerId = order.balanceCustomerId || order.customerId
+    if (refundDestination(order, refund) === 'balance') {
+      const customerId = refund.destinationCustomerId || order.balanceCustomerId || order.customerId
       find(state, 'customers', customerId, '原储值付款客户')
       const row = funds.append({
         type: 'customer',
@@ -3076,18 +3123,22 @@ export function createStudioService({
       .filter((c) => c.orderId === order.id)
       .map((c) => c.userId)
     refund.manualRewardReview = rewardUsers.some((uid) => wallet(state, uid).paid > 0)
+    if (refundSummary(state, order).fullRefund)
+      decideOrderReward(state, order, { trigger: 'full-refund', decidedAt: now(), decidedBy: user.id })
     recordCommissionAdjustment(state, order, refund.id, refund.reason)
   }
-  function refundCreate(state, user, body) {
+  function refundCreate(state, user, body, { skipPreconditions = false, deferIdentity = false, requireDestination = false } = {}) {
     if (!can(user, 'finance.refunds')) requirePermission(user, 'orders.edit')
     const order = find(state, 'orders', body.orderId, '订单'),
       platform = find(state, 'platforms', order.platformId)
-    checkOrderPreconditions(order, body, 'refund')
+    if (!skipPreconditions) checkOrderPreconditions(order, body, 'refund')
     const orderBefore = clone(order), beforeBlock = orderLifecycle(state, order).executionBlockedReason?.code
     if (platform.id === 'hall' || platform.name === '游戏大厅') fail('游戏大厅订单不提供退款流程')
     if (!paidOrder(order)) fail('未收款订单不能退款')
     const amount = cents(body.amount, '退款金额', { positive: true }),
       reason = requiredReason(body)
+    const route = requestedRefundRoute(order, body, requireDestination)
+    if (route?.destinationCustomerId) find(state, 'customers', route.destinationCustomerId, '退款客户')
     const reserved = state.refunds
       .filter((r) => r.orderId === order.id && r.status !== 'rejected')
       .reduce((sum, r) => sum + r.amount, 0)
@@ -3100,18 +3151,22 @@ export function createStudioService({
       status: 'pending',
       requestedBy: user.id,
       createdAt: now(),
+      ...(route || {}),
       ...(body.requestId ? { requestId: body.requestId } : {})
     }
     state.refunds.push(refund)
-    if (can(user, 'finance.refunds')) markRefund(state, user, refund)
+    if (can(user, 'finance.refunds') && (!route || route.destination === 'balance' || body.actualRefundConfirmed === true))
+      markRefund(state, user, refund)
     if (refundSummary(state, order).fullRefund) {
       order.refundExecutionClosedAt ||= now()
       obsoleteReturns(order, user.id)
       delete order.capacityExemption
     }
-    if (order.status === 'pending' && beforeBlock !== orderLifecycle(state, order).executionBlockedReason?.code) order.dispatchRound++
-    advanceOrderIdentity(order, orderBefore, 'refund')
-    audit(state, user, '退款更新订单执行资格', 'order', order.id, orderBefore, order)
+    if (!deferIdentity) {
+      if (order.status === 'pending' && beforeBlock !== orderLifecycle(state, order).executionBlockedReason?.code) order.dispatchRound++
+      advanceOrderIdentity(order, orderBefore, 'refund')
+      audit(state, user, '退款更新订单执行资格', 'order', order.id, orderBefore, order)
+    }
     audit(
       state,
       user,
@@ -3130,6 +3185,9 @@ export function createStudioService({
     const order = find(state, 'orders', refund.orderId, '退款订单')
     const orderBefore = clone(order), beforeBlock = orderLifecycle(state, order).executionBlockedReason?.code
     if (body.action !== 'resolve') checkOrderPreconditions(order, body, 'refund')
+    for (const [key, frozen] of Object.entries({ destination: refundDestination(order, refund), channel: refund.channel, channelNote: refund.channelNote, destinationCustomerId: refund.destinationCustomerId }))
+      if (Object.hasOwn(body, key) && body[key] !== frozen)
+        conflict('REFUND_ROUTE_FROZEN', '退款去向及渠道已绑定申请，不能在审批时更改')
     if (body.action === 'resolve') {
       if (refund.status !== 'paid' || !refund.manualRewardReview || refund.manualResolution)
         fail('没有待处理的已提现退款差额', 409)
@@ -3143,7 +3201,11 @@ export function createStudioService({
         })
     } else {
       if (refund.status !== 'pending') fail('退款已处理，不能重复审核', 409)
-      if (body.action === 'approve') markRefund(state, user, refund, body.requestId)
+      if (body.action === 'approve') {
+        if (refund.destination === 'cash' && body.actualRefundConfirmed !== true)
+          conflict('ACTUAL_REFUND_CONFIRMATION_REQUIRED', '请先完成线下退款并明确确认，再登记已退款')
+        markRefund(state, user, refund, body.requestId)
+      }
       else if (body.action === 'reject') {
         refund.reason += `；驳回：${requiredReason(body)}`
         refund.status = 'rejected'
@@ -3186,6 +3248,7 @@ export function createStudioService({
     for (const row of rows) {
       const lifecycle = orderLifecycle(state, row, context)
       counts[lifecycle.displayStatus]++
+      if (row.status === 'canceled' && lifecycle.displayStatus !== 'canceled') counts.canceled++
       if (row.problem?.status === 'open') counts.problem++
       if (lifecycle.displayStatus === 'pending' && row.dispatchState === 'unassigned') counts.unassigned++
       if (!lifecycle.executionBlockedReason && (row.returnRequests || []).some((r) => r.status === 'pending')) counts['return-pending']++
@@ -3276,12 +3339,16 @@ export function createStudioService({
         const direction = sortOrder === 'asc' ? 1 : -1
         return (value(a).localeCompare(value(b)) || a.id.localeCompare(b.id)) * direction
       })
-    const counts = orderCounts(state, rows)
-    const filtered = rows.filter(
+    const dailyRows = rows.filter(order => order.status !== 'canceled')
+    const counts = orderCounts(state, dailyRows)
+    if (user.role !== 'player') counts.canceled = rows.filter(order => order.status === 'canceled').length
+    const selection = input.status === 'canceled' && user.role !== 'player' ? rows : dailyRows
+    const filtered = selection.filter(
       (row) =>
         !input.status ||
         input.status === 'all' ||
-        (input.status === 'unassigned'
+        (input.status === 'canceled' && user.role !== 'player' ? row.status === 'canceled'
+          : input.status === 'unassigned'
            ? orderLifecycle(state, row, context.lifecycle).displayStatus === 'pending' && row.dispatchState === 'unassigned'
           : input.status === 'return-pending'
             ? !orderLifecycle(state, row, context.lifecycle).executionBlockedReason && row.returnRequests?.some((r) => r.status === 'pending')
@@ -3362,11 +3429,14 @@ export function createStudioService({
     const order = path.match(/^\/orders\/([^/]+)\/action$/)
     if (order) {
       const target = find(state, 'orders', order[1])
-      if (
-        body.action === 'correct-status' &&
-        !['finance', 'manager', 'owner', 'super_admin'].includes(user.role)
-      )
+      if (body.action === 'correct-status' && !['finance', 'manager', 'owner', 'super_admin'].includes(user.role))
         fail('仅财务、店长、老板或超级管理员可以更正订单状态', 403)
+      if (['cancel', 'cancel-refund'].includes(body.action) || (body.action === 'correct-status' && body.status === 'canceled')) {
+        requirePermission(user, 'orders.edit')
+        if (target.status === 'completed' || target.completedAt || target.canceledFrom === 'completed')
+          requirePermission(user, 'finance.review')
+        return
+      }
       return requirePermission(
         user,
         ['review-pass', 'review-return', 'adjust', 'cancel-settle'].includes(body.action) ||
@@ -3707,7 +3777,7 @@ export function createStudioService({
             )
               fail('仅财务、店长、老板或超级管理员可以更正订单状态', 403)
             if (
-              body.action === 'cancel' &&
+              ['cancel', 'cancel-refund'].includes(body.action) &&
               (target.status === 'completed' || target.canceledFrom === 'completed')
             )
               requirePermission(user, 'finance.review')
@@ -3725,7 +3795,8 @@ export function createStudioService({
                 path,
                 body,
                 () => orderAction(state, user, orderMatch[1], body),
-                body.action === 'confirm-payment' && body.paymentMethod === 'balance'
+                (body.action === 'confirm-payment' && body.paymentMethod === 'balance') ||
+                (body.action === 'cancel-refund' && body.refundAmount > 0 && body.refundDestination === 'balance')
               )
             )
           }
@@ -3737,7 +3808,7 @@ export function createStudioService({
               path,
               body,
               () => refundCreate(state, user, body),
-              order.paymentMethod === 'balance'
+              body.destination === 'balance' || (!Object.hasOwn(body, 'destination') && order.paymentMethod === 'balance')
             )
           }
           const refundMatch = path.match(/^\/refunds\/([^/]+)\/action$/)
@@ -3750,7 +3821,7 @@ export function createStudioService({
               path,
               body,
               () => refundAction(state, user, refundMatch[1], body),
-              order.paymentMethod === 'balance' && body.action === 'approve'
+              refundDestination(order, refund) === 'balance' && body.action === 'approve'
             )
           }
           const withdrawalMatch = path.match(/^\/withdrawals\/([^/]+)\/action$/)
@@ -5235,7 +5306,7 @@ export function createStudioService({
             const amounts = orderCommissions(state, order)
             orderFacts.set(order.id, {
               net: netOrder(state, order),
-              estimatedReward: order.status !== 'completed' && !order.compensationSettled ? order.reward : 0,
+              estimatedReward: order.status !== 'completed' && !order.compensationSettled ? effectiveOrderReward(order) : 0,
               supportCommission: amounts.support, operationsCommission: amounts.operations,
               incomplete: amounts.incomplete || Boolean(order.compensationPending)
             })

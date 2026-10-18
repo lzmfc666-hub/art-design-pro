@@ -1,4 +1,5 @@
 import { testMutate } from './helpers/current-intent.mjs'
+import { legacyCancellationFixture } from './helpers/legacy-cancellation.mjs'
 import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -81,14 +82,15 @@ test('财务五种状态的20种不同状态转换均免截图，奖励和数据
   for (const from of statuses) {
     for (const to of statuses.filter((value) => value !== from)) {
       let record = f.order()
-      if (from !== 'pending') record = f.correct(record, from)
+      if (from === 'canceled') record = legacyCancellationFixture(f.service, record)
+      else if (from !== 'pending') record = f.correct(record, from)
       const before = f.service.playerWallet(f.users.player.id).earned
       const after = f.correct(record, to)
       assert.equal(after.status, to, `${from} -> ${to}`)
       assert.ok(after.submissions.every((submission) => submission.screenshots.length === 0))
       assert.equal(
         f.service.playerWallet(f.users.player.id).earned,
-        before + (to === 'completed' ? 7000 : 0) - (from === 'completed' ? 7000 : 0),
+        before + (to === 'completed' ? 7000 : 0) - (from === 'completed' && to !== 'canceled' ? 7000 : 0),
         `${from} -> ${to} reward`
       )
       if (to !== 'canceled') {
@@ -186,7 +188,7 @@ test('状态更正免图不放开打手端提交要求，也不伪造未收款�
   assert.equal(stored.receivedAmount, 0)
 })
 
-test('后台更正可以记录超接单上限和已停用历史打手，取消重开恢复取消前报酬', (t) => {
+test('后台更正可以记录超接单上限和已停用历史打手，升级前取消重开恢复取消前报酬', (t) => {
   const f = fixture(t)
   const first = f.order()
   f.mutate(`/player/orders/${first.id}/claim`, {}, f.users.player.id)
@@ -196,7 +198,7 @@ test('后台更正可以记录超接单上限和已停用历史打手，取消�
   f.mutate('/users', { ...f.users.player, status: 'disabled' })
   assert.equal(f.correct(third, 'completed').status, 'completed')
   const canceled = f.order({ reward: 4567 })
-  f.mutate(`/orders/${canceled.id}/action`, { action: 'cancel', reason: '尚未开工' })
+  legacyCancellationFixture(f.service, canceled, '尚未开工')
   const reopened = f.correct(canceled, 'pending')
   assert.equal(reopened.reward, 4567)
   assert.equal(reopened.compensationPending, false)
@@ -237,10 +239,10 @@ test('已提现订单免图重新验收抵销待追回，重复请求不再次�
   assert.equal(f.service.diagnostics('admin').summary.errorCount, 0)
 })
 
-test('取消后明确更正的报酬不被原报价覆盖；已完成后普通取消再重开也会冲正奖励', (t) => {
+test('升级前取消后明确更正的报酬不被原报价覆盖，旧已结取消重开仍按原冲正处理', (t) => {
   const f = fixture(t)
   const canceled = f.order({ reward: 4567 })
-  f.mutate(`/orders/${canceled.id}/action`, { action: 'cancel', reason: '原任务取消' })
+  legacyCancellationFixture(f.service, canceled, '原任务取消')
   f.mutate(`/orders/${canceled.id}/action`, {
     action: 'adjust',
     amount: 8800,
@@ -250,7 +252,7 @@ test('取消后明确更正的报酬不被原报价覆盖；已完成后普通�
   const changed = f.correct(canceled, 'completed')
   assert.equal(changed.reward, 6000)
   assert.equal(f.service.playerWallet(f.users.player.id).earned, 6000)
-  f.mutate(`/orders/${changed.id}/action`, { action: 'cancel', reason: '完成后重新核对' })
+  legacyCancellationFixture(f.service, changed, '完成后重新核对')
   f.correct(changed, 'active')
   assert.equal(f.service.playerWallet(f.users.player.id).earned, 0)
   f.correct(changed, 'review')
@@ -260,12 +262,12 @@ test('取消后明确更正的报酬不被原报价覆盖；已完成后普通�
   assert.equal(f.service.diagnostics('admin').summary.errorCount, 0)
 })
 
-test('取消后财务明确将报酬或最终取消补偿确认成0，重开和完成仍为0', (t) => {
+test('升级前取消待办财务明确最终报酬0，旧记录重开和完成仍为0', (t) => {
   const f = fixture(t)
   for (const action of ['adjust', 'cancel-settle']) {
     const record = f.order()
     if (action === 'cancel-settle') f.correct(record, 'active')
-    f.mutate(`/orders/${record.id}/action`, { action: 'cancel', reason: '确认无补偿取消' })
+    legacyCancellationFixture(f.service, record, '确认无补偿取消')
     const settled = f.mutate(`/orders/${record.id}/action`, {
       action,
       amount: 8800,

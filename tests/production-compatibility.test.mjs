@@ -102,6 +102,28 @@ test('空旧业务库允许旧版本；全退、待全退、存单历史、免�
   }
 })
 
+test('取消终止、持久零报酬和显式退款路线使旧RC3清单拒绝承接新数据', t => {
+  const f = fixture(t)
+  const newCapabilities = ['cancel-refund-v1', 'reward-disposition-v1', 'refund-destination-v1']
+  const rc3 = manifest(f.root, LIFECYCLE_CAPABILITIES.filter(value => !newCapabilities.includes(value)), 'rc3.json')
+  const policy = { mode: 'zero-unsettled', trigger: 'cancel', policyVersion: 1, decidedAt: '2026-10-18T04:00:00Z', decidedBy: 'PRIVATE-ACTOR' }
+  const examples = [
+    { orders: [oldOrder('PRIVATE-CANCELED', 'canceled', { cancellationPolicyVersion: 1 })], refunds: [], capability: 'cancel-refund-v1' },
+    { orders: [oldOrder('PRIVATE-ZERO', 'active', { rewardDisposition: policy })], refunds: [], capability: 'reward-disposition-v1' },
+    { orders: [oldOrder('PRIVATE-DESTINATION')], refunds: [{ orderId: 'PRIVATE-DESTINATION', amount: 100, status: 'pending', destination: 'cash', channel: 'bank' }], capability: 'refund-destination-v1' }
+  ]
+  for (const example of examples) {
+    const db = new DatabaseSync(f.databasePath)
+    db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify({ schemaVersion: 2, orders: example.orders, refunds: example.refunds })); db.close()
+    const before = hash(readFileSync(f.databasePath))
+    const rejected = inspectStudioLifecycleCompatibility({ ...f, manifestPath: rc3 })
+    assert.equal(rejected.compatible, false); assert.deepEqual(rejected.missingCapabilities, [example.capability])
+    assert.equal(inspectStudioLifecycleCompatibility(f).compatible, true)
+    assert.equal(hash(readFileSync(f.databasePath)), before)
+    assert.doesNotMatch(JSON.stringify(rejected), /PRIVATE-/)
+  }
+})
+
 test('私人复核清单仅明确指定时独占生成，默认报告不含订单编号，公开或源码位置拒绝', t => {
   const f = fixture(t, { schemaVersion: 2, orders: [oldOrder('PRIVATE-ANOMALY')], refunds: [{ orderId: 'PRIVATE-ANOMALY', status: 'paid', amount: 1000 }] })
   const output = join(f.privateDirectory, 'anomalies.private.json')
@@ -224,7 +246,8 @@ test('隔离真实业务备份恢复保留存单/问题/退款身份和原图，
   assert.ok(snapshotState().orders.some(row => row.id === later.id))
   assert.equal(stateOf(restored).orders.some(row => row.id === later.id), false)
   const recoveryReport = inspectStudioLifecycleCompatibility({ databasePath: restored, manifestPath })
-  assert.equal(recoveryReport.compatible, true); assert.deepEqual(recoveryReport.requiredCapabilities, LIFECYCLE_CAPABILITIES)
+  assert.equal(recoveryReport.compatible, true); assert.deepEqual(recoveryReport.requiredCapabilities,
+    ['refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1', 'problem-staff-only-v1', 'reward-disposition-v1'])
   assert.equal(recoveryReport.counts.activeStoredOrders, 1); assert.equal(recoveryReport.counts.resumedCapacityExemptOrders, 1)
   assert.equal(recoveryReport.counts.openProblemOrders, 1); assert.equal(recoveryReport.counts.fullRefundedOrders, 1)
   assert.equal(recoveryReport.counts.anomalyOrders, 0, 'a current successful full refund carries its execution closure')

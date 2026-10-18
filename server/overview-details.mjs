@@ -148,7 +148,7 @@ export function buildOverviewDetails(snapshots, overview, query, facts = {}) {
     shopName: shops.get(order.shopId) || (order.shopId ? '店铺待确认' : '无店铺'),
     status: orderLifecycle(snapshot, order).displayStatus, eventAt: eventAt || null,
     ...financial(order),
-    reward: order.reward
+    reward: orderLifecycle(snapshot, order).effectiveReward
   })
   const paid = orders.filter((row) => row.receivedAmount > 0 && within(dayOf(row.paidAt), range))
   const matches = (row, keys) => !keyword || keys.some((key) =>

@@ -586,7 +586,7 @@ function modulesFor(snapshot) {
       mapRows(snapshot.orders, (row) => ({
         ...row,
         amount: yuan(row.amount),
-        reward: yuan(row.reward),
+        reward: yuan(orderLifecycle(snapshot, row).effectiveReward),
         receivedAmount: yuan(row.receivedAmount),
         customerName: customer(row.customerId),
         platformName: platform(row.platformId),

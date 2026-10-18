@@ -4,7 +4,7 @@ import { dirname, relative, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readReleaseManifest } from './studio-release.mjs'
 
-export const LIFECYCLE_CAPABILITIES = Object.freeze(['refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1', 'problem-staff-only-v1'])
+export const LIFECYCLE_CAPABILITIES = Object.freeze(['refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1', 'problem-staff-only-v1', 'cancel-refund-v1', 'reward-disposition-v1', 'refund-destination-v1'])
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const failure = (code, message) => Object.assign(new Error(message), { code })
 const publicError = {
@@ -30,6 +30,13 @@ function analyze(state, capabilities) {
   const supported = new Set(capabilities), required = new Set(), anomalies = [], financialReviews = [], refunded = new Map()
   for (const row of state.refunds) {
     if (!row || typeof row.orderId !== 'string' || !integer(row.amount)) throw failure('DATABASE_INVALID', publicError.DATABASE_INVALID)
+    if (Object.hasOwn(row, 'destination')) {
+      if (!['cash', 'balance'].includes(row.destination) ||
+          (row.destination === 'cash' && !['wechat', 'alipay', 'platform', 'bank', 'other'].includes(row.channel)) ||
+          (row.destination === 'balance' && (typeof row.destinationCustomerId !== 'string' || !row.destinationCustomerId)))
+        throw failure('DATABASE_INVALID', publicError.DATABASE_INVALID)
+      required.add('refund-destination-v1')
+    }
     if (!['paid', 'pending'].includes(row.status)) continue
     const sum = refunded.get(row.orderId) || { paid: 0, pending: 0 }
     sum[row.status] += row.amount
@@ -40,12 +47,24 @@ function analyze(state, capabilities) {
     fullRefundOpenFulfillment: 0, fullRefundAfterAssignment: 0, fullRefundCompletedOrders: 0,
     durablyClosedFullRefundOrders: 0, legacyFullRefundOpenFulfillment: 0, financialReviewOrders: 0,
     fullRefundPendingOrders: 0, activeStoredOrders: 0, storageHistoryOrders: 0,
-    resumedCapacityExemptOrders: 0, openProblemOrders: 0, problemHistoryOrders: 0, anomalyOrders: 0 }
+    resumedCapacityExemptOrders: 0, openProblemOrders: 0, problemHistoryOrders: 0, anomalyOrders: 0,
+    terminalCanceledOrders: 0, rewardDispositionOrders: 0 }
   const ids = new Set()
   for (const order of state.orders) {
     if (!order || typeof order.id !== 'string' || !order.id || ids.has(order.id) || !integer(order.receivedAmount ?? 0))
       throw failure('DATABASE_INVALID', publicError.DATABASE_INVALID)
     ids.add(order.id)
+    if (Object.hasOwn(order, 'cancellationPolicyVersion')) {
+      if (order.cancellationPolicyVersion !== 1 || order.status !== 'canceled') throw failure('DATABASE_INVALID', publicError.DATABASE_INVALID)
+      required.add('cancel-refund-v1'); counts.terminalCanceledOrders++
+    }
+    if (order.rewardDisposition) {
+      const value = order.rewardDisposition
+      if (value.policyVersion !== 1 || !['zero-unsettled', 'preserve-settled'].includes(value.mode) ||
+          !['cancel', 'full-refund'].includes(value.trigger) || typeof value.decidedAt !== 'string' || typeof value.decidedBy !== 'string')
+        throw failure('DATABASE_INVALID', publicError.DATABASE_INVALID)
+      required.add('reward-disposition-v1'); counts.rewardDispositionOrders++
+    }
     const sums = refunded.get(order.id) || { paid: 0, pending: 0 }, received = order.receivedAmount || 0
     const full = Boolean(order.refundExecutionClosedAt) || (received > 0 && sums.paid >= received)
     const pending = !full && received > 0 && sums.pending > 0 && sums.paid + sums.pending >= received

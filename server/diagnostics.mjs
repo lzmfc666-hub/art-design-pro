@@ -1,3 +1,5 @@
+import { effectiveOrderReward } from './order-reward-policy.mjs'
+
 const MAX_ISSUES = 100
 const ORDER_STATUSES = new Set(['pending', 'active', 'review', 'completed', 'canceled'])
 const money = (value, { signed = false } = {}) =>
@@ -394,14 +396,15 @@ export function buildDiagnosticsReport({
     const reversal = state.statusCorrectionReversals?.[order.id]
     if (settled && reversal?.active)
       issue('rewards', 'error', 'order', order.id, '订单已结算但仍有生效中的状态冲正记录。')
-    if (settled && money(order.reward)) {
+    const effectiveReward = effectiveOrderReward(order)
+    if (settled && money(effectiveReward)) {
       const allocations = new Map()
-      if (order.reward > 0 && order.leaderId) {
+      if (effectiveReward > 0 && order.leaderId) {
         allocations.set(
           order.leaderId,
-          order.teammateId ? Math.ceil(order.reward / 2) : order.reward
+          order.teammateId ? Math.ceil(effectiveReward / 2) : effectiveReward
         )
-        if (order.teammateId) allocations.set(order.teammateId, Math.floor(order.reward / 2))
+        if (order.teammateId) allocations.set(order.teammateId, Math.floor(effectiveReward / 2))
       }
       const recipients = new Set([...allocations.keys(), ...positive.map((row) => row.userId)])
       const mismatch = [...recipients].some(

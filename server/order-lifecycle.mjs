@@ -1,3 +1,5 @@
+import { effectiveOrderReward } from './order-reward-policy.mjs'
+
 /** One authoritative execution view; financial and fulfillment history stay intact. */
 export function createLifecycleContext(state) {
   const refunds = new Map()
@@ -50,16 +52,20 @@ export function orderLifecycle(state, order, context) {
     ? { code: 'ORDER_REFUNDED', message: '订单已全额退款，不能继续执行' }
     : refunds.refundPending
       ? { code: 'REFUND_PENDING', message: '全额退款审批中，订单暂时停止执行' }
-      : stored ? { code: 'ORDER_STORED', message: '订单已存单，请由后台恢复后继续' } : null
+       : stored ? { code: 'ORDER_STORED', message: '订单已存单，请由后台恢复后继续' }
+         : order.status === 'canceled' && order.cancellationPolicyVersion === 1
+           ? { code: 'ORDER_CANCELED', message: '订单已取消，不能恢复履约' } : null
   return {
     displayStatus: fullRefund ? 'refunded' : refunds.refundPending ? 'refund-pending' : stored ? 'stored' : order.status,
     fullRefund,
     refundPending: !fullRefund && refunds.refundPending,
     stored,
     capacityExempt,
+    effectiveReward: effectiveOrderReward(order),
     countsTowardsCapacity: Boolean(order.status === 'active' && order.leaderId && activeAssignment && !stored && !fullRefund && !capacityExempt),
     executionBlockedReason: blocked,
-    playerOperationBlockedReason: blocked || (order.problem?.status === 'open'
+    playerOperationBlockedReason: blocked || (order.status === 'canceled'
+      ? { code: 'ORDER_CANCELED', message: '订单已取消，不能继续操作' } : null) || (order.problem?.status === 'open'
       ? { code: 'ORDER_PROBLEM', message: '问题单由后台客服处理，打手暂不可操作' } : null),
     refundSummary: refunds
   }

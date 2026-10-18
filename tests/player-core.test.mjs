@@ -1,4 +1,5 @@
 import { testMutate } from './helpers/current-intent.mjs'
+import { legacyCancellationFixture } from './helpers/legacy-cancellation.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -236,7 +237,7 @@ test('退单申请保留负责人和名额，处理终态防重复，提交或�
   assert.equal(f.service.playerOrderDetail(leader.id, next.id).status, 'review')
 })
 
-test('奇数分双人报酬负责人多一分，调整、冲正恢复与取消补偿总額守恒', (t) => {
+test('奇数分双人报酬负责人多一分，调整、冲正恢复与旧取消补偿总額守恒', (t) => {
   const f = fixture(t),
     [leader, teammate] = f.players
   const order = f.order()
@@ -256,7 +257,7 @@ test('奇数分双人报酬负责人多一分，调整、冲正恢复与取消�
   fails(() => f.action(order, 'review-pass'))
   const canceled = f.order()
   f.claim(canceled)
-  f.action(canceled, 'cancel', { reason: '客户终止' })
+  legacyCancellationFixture(f.service, canceled, '客户终止')
   f.action(canceled, 'cancel-settle', {
     reward: 1001,
     teammateId: teammate.id,

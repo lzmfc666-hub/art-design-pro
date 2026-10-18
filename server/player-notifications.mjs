@@ -504,6 +504,12 @@ export function createPlayerNotifications(
       const related = [...new Set([order.leaderId, order.teammateId].filter(Boolean))]
       const lifecycle = orderLifecycle(after, order)
       const oldLifecycle = old ? orderLifecycle(before, old) : null
+      if (old && old.status !== 'canceled' && order.status === 'canceled') {
+        for (const userId of new Set([...related, old.leaderId, old.teammateId].filter(Boolean)))
+          insert({ userId, key: `canceled:${order.id}:${order.revision}`, type: 'order-canceled', title: '订单已取消',
+            body: '本单已停止履约并释放接单名额，特殊报酬由后台另行登记。', orderId: order.id, href: playerTarget(order.id), timestamp, index,
+            target: { dispatchRound: order.dispatchRound, assignmentId: old.assignmentId, submissionId: null } })
+      }
       if (old && oldLifecycle.displayStatus !== lifecycle.displayStatus &&
           (['stored', 'refunded', 'refund-pending'].includes(lifecycle.displayStatus) || oldLifecycle.stored || oldLifecycle.refundPending)) {
         const type = lifecycle.stored && !lifecycle.fullRefund && !lifecycle.refundPending ? 'order-stored' : oldLifecycle.stored && !lifecycle.stored && !lifecycle.executionBlockedReason ? 'order-resumed' : 'refund-result'

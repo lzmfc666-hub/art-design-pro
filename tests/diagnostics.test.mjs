@@ -1,4 +1,5 @@
 import { testMutate, installTestClientFetch } from './helpers/current-intent.mjs'
+import { legacyCancellationFixture } from './helpers/legacy-cancellation.mjs'
 import { withdrawalBody } from './player-test-helpers.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -146,7 +147,7 @@ test('真实有效待办、指定待接单、冲正和恢复不误报，缺配�
   })
   const canceled = f.order()
   f.mutate(`/player/orders/${canceled.id}/claim`, {}, f.users.player.id)
-  f.mutate(`/orders/${canceled.id}/action`, { action: 'cancel', reason: '等待补偿核对' })
+  legacyCancellationFixture(f.service, canceled, '等待补偿核对')
   const report = f.service.diagnostics('admin')
   assert.equal(report.summary.errorCount, 0)
   assert.equal(report.status, 'warning')
@@ -184,11 +185,11 @@ test('真实有效待办、指定待接单、冲正和恢复不误报，缺配�
   )
 })
 
-test('取消补偿结算后合法恢复执行保留历史标记，检查不将其误认为仍处结算终态', (t) => {
+test('升级前取消补偿结算后合法恢复执行保留历史标记，检查不误认为仍处结算终态', (t) => {
   const f = fixture(t)
   const order = f.order()
   f.mutate(`/player/orders/${order.id}/claim`, {}, f.users.player.id)
-  f.mutate(`/orders/${order.id}/action`, { action: 'cancel', reason: '实际任务取消' })
+  legacyCancellationFixture(f.service, order, '实际任务取消')
   const settled = f.mutate(`/orders/${order.id}/action`, {
     action: 'cancel-settle',
     reward: 5000,
