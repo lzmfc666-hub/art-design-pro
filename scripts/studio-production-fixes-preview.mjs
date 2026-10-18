@@ -52,7 +52,7 @@ function checkedBuildDirectory(directory, expected, privateDirectory) {
   visit(target)
   return target
 }
-function adminProxy(apiBase, instanceId) {
+export function adminProxy(apiBase, instanceId) {
   const target = new URL(apiBase)
   return createServer((req, res) => {
     if (req.url === '/__preview/status' && req.method === 'GET') {
@@ -60,7 +60,7 @@ function adminProxy(apiBase, instanceId) {
       return res.end(JSON.stringify({ format: 'studio-isolated-preview-v1', instanceId, production: false }))
     }
     const headers = { host: target.host, 'x-forwarded-for': req.socket.remoteAddress || '127.0.0.1' }
-    for (const name of ['accept', 'accept-encoding', 'content-type', 'content-length', 'origin', 'referer', 'if-none-match', 'x-studio-actor'])
+    for (const name of ['accept', 'accept-encoding', 'content-type', 'content-length', 'origin', 'referer', 'if-none-match', 'x-studio-actor', 'x-upload-name'])
       if (req.headers[name]) headers[name] = req.headers[name]
     const cookies = String(req.headers.cookie || '').split(';').map(value => value.trim()).filter(value => value.startsWith('studio_session='))
     if (cookies.length) headers.cookie = cookies.join('; ')
@@ -126,8 +126,8 @@ async function seedPreview(service, credentials) {
   const pendingRefund = newOrder('pendingRefund', '全额退款审批中 · 暂停履约', '审批期间停止上报和验收，批准前原名额保留。')
   claim(pendingRefund)
   mutate('/refunds', { orderId: pendingRefund.id, ...target(pendingRefund), amount: 10000, reason: '演示客服申请全额退款，等待财务审批' }, people.staff.id)
-  const problem = newOrder('problem', '问题单 · 等待打手反馈', '请在问题记录中提交处理反馈，后台核实后关闭。')
-  claim(problem); action(problem, 'problem-open', { reason: '客户反馈进度不清楚，请补充说明并与后台核对' })
+  const problem = newOrder('problem', '问题单 · 由后台客服处理', '问题未关闭时打手仅查看，后台客服处理并记录结果后关闭。')
+  claim(problem); action(problem, 'problem-open', { reason: '客户反馈进度不清楚，由后台客服核对处理，打手暂停操作' })
   const review = newOrder('review', '待验收 · 认证缩略图与原图对比', '完成材料保留原始图片，列表先加载认证缩略图。')
   claim(review); mutate(`/player/orders/${review.id}/submit`, { ...target(review), screenshots: [material], teammateId: null }, people.player.id)
   return { orders: purpose, people: Object.fromEntries(Object.entries(people).map(([key, value]) => [key, value.id])) }
