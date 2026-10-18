@@ -89,7 +89,9 @@ async function seedPreview(service, credentials) {
   const people = {}
   for (const [key, role, name] of [['player', 'player', '演示打手'], ['staff', 'support', '内部客服员工'], ['hr', 'hr', '内部人事员工']]) {
     const account = credentials.accounts[key]
-    people[key] = mutate('/users', { username: account.username, name, role, status: 'active', maxActiveOrders: 3,
+    // The player temporarily needs room to prepare the independent demo cases.
+    // Restore the normal limit before opening any preview listeners below.
+    people[key] = mutate('/users', { username: account.username, name, role, status: 'active', maxActiveOrders: role === 'player' ? 3 : 1,
       levelId: level.id, permissionOverrides: {}, password: account.password })
   }
   for (const key of ['staff', 'hr']) mutate('/work-schedules', { userId: people[key].id,
@@ -130,6 +132,7 @@ async function seedPreview(service, credentials) {
   claim(problem); action(problem, 'problem-open', { reason: '客户反馈进度不清楚，由后台客服核对处理，打手暂停操作' })
   const review = newOrder('review', '待验收 · 认证缩略图与原图对比', '完成材料保留原始图片，列表先加载认证缩略图。')
   claim(review); mutate(`/player/orders/${review.id}/submit`, { ...target(review), screenshots: [material], teammateId: null }, people.player.id)
+  mutate('/users', { ...people.player, maxActiveOrders: 1 })
   return { orders: purpose, people: Object.fromEntries(Object.entries(people).map(([key, value]) => [key, value.id])) }
 }
 
