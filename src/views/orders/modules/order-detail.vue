@@ -378,11 +378,14 @@
       'correct-status': '登记真实状态及实际履约人员，并核对对应资金影响。',
       'return-approve': '核对申请人和退单原因，批准后进入重新分配流程。',
       'return-reject': '保留原负责人继续执行，并明确说明驳回依据。',
-      store: '暂停履约并释放名额，保留负责人、进度备注与原始材料，暂不结算报酬。',
-      resume: '恢复无人接单订单进入大厅；原负责人续做不占接单名额，重新分配按普通订单计算。',
+      store:
+        '由后台客服暂停履约并释放名额，存单期间打手仅可查看；保留负责人、进度备注与原始材料，暂不结算报酬。',
+      resume:
+        '恢复无人接单订单进入大厅；原负责人续做不占接单名额。恢复后仍须满足退款、未关闭问题及当前身份等资格，重新分配按普通订单计算。',
       'problem-open':
-        '填写具体问题，相关负责人和队友会收到问题单提醒。问题标记不改变履约状态及名额。',
-      'problem-close': '核对打手反馈并填写处理结果，确认后关闭本次问题，历史记录继续保留。'
+        '填写具体问题并交后台客服处理。相关打手会收到提醒，问题关闭前只能查看订单；原履约状态及名额规则不变。',
+      'problem-close':
+        '由后台客服核对并直接填写处理结果，无须等待打手反馈。关闭后仍按退款、存单和当前身份等资格决定可用操作。'
     }
     return descriptions[dialog.value || ''] || '核对当前订单后操作。'
   })
@@ -919,8 +922,11 @@
       />
       <ElAlert
         v-if="order.problem?.status === 'open'"
-        title="问题单待处理"
-        :description="order.problem.reason"
+        title="问题单待客服处理 · 打手仅可查看"
+        :description="
+          order.problem.reason +
+          '；由后台客服处理并确认关闭，打手暂时不能操作此订单，名额仍按原规则计算。'
+        "
         type="error"
         :closable="false"
         show-icon
@@ -1486,12 +1492,15 @@
           <BusinessDetailSection
             v-for="problem in problems"
             :key="problem.id"
-            :title="problem.status === 'open' ? '问题单待处理' : '问题单已关闭'"
+            :title="problem.status === 'open' ? '问题单待客服处理' : '问题单已由后台关闭'"
           >
             <p class="text-xs text-g-500 mb-3"
               >{{ staffName(problem.openedBy) }} · {{ formatTime(problem.openedAt) }}</p
             >
             <p class="whitespace-pre-wrap break-all mb-4">{{ problem.reason }}</p>
+            <p v-if="problem.feedback.length" class="text-xs text-g-500 mb-3"
+              >历史打手反馈（只读保留）</p
+            >
             <ElTimeline v-if="problem.feedback.length"
               ><ElTimelineItem
                 v-for="feedback in problem.feedback"
@@ -1501,7 +1510,7 @@
                 ><p class="whitespace-pre-wrap break-all">{{ feedback.message }}</p></ElTimelineItem
               ></ElTimeline
             >
-            <p v-else class="text-g-500">尚无打手反馈</p>
+            <p v-else class="text-g-500">暂无历史打手反馈；本问题由后台客服直接处理。</p>
             <ElAlert
               v-if="problem.status === 'closed'"
               :title="'关闭说明：' + (problem.resolution || '—')"
@@ -1682,7 +1691,7 @@
             <ElAlert
               v-if="dialog === 'problem-close'"
               :title="order.problem?.reason || '核对本次问题'"
-              :description="`已收到 ${order.problem?.feedback.length || 0} 条打手反馈；请填写核对后的处理结果。`"
+              :description="`保留 ${order.problem?.feedback.length || 0} 条历史打手反馈；请由后台客服直接填写核对后的处理结果，无须等待打手操作。`"
               type="info"
               :closable="false"
               class="mb-4"

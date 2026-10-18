@@ -67,12 +67,11 @@
       (target.problemId != null && target.problemId !== order.problem?.id)))
       return `${item.invalidatedAt ? '这条提醒已失效，请重新确认当前订单。' : ''}这条提醒对应的旧派单、接单或材料目标已变化。当前状态：${statusLabel}。请重新确认当前订单，旧提醒不能用于提交操作。`
     if (item.invalidatedAt) return `这条提醒已失效，请重新确认当前订单。当前状态：${statusLabel}。历史提醒不代表本轮仍待你接受；请进入当前订单重新查看。`
-    if (order.fullRefund || order.displayStatus === 'refunded') return '订单已全额退款，不能继续接单、上报或验收。问题反馈与历史处理记录请在当前订单查看。'
+    if (order.fullRefund || order.displayStatus === 'refunded') return '订单已全额退款，不能继续接单、上报或验收。问题与历史处理记录请在当前订单查看。'
     if (order.refundPending || order.displayStatus === 'refund-pending') return '订单正在退款审批中，暂停接单、上报及验收。请查看当前订单，等待后台处理。'
     if (order.stored || order.displayStatus === 'stored') return '订单已存单，暂时停止履约且不占接单名额。请查看存单原因，等待后台恢复安排。'
-    if (kind === 'problem-open' || kind === 'problem-closed') return order.problem?.status === 'open'
-      ? `本单有待处理问题。当前状态：${statusLabel}。请进入订单查看原因并提交处理反馈，由后台确认关闭。`
-      : `请查看当前问题处理记录。当前状态：${statusLabel}。历史提醒不会重新打开已经关闭的问题。`
+    if (order.problem?.status === 'open') return `本单有待处理问题。当前状态：${statusLabel}。当前仅可查看，请联系后台客服处理，打手不能操作订单。`
+    if (kind === 'problem-open' || kind === 'problem-closed') return `请查看当前问题处理记录。当前状态：${statusLabel}。历史提醒不会重新打开已经关闭的问题。`
     if (kind === 'order-resumed' && order.capacityExempt) return '存单已恢复到原负责人任务列表，本轮续做不占接单名额。请进入任务核对当前要求。'
     if (order.status === 'canceled') return '订单已取消，这条提醒不再代表可接单。可以查看当前处理记录。'
     if (order.status === 'completed') return '订单已完成，请查看当前记录；历史提醒不会重新创建任务。'

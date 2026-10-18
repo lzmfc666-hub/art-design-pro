@@ -204,6 +204,7 @@ export interface Order {
   capacityExempt?: boolean
   countsTowardsCapacity?: boolean
   executionBlockedReason?: { code: string; message: string } | null
+  playerOperationBlockedReason?: { code: string; message: string } | null
   refundSummary?: {
     paid: number
     pending: number

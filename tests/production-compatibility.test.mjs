@@ -93,7 +93,9 @@ test('空旧业务库允许旧版本；全退、待全退、存单历史、免�
     db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify({ schemaVersion: 2, orders: [example.order], refunds: example.refunds || [] }))
     db.close()
     const rejected = inspectStudioLifecycleCompatibility({ ...f, manifestPath: oldManifest })
-    assert.equal(rejected.compatible, false); assert.deepEqual(rejected.missingCapabilities, [example.capability])
+    assert.equal(rejected.compatible, false)
+    assert.deepEqual(rejected.missingCapabilities, example.capability === 'problem-orders-v1'
+      ? ['problem-orders-v1', 'problem-staff-only-v1'] : [example.capability])
     assert.equal(rejected.counts[example.count], 1)
     const upgraded = inspectStudioLifecycleCompatibility(f)
     assert.equal(upgraded.compatible, true); assert.deepEqual(upgraded.missingCapabilities, [])
@@ -199,7 +201,13 @@ test('隔离真实业务备份恢复保留存单/问题/退款身份和原图，
   for (const order of [continuing, stored]) mutate(`/player/orders/${order.id}/claim`, target(order), player.id)
   action(continuing, 'store'); action(continuing, 'resume', { mode: 'original' })
   const problem = action(continuing, 'problem-open').problem
-  mutate(`/player/orders/${continuing.id}/problem-feedback`, { ...target(continuing), problemId: problem.id, message: '隔离恢复反馈' }, player.id)
+  // An earlier release allowed feedback. Preserve its historical data without
+  // re-enabling a now-forbidden production operation just to make a fixture.
+  const legacyState = snapshotState(), legacyProblem = legacyState.orders.find(row => row.id === continuing.id).problem
+  legacyProblem.feedback.push({ id: 'legacy-feedback', userId: player.id, userName: player.name,
+    message: '旧版隔离恢复反馈', createdAt: '2026-10-18T04:00:00Z' })
+  assert.equal(legacyProblem.id, problem.id)
+  service.db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(legacyState))
   action(stored, 'store')
   mutate('/refunds', { orderId: refunded.id, ...target(refunded), amount: 2000, reason: '隔离全额退款' })
   const sourceBeforeBackup = snapshot(databasePath), backup = join(f.root, 'backup.sqlite'), restored = join(f.root, 'restored.sqlite')
@@ -220,6 +228,8 @@ test('隔离真实业务备份恢复保留存单/问题/退款身份和原图，
   assert.equal(recoveryReport.counts.activeStoredOrders, 1); assert.equal(recoveryReport.counts.resumedCapacityExemptOrders, 1)
   assert.equal(recoveryReport.counts.openProblemOrders, 1); assert.equal(recoveryReport.counts.fullRefundedOrders, 1)
   assert.equal(recoveryReport.counts.anomalyOrders, 0, 'a current successful full refund carries its execution closure')
+  const priorCandidate = manifest(f.root, LIFECYCLE_CAPABILITIES.filter(value => value !== 'problem-staff-only-v1'), 'prior-candidate.json')
+  assert.deepEqual(inspectStudioLifecycleCompatibility({ databasePath: restored, manifestPath: priorCandidate }).missingCapabilities, ['problem-staff-only-v1'])
   const oldManifest = manifest(f.root, [], 'old-release.json')
   assert.equal(inspectStudioLifecycleCompatibility({ databasePath: restored, manifestPath: oldManifest }).compatible, false)
   await assert.rejects(() => restoreStudioDatabase(backup, databasePath), /已存在/)

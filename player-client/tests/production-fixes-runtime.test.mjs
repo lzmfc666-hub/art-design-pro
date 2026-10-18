@@ -17,13 +17,15 @@ await build({ stdin: { contents: `
   export * from './src/api/studio'
   export * from './src/api/sessionBoundary'
   export * from './src/api/orderTarget'
+  export * from './src/api/orderAccess'
   export * from './src/api/operations'
+  export { writeOperationGuard } from './src/api/operationGuard'
   export { useSessionStore } from './src/stores/session'
   export { createPinia, setActivePinia } from 'pinia'
 `, resolveDir: clientRoot, sourcefile: 'production-fixes-runtime-entry.ts', loader: 'ts' },
   outfile: resolve(output, 'runtime.mjs'), bundle: true, platform: 'node', format: 'esm', tsconfig: resolve(clientRoot, 'tsconfig.json') })
 const api = await import(pathToFileURL(resolve(output, 'runtime.mjs')).href)
-let responseDelay = 0, requests = [], active = 0, maxActive = 0, actor = 'player-a', failedWrite = false
+let responseDelay = 0, requests = [], active = 0, maxActive = 0, actor = 'player-a'
 const server = createServer(async (request, response) => {
   const chunks = []; for await (const chunk of request) chunks.push(chunk)
   requests.push({ path: request.url, method: request.method, headers: request.headers, body: Buffer.concat(chunks) })
@@ -32,8 +34,7 @@ const server = createServer(async (request, response) => {
   response.setHeader('X-Studio-User', actor)
   if (request.url.includes('/uploads/') || request.url.includes('/content-assets/')) {
     response.setHeader('Content-Type', 'image/webp'); response.end(Buffer.from(`pixels:${actor}:${request.url}`))
-  } else if (request.url.includes('/problem-feedback') && failedWrite) response.destroy()
-  else { response.setHeader('Content-Type', 'application/json'); response.end('{"ok":true}') }
+  } else { response.setHeader('Content-Type', 'application/json'); response.end('{"ok":true}') }
   active--
 })
 await new Promise(done => server.listen(0, '127.0.0.1', done))
@@ -107,29 +108,38 @@ await test('production-fix player runtime boundaries', async suite => {
       await assert.rejects(api.readStudioImage('https://outside.invalid/p.png', new AbortController().signal))
       assert.equal(requests.length, 0)
     })
-    await suite.test('issue target permits current teammate, rejects outsiders, stale assignment and closed issue', () => {
-      const order = { id: 'order-a', revision: 7, assignmentId: 'assignment-a', leaderId: 'leader-a', teammateId: 'mate-a', problem: { id: 'problem-a', status: 'open' } }
-      assert.deepEqual(api.problemFeedbackTarget(order, 'mate-a'), { expectedRevision: 7, assignmentId: 'assignment-a', leaderId: 'leader-a' })
-      assert.throws(() => api.problemFeedbackTarget(order, 'outside'), /问题已变化/)
-      assert.throws(() => api.problemFeedbackTarget({ ...order, assignmentId: null }, 'mate-a'))
-      assert.deepEqual(api.problemFeedbackTarget({ ...order, status: 'completed', assignmentId: null }, 'mate-a'), { expectedRevision: 7, assignmentId: null, leaderId: 'leader-a' })
-      assert.throws(() => api.problemFeedbackTarget({ ...order, problem: { id: 'problem-a', status: 'closed' } }, 'mate-a'))
+    await suite.test('open problems and stored legacy projections are read-only; closing a problem cannot remove another block', () => {
+      const order = { id: 'order-a', status: 'active', revision: 7, dispatchRound: 1, assignmentId: 'assignment-a', leaderId: 'leader-a', teammateId: 'mate-a', problem: { id: 'problem-a', status: 'open' }, canClaim: true, canSubmit: true }
+      assert.equal(api.playerOrderBlockedReason(order).code, 'ORDER_PROBLEM')
+      assert.throws(() => api.dispatchTarget(order), error => error.status === 409 && error.code === 'ORDER_PROBLEM')
+      assert.throws(() => api.assignmentTarget(order, 'leader-a'), error => error.status === 409 && error.code === 'ORDER_PROBLEM')
+      const closed = { ...order, problem: { id: 'problem-a', status: 'closed' } }
+      assert.equal(api.playerOrderBlockedReason(closed), null)
+      assert.deepEqual(api.assignmentTarget(closed, 'leader-a'), { expectedRevision: 7, assignmentId: 'assignment-a', leaderId: 'leader-a' })
+      for (const [extra, code] of [[{ stored: true }, 'ORDER_STORED'], [{ storage: { active: true } }, 'ORDER_STORED'], [{ fullRefund: true }, 'ORDER_REFUNDED'], [{ refundPending: true }, 'REFUND_PENDING']]) {
+        assert.equal(api.playerOrderBlockedReason({ ...closed, ...extra }).code, code)
+        assert.throws(() => api.assignmentTarget({ ...closed, ...extra }, 'leader-a'), error => error.code === code)
+      }
+      const authoritative = { code: 'SERVER_READ_ONLY', message: '请由后台客服处理' }
+      assert.equal(api.playerOrderBlockedReason({ ...order, playerOperationBlockedReason: authoritative }), authoritative)
       assert.notEqual(api.orderTargetKey(order), api.orderTargetKey({ ...order, displayStatus: 'refunded' }))
       assert.notEqual(api.orderTargetKey(order), api.orderTargetKey({ ...order, problem: { id: 'problem-b', status: 'open' } }))
     })
-    await suite.test('problem feedback response loss locks family and original-result acknowledgement releases it without replay', async () => {
-      reset(); failedWrite = true
-      const operation = api.usePlayerOperation('problem-feedback')
-      const intent = api.captureOperation('problem-feedback', 'player/orders/order-a/problem-feedback', { expectedRevision: 7, assignmentId: 'assignment-a', leaderId: 'player-a', problemId: 'problem-a', message: '已联系处理' })
-      const result = await operation.execute(intent)
-      assert.equal(result.state, 'unknown'); assert.equal(operation.pending.value, true)
-      assert.equal(await operation.execute(api.captureOperation('problem-feedback', intent.path, { message: '重复请求' })), null)
-      assert.equal(requests.length, 1)
-      api.setOperationLookup(async original => ({ requestId: original.requestId, family: original.family, status: 'succeeded', operationConfirmed: true, result: 'confirmation-only', createdAt: new Date().toISOString(), lateCommitPossible: false, canCreateNew: false, canRetryWithOriginal: false }))
-      assert.equal((await operation.check()).state, 'confirmed')
-      assert.equal(operation.pending.value, false); assert.equal(requests.length, 1)
-      const payload = JSON.parse(requests[0].body.toString())
-      assert.equal(payload.problemId, 'problem-a'); assert.equal(payload.message, '已联系处理'); assert.equal(payload.requestId, intent.requestId)
+    await suite.test('legacy uncertain feedback marker remains read-only recoverable without recreating or replaying feedback', async () => {
+      reset(); api.invalidateSessionRequests()
+      const previousWindow = globalThis.window, storage = new Map()
+      globalThis.window = { localStorage: { get length() { return storage.size }, key: index => [...storage.keys()][index] || null,
+        getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) } }
+      try {
+        api.writeOperationGuard({ owner: 'player-a', family: 'problem-feedback', requestId: 'legacy-feedback-receipt', createdAt: Date.now() })
+        const operation = api.usePlayerOperation('problem-feedback')
+        assert.equal(operation.operation.value.state, 'unknown'); assert.equal(operation.operation.value.recovered, true)
+        assert.equal(await operation.retryOriginal(), null); assert.equal(requests.length, 0)
+        await assert.rejects(() => operation.execute(api.captureOperation('problem-feedback', 'player/orders/order-a/problem-feedback', { message: '新反馈不应发送' })), error => error.code === 'PROBLEM_STAFF_ONLY')
+        api.setOperationLookup(async original => ({ requestId: original.requestId, family: original.family, status: 'succeeded', operationConfirmed: true, result: 'confirmation-only', createdAt: new Date().toISOString(), lateCommitPossible: false, canCreateNew: false, canRetryWithOriginal: false }))
+        assert.equal((await operation.check()).state, 'confirmed')
+        assert.equal(operation.pending.value, false); assert.equal(requests.length, 0)
+      } finally { globalThis.window = previousWindow }
     })
   } finally {
     api.clearPrivateImages(); globalThis.fetch = originalFetch

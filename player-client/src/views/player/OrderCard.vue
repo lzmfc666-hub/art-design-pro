@@ -70,7 +70,7 @@
         <p v-if="order.historyOnly" class="p-hint">仅保留参与摘要，当前无私人详情及操作权限。{{ order.lastParticipationAt ? `最后参与 ${dateTime(order.lastParticipationAt)}` : '' }}</p>
       </div>
     </div>
-    <p v-if="order.executionBlockedReason" class="p-hint">{{ order.executionBlockedReason.message }}</p>
+    <p v-if="readOnlyReason" class="p-hint">{{ readOnlyReason.message }}</p>
     <p v-else-if="order.status === 'pending' && !claimable" class="p-hint">{{
       order.claimBlockedReason?.message || order.claimReason ||
       (!hasDispatchVersion ? '订单信息尚未更新，请刷新后重新确认' : '') ||
@@ -112,6 +112,7 @@
   import OrderNumber from './OrderNumber.vue'
   import { useAppearanceStore } from '@/stores/appearance'
   import PrivateImage from './PrivateImage.vue'
+  import { playerOrderBlockedReason } from '@/api/orderAccess'
   const props = defineProps<{
     order: PlayerOrder
     claim?: boolean
@@ -120,6 +121,7 @@
   }>()
   const emit = defineEmits<{ claim: [order: Readonly<PlayerOrder>] }>()
   const appearance = useAppearanceStore()
+  const readOnlyReason = computed(() => playerOrderBlockedReason(props.order))
   const failedImageKey = ref('')
   const claimQueued = ref(false)
   const requirementsExpanded = ref(false), remarkExpanded = ref(false)
@@ -172,7 +174,7 @@
     () =>
       props.allowed !== false &&
       !props.order.historyOnly &&
-      !props.order.executionBlockedReason &&
+      !readOnlyReason.value &&
       props.order.canClaim === true &&
       hasDispatchVersion.value
   )
@@ -189,7 +191,7 @@
   const isAssignedDirect = computed(
     () =>
       !props.order.historyOnly &&
-      !props.order.executionBlockedReason &&
+      !readOnlyReason.value &&
       props.order.dispatchMode === 'direct' &&
       props.order.status === 'pending' &&
       props.order.dispatchState !== 'unassigned' &&

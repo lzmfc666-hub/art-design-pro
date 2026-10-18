@@ -41,6 +41,7 @@ export function readPlayerOperationResult(db, user, requestId, family, now) {
     lateCommitPossible: true,
     canCreateNew: false,
     canRetryWithOriginal:
+      family !== 'problem-feedback' &&
       (family !== 'claim' || user.playerAccess?.claim !== false) &&
       (family !== 'withdraw' || user.playerAccess?.withdraw !== false)
   }

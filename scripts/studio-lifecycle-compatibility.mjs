@@ -4,7 +4,7 @@ import { dirname, relative, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readReleaseManifest } from './studio-release.mjs'
 
-export const LIFECYCLE_CAPABILITIES = Object.freeze(['refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1'])
+export const LIFECYCLE_CAPABILITIES = Object.freeze(['refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1', 'problem-staff-only-v1'])
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const failure = (code, message) => Object.assign(new Error(message), { code })
 const publicError = {
@@ -77,7 +77,9 @@ function analyze(state, capabilities) {
     if (storageHistory) { required.add('stored-orders-v1'); counts.storageHistoryOrders++ }
     if (order.storage?.active === true) counts.activeStoredOrders++
     if (order.capacityExemption) counts.resumedCapacityExemptOrders++
-    if (order.problem || order.problemHistory?.length) { required.add('problem-orders-v1'); counts.problemHistoryOrders++ }
+    if (order.problem || order.problemHistory?.length) {
+      required.add('problem-orders-v1'); required.add('problem-staff-only-v1'); counts.problemHistoryOrders++
+    }
     if (order.problem?.status === 'open') counts.openProblemOrders++
     if (codes.length) anomalies.push({ orderId: order.id, codes })
     if (financeCodes.length) financialReviews.push({ orderId: order.id, codes: financeCodes })

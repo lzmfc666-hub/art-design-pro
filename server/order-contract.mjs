@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { ApiError } from './studio.mjs'
-import { orderLifecycle, createLifecycleContext, orderExecutable } from './order-lifecycle.mjs'
+import { orderLifecycle, createLifecycleContext, playerOrderExecutable } from './order-lifecycle.mjs'
 
 export function conflict(code, message, details) {
   throw Object.assign(new ApiError(message, 409), { code, details, publicBusinessError: true })
@@ -64,7 +64,7 @@ export function claimEligibility(state, user, order, now, context = {}) {
   const pendingAssignments =
     context.pendingAssignments ??
     state.orders.filter(
-      (o) => orderExecutable(state, o, lifecycle) && o.status === 'pending' && o.dispatchState !== 'unassigned' && o.assignedTo === user.id
+      (o) => playerOrderExecutable(state, o, lifecycle) && o.status === 'pending' && o.dispatchState !== 'unassigned' && o.assignedTo === user.id
     ).length
   const level = context.level ?? state.levels.find((row) => row.id === user.levelId)
   const availableAt =
@@ -80,8 +80,8 @@ export function claimEligibility(state, user, order, now, context = {}) {
   if (user.status !== 'active' || user.role !== 'player' || user.playerAccess?.login === false)
     block('PLAYER_DISABLED', '账号已停用或关闭登录')
   else if (user.playerAccess?.claim === false) block('CLAIM_DISABLED', '账号已关闭新接单')
-  else if (orderLifecycle(state, order, lifecycle).executionBlockedReason) {
-    const blocked = orderLifecycle(state, order, lifecycle).executionBlockedReason
+  else if (orderLifecycle(state, order, lifecycle).playerOperationBlockedReason) {
+    const blocked = orderLifecycle(state, order, lifecycle).playerOperationBlockedReason
     block(blocked.code, blocked.message)
   }
   else if (order.status !== 'pending' || order.leaderId)
@@ -110,8 +110,8 @@ export function submitEligibility(user, order, state = { refunds: [] }) {
   if (order.leaderId !== user.id || !order.assignmentId) {
     code = 'NOT_CURRENT_LEADER'
     message = '只有当前有效负责人可以上报'
-  } else if (orderLifecycle(state, order).executionBlockedReason) {
-    const blocked = orderLifecycle(state, order).executionBlockedReason
+  } else if (orderLifecycle(state, order).playerOperationBlockedReason) {
+    const blocked = orderLifecycle(state, order).playerOperationBlockedReason
     code = blocked.code
     message = blocked.message
   } else if (order.status !== 'active') {

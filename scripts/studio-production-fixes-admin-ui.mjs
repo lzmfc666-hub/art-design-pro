@@ -160,6 +160,47 @@ try {
     ).status(),
     200
   )
+  const operationContext = await browser.newContext()
+  assert.equal(
+    (
+      await operationContext.request.post(playerBase + '/api/studio/login', {
+        data: { username: player.username, password }
+      })
+    ).status(),
+    200
+  )
+  async function assertPlayerReadOnly(id, operations) {
+    const row = service.playerOrderDetail(player.id, id)
+    assert.ok(
+      row.playerOperationBlockedReason,
+      'Server must expose the current player-only restriction'
+    )
+    assert.equal(row.canSubmit, false)
+    for (const operation of operations) {
+      const response = await operationContext.request.post(
+        `${playerBase}/api/studio/player/orders/${id}/${operation}`,
+        {
+          headers: { 'X-Studio-Actor': player.id },
+          data: {
+            requestId: randomUUID(),
+            expectedRevision: row.revision,
+            dispatchRound: row.dispatchRound,
+            assignmentId: row.assignmentId,
+            submissionId: row.submissionId,
+            leaderId: row.leaderId,
+            problemId: row.problem?.id,
+            message: '只读订单不允许提交新反馈',
+            reason: '只读订单不允许退单',
+            screenshots: []
+          }
+        }
+      )
+      const value = await response.json()
+      assert.ok([403, 409].includes(response.status()), `${operation}: ${JSON.stringify(value)}`)
+      assert.match(value.message, /存单|问题|客服|只读|暂停|禁止|不能/)
+      assert.equal(current(id).revision, row.revision, `${operation} must not alter the order`)
+    }
+  }
   await context.route('**/*', (route) => {
     const url = new URL(route.request().url())
     return ['http:', 'https:'].includes(url.protocol) && url.hostname !== '127.0.0.1'
@@ -234,7 +275,20 @@ try {
   assert.equal(current(idle.id).dispatchMode, 'pool')
   pass('无人接单存单/恢复由真实按钮提交，重新开放公共大厅')
   await visit(continuing.id)
+  await action(continuing.id, '标记问题单', '普通接单问题由客服处理，打手仅查看')
+  assert.equal(service.playerProfile(player.id).activeOrders, 1)
+  await assertPlayerReadOnly(continuing.id, ['submit', 'return-request', 'problem-feedback'])
+  await action(continuing.id, '确认问题已解决', '客服直接处理完成，无须打手反馈')
+  assert.equal(current(continuing.id).problem.feedback.length, 0)
+  assert.equal(service.playerProfile(player.id).activeOrders, 1)
+  assert.equal(
+    service.playerOrderDetail(player.id, continuing.id).playerOperationBlockedReason,
+    null
+  )
+  pass('普通问题单保留接单名额且打手只读，客服无需打手反馈即可直接关闭')
   await action(continuing.id, '客户存单', '已完成一半，客户暂停；进度继续保留')
+  await assertPlayerReadOnly(continuing.id, ['return-request', 'submit', 'problem-feedback'])
+  pass('存单期间打手仅可查看，真实HTTP拒绝退单、上报和新增反馈且订单不变')
   const additional = order('原打手名额占用验收')
   mutate(`/player/orders/${additional.id}/claim`, {}, player.id)
   assert.equal(service.playerProfile(player.id).activeOrders, 1)
@@ -242,15 +296,33 @@ try {
   assert.equal(current(continuing.id).capacityExempt, true)
   assert.equal(service.playerProfile(player.id).activeOrders, 1)
   pass('原负责人满额时仍可恢复续做，名额保持原普通订单一单')
-  await action(continuing.id, '标记问题单', '请核对客户进度并反馈')
-  const problem = current(continuing.id).problem
-  await detail().getByRole('button', { name: '确认问题已解决', exact: true }).click()
-  await field(panel(), '原因 / 处理说明').locator('textarea').fill('旧页面尝试关闭问题')
-  mutate(
-    `/player/orders/${continuing.id}/problem-feedback`,
-    { problemId: problem.id, message: '已联系客户，确认可以继续' },
-    player.id
+  await action(continuing.id, '标记问题单', '请由后台客服核对客户进度并处理')
+  await assertPlayerReadOnly(continuing.id, ['return-request', 'submit', 'problem-feedback'])
+  assert.equal(service.playerProfile(player.id).activeOrders, 1)
+  // Simulate a feedback record created before the staff-only rule. This is a
+  // compatibility fixture in the disposable memory database, not a live write.
+  const legacyFeedback = '历史打手反馈只读保留，不再开放新增反馈'
+  const fixtureState = JSON.parse(
+    service.db.prepare('SELECT json FROM studio_state WHERE id=1').get().json
   )
+  fixtureState.orders
+    .find((row) => row.id === continuing.id)
+    .problem.feedback.push({
+      id: randomUUID(),
+      userId: player.id,
+      userName: player.name,
+      message: legacyFeedback,
+      createdAt: new Date().toISOString()
+    })
+  service.db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(fixtureState))
+  await visit(continuing.id)
+  await detail().getByRole('button', { name: '确认问题已解决', exact: true }).click()
+  await panel().getByText(legacyFeedback, { exact: true }).waitFor()
+  await field(panel(), '原因 / 处理说明').locator('textarea').fill('旧页面尝试关闭问题')
+  mutate(`/orders/${continuing.id}/action`, {
+    action: 'remark',
+    remark: '其他客服在关闭确认前补充了最新处理说明'
+  })
   const conflict = page.waitForResponse(
     (reply) =>
       reply.url().endsWith(`/orders/${continuing.id}/action`) && reply.request().method() === 'POST'
@@ -265,13 +337,18 @@ try {
     '旧页面尝试关闭问题'
   )
   await panel().getByRole('button', { name: '返回', exact: true }).click()
-  pass('打手新反馈使旧后台关闭意图409失效，问题保持未关闭并保留输入')
+  pass('后台并发补充说明使旧关闭意图409失效，问题保持未关闭并保留输入')
   await visit(continuing.id)
-  await action(continuing.id, '确认问题已解决', '后台已核对打手反馈，问题关闭')
+  await action(continuing.id, '确认问题已解决', '客服已直接核对处理，确认问题关闭')
   assert.equal(current(continuing.id).problem.status, 'closed')
   assert.equal(current(continuing.id).problem.feedback.length, 1)
   assert.equal(current(continuing.id).capacityExempt, true)
-  pass('问题单开立、打手反馈、后台核对关闭，保留处理记录及原名额规则')
+  assert.equal(current(continuing.id).problem.feedback[0].message, legacyFeedback)
+  assert.equal(
+    service.playerOrderDetail(player.id, continuing.id).playerOperationBlockedReason,
+    null
+  )
+  pass('问题单期间打手仅查看，客服直接关闭；保留历史反馈和原名额规则，关闭后重新核对资格')
   const image = await sharp({
     create: { width: 900, height: 650, channels: 3, background: '#1e7b9a' }
   })

@@ -27,6 +27,7 @@ export interface PlayerOrder {
   capacityExempt?: boolean
   countsTowardsCapacity?: boolean
   executionBlockedReason?: { code: string; message: string } | null
+  playerOperationBlockedReason?: { code: string; message: string } | null
   storage?: { id: string; active: boolean; reason: string; storedAt: string; leaderId: string | null; teammateId: string | null; assignmentId: string | null; resumedAt?: string; resumeMode?: string } | null
   problem?: PlayerOrderProblem | null
   problemHistory?: PlayerOrderProblem[]

@@ -73,7 +73,7 @@ async function fixture(t) {
   return { server, base, admin, player, outsider, call, ok, order, current, intent, action, claim, refund, submit, activeCount, snapshot }
 }
 
-test('真实HTTP问题反馈可通过打手通道且校验会话、当前负责人、版本及幂等', async t => {
+test('真实HTTP问题单打手只读，当前合法身份也不能反馈或履约，客服关闭后恢复资格', async t => {
   const f = await fixture(t), order = await f.order()
   await f.claim(order)
   const opened = await f.action(order, 'problem-open', { reason: 'HTTP实际问题原因' })
@@ -83,11 +83,17 @@ test('真实HTTP问题反馈可通过打手通道且校验会话、当前负责�
   assert.equal(forged.status, 409)
   const unauthorized = await f.call(path, { actor: f.outsider, body: { ...body, requestId: randomUUID() } })
   assert.equal(unauthorized.status, 403)
-  const success = await f.call(path, { actor: f.player, body })
-  assert.equal(success.status, 200, JSON.stringify(success.data))
-  assert.equal(success.data.problem.feedback.length, 1)
-  assert.equal((await f.call(path, { actor: f.player, body })).status, 200)
-  assert.equal((await f.current(order)).problem.feedback.length, 1)
+  const denied = await f.call(path, { actor: f.player, body })
+  assert.equal(denied.status, 409, JSON.stringify(denied.data))
+  assert.equal(denied.data.code, 'PROBLEM_STAFF_ONLY')
+  assert.equal((await f.call(path, { actor: f.player, body })).status, 409)
+  assert.equal((await f.current(order)).problem.feedback.length, 0)
+  for (const operation of ['submit', 'return-request']) {
+    const result = await f.call(`/player/orders/${order.id}/${operation}`, { actor: f.player,
+      body: { ...f.intent(opened), reason: '直接接口尝试执行' } })
+    assert.equal(result.status, 409)
+    assert.equal(result.data.code, 'ORDER_PROBLEM')
+  }
   const stale = await f.call(path, { actor: f.player, body: { ...body, requestId: randomUUID(), message: '旧页面再次反馈' } })
   assert.equal(stale.status, 409)
   const notices = await f.ok('/player/notifications', { actor: f.player })
@@ -96,8 +102,10 @@ test('真实HTTP问题反馈可通过打手通道且校验会话、当前负责�
   const closed = await f.call(path, { actor: f.player,
     body: { ...f.intent(await f.current(order)), problemId: opened.problem.id, message: '已关闭不能继续反馈' } })
   assert.equal(closed.status, 409)
-  assert.equal(closed.data.code, 'PROBLEM_CHANGED')
+  assert.equal(closed.data.code, 'PROBLEM_STAFF_ONLY')
   assert.equal(await f.activeCount(), 1)
+  await f.submit(order)
+  assert.equal((await f.current(order)).status, 'review')
 })
 
 test('真实HTTP全额退款显示已退款、移出大厅，旧意图和当前意图均不能再接单', async t => {

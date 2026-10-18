@@ -128,6 +128,7 @@ export function usePlayerOperation(family: OperationFamily) {
   const pending = computed(() => operationPending(operation.value))
   async function execute(intent: PlayerOperation) {
     recover(family)
+    if (family === 'problem-feedback') throw new StudioApiError('问题单已改由后台客服处理，打手仅可查看并核对历史结果。', { status: 409, code: 'PROBLEM_STAFF_ONLY' })
     if (intent.session !== sessionRevision() || intent.owner !== useSessionStore().user?.id || pending.value) return null
     // This draft has not been sent yet. A permission refresh during reservation
     // must not turn its new ID into an unknown server operation or query that ID.
@@ -161,7 +162,7 @@ export function usePlayerOperation(family: OperationFamily) {
           typeof result.canRetryWithOriginal !== 'boolean') throw new StudioApiError('暂时无法核对原操作，请稍后重试')
       if (result.status === 'succeeded') return replace(original, { state: 'confirmed', checking: false, retryAllowed: false,
         message: '原操作已确认，请查看当前最新状态。' })
-      const retryAllowed = !original.recovered && !!original.path && result.canRetryWithOriginal
+      const retryAllowed = original.family !== 'problem-feedback' && !original.recovered && !!original.path && result.canRetryWithOriginal
       return replace(original, { state: 'unknown', checking: false, retryAllowed,
         message: original.recovered ? '暂未核对到成功结果，原请求仍可能完成。本页没有原提交内容，请联系后台核对。'
           : retryAllowed ? '暂未核对到成功结果，原请求仍可能完成。请继续核对，或明确重试原操作；不会另建请求。'
@@ -170,6 +171,7 @@ export function usePlayerOperation(family: OperationFamily) {
   }
   async function retryOriginal() {
     const original = operation.value
+    if (family === 'problem-feedback') return null
     if (!original || original.recovered || original.state !== 'unknown' || !original.retryAllowed || original.checking || original.session !== sessionRevision() || original.owner !== useSessionStore().user?.id) return null
     const sending = replace(original, { state: 'sending', message: '', retryAllowed: false })
     return sending ? send(sending, true) : null

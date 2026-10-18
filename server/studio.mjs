@@ -20,7 +20,7 @@ import { platformRules, normalizePlatformRules } from './platform-rules.mjs'
 import { buildPeriodExportSnapshot, exportPeriod } from './export-period.mjs'
 import { buildDiagnosticsReport } from './diagnostics.mjs'
 import { createFundsStore } from './funds-store.mjs'
-import { orderLifecycle, orderExecutable, refundSummary, createLifecycleContext } from './order-lifecycle.mjs'
+import { orderLifecycle, orderExecutable, playerOrderExecutable, refundSummary, createLifecycleContext } from './order-lifecycle.mjs'
 import { readPlayerOperationResult } from './operation-results.mjs'
 import { createImageArchive, archivedImageRecord, readArchivedImage, deletedImageRecord } from './image-archive.mjs'
 import {
@@ -247,6 +247,10 @@ const ensureOrderExecutable = (state, order) => {
   const blocked = orderLifecycle(state, order).executionBlockedReason
   if (blocked) conflict(blocked.code, blocked.message)
 }
+const ensurePlayerOrderExecutable = (state, order) => {
+  const blocked = orderLifecycle(state, order).playerOperationBlockedReason
+  if (blocked) conflict(blocked.code, blocked.message)
+}
 const safeStorage = (row) => Object.fromEntries(
   ['id', 'active', 'reason', 'storedAt', 'leaderId', 'teammateId', 'assignmentId', 'resumedAt', 'resumeMode']
     .filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])
@@ -264,7 +268,7 @@ const publicStaff = (state, user, counts) => ({
     ? counts.pending.get(user.id) || 0
     : state.orders.filter(
         (o) =>
-          orderExecutable(state, o) && o.status === 'pending' && o.dispatchState !== 'unassigned' && o.assignedTo === user.id
+          playerOrderExecutable(state, o) && o.status === 'pending' && o.dispatchState !== 'unassigned' && o.assignedTo === user.id
       ).length
 })
 function staffOrderCounts(state) {
@@ -275,7 +279,7 @@ function staffOrderCounts(state) {
     const lifecycle = orderLifecycle(state, order, lifecycleContext)
     if (lifecycle.countsTowardsCapacity && order.leaderId)
       active.set(order.leaderId, (active.get(order.leaderId) || 0) + 1)
-    if (orderExecutable(state, order, lifecycleContext) && order.status === 'pending' && order.assignedTo && order.dispatchState !== 'unassigned')
+    if (playerOrderExecutable(state, order, lifecycleContext) && order.status === 'pending' && order.assignedTo && order.dispatchState !== 'unassigned')
       pending.set(order.assignedTo, (pending.get(order.assignedTo) || 0) + 1)
   }
   return { active, pending }
@@ -285,7 +289,7 @@ function orderReadContext(state, user) {
   return {
     lifecycle,
     activeCount: user.role === 'player' ? activeOrderCount(state, user.id, lifecycle) : 0,
-    pendingAssignments: state.orders.filter(order => order.assignedTo === user.id && order.status === 'pending' && order.dispatchState !== 'unassigned' && orderExecutable(state, order, lifecycle)).length
+    pendingAssignments: state.orders.filter(order => order.assignedTo === user.id && order.status === 'pending' && order.dispatchState !== 'unassigned' && playerOrderExecutable(state, order, lifecycle)).length
   }
 }
 const hashPassword = (password) => {
@@ -1123,7 +1127,7 @@ export function createStudioService({
       completedAt: order.completedAt,
       availableAt,
       claimEligible: eligibility.canClaim &&
-        orderExecutable(state, order, context.lifecycle) &&
+        playerOrderExecutable(state, order, context.lifecycle) &&
         !historyOnly &&
         order.status === 'pending' &&
         order.dispatchState !== 'unassigned' &&
@@ -2671,6 +2675,7 @@ export function createStudioService({
           conflict('PROBLEM_CHANGED', '问题已处理或编号变化，请刷新后确认')
         Object.assign(order.problem, { status: 'closed', closedAt: now(), closedBy: user.id, resolution: reason })
       }
+      if (['problem-open', 'problem-close'].includes(action) && order.status === 'pending') order.dispatchRound++
       advanceOrderIdentity(order, before, action)
       audit(state, user, `订单：${action} · ${reason}`, 'order', order.id, before, order)
       return safeOrder(state, user, order)
@@ -3341,6 +3346,11 @@ export function createStudioService({
             ![order.leaderId, order.teammateId].includes(user.id))
         )
           fail('订单不再属于当前操作或私人详情范围，请只读核对原操作结果', 403)
+        // Read-only order policy also precedes idempotent snapshot replay.
+        // Historical successes are available through operation-result GET only.
+        if (path.endsWith('/problem-feedback'))
+          conflict('PROBLEM_STAFF_ONLY', '问题单由后台客服处理，打手只能查看处理记录')
+        ensurePlayerOrderExecutable(state, order)
       }
       const withdrawal = path.match(/^\/player\/withdrawals\/([^/]+)\/cancel$/)
       if (withdrawal && find(state, 'withdrawals', withdrawal[1]).userId !== user.id)
@@ -4279,17 +4289,12 @@ export function createStudioService({
           const feedbackMatch = path.match(/^\/player\/orders\/([^/]+)\/problem-feedback$/)
           if (feedbackMatch) {
             requirePlayer(user)
-            const order = find(state, 'orders', feedbackMatch[1], '订单'), before = clone(order)
+            const order = find(state, 'orders', feedbackMatch[1], '订单')
             if (![order.leaderId, order.teammateId].includes(user.id)) fail('只有当前订单负责人和队友可以反馈问题', 403)
             checkOrderPreconditions(order, body, 'problem-feedback')
             if (!order.problem || order.problem.id !== body.problemId || order.problem.status !== 'open')
               conflict('PROBLEM_CHANGED', '问题已关闭或编号变化，请刷新订单')
-            const message = text(body.message, '处理反馈', { required: true, max: 2000 })
-            if (order.problem.feedback.length >= 100) fail('本问题反馈记录已达上限，请由后台核对并关闭', 409)
-            order.problem.feedback.push({ id: id(), userId: user.id, userName: user.name, message, createdAt: now() })
-            advanceOrderIdentity(order, before, 'problem-feedback')
-            audit(state, user, '打手反馈问题单', 'order', order.id, before, order)
-            return playerOrder(state, user, order)
+            conflict('PROBLEM_STAFF_ONLY', '问题单由后台客服处理，打手只能查看处理记录')
           }
           const claimMatch = path.match(/^\/player\/orders\/([^/]+)\/claim$/)
           if (claimMatch) {
@@ -4335,6 +4340,7 @@ export function createStudioService({
             const order = find(state, 'orders', rejectMatch[1], '订单'),
               before = clone(order)
             checkOrderPreconditions(order, body, 'reject')
+            ensurePlayerOrderExecutable(state, order)
             if (
               order.status !== 'pending' ||
               order.dispatchState === 'unassigned' ||
@@ -4357,7 +4363,7 @@ export function createStudioService({
             const order = find(state, 'orders', returnMatch[1], '订单'),
               before = clone(order)
             checkOrderPreconditions(order, body, 'return-request')
-            ensureOrderExecutable(state, order)
+            ensurePlayerOrderExecutable(state, order)
             if (order.leaderId !== user.id) fail('只有当前负责人可以申请退单', 403)
             if (order.status !== 'active') fail('只有接单中订单可以申请退单，请刷新订单', 409)
             order.returnRequests ||= []
@@ -4380,7 +4386,7 @@ export function createStudioService({
             const order = find(state, 'orders', submitMatch[1], '订单'),
               before = clone(order)
             checkOrderPreconditions(order, body, 'submit')
-            ensureOrderExecutable(state, order)
+            ensurePlayerOrderExecutable(state, order)
             if (!paymentConfirmed(order))
               throw Object.assign(new ApiError('足额收款后才允许正常上报', 409), {
                 code: 'PAYMENT_NOT_CONFIRMED'
@@ -4720,7 +4726,7 @@ export function createStudioService({
         maxActiveOrders: user.maxActiveOrders,
         pendingAssignments: state.orders.filter(
           (o) =>
-            orderExecutable(state, o) && o.status === 'pending' && o.assignedTo === user.id && o.dispatchState !== 'unassigned'
+            playerOrderExecutable(state, o) && o.status === 'pending' && o.assignedTo === user.id && o.dispatchState !== 'unassigned'
         ).length
       }
     },

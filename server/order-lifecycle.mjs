@@ -59,8 +59,11 @@ export function orderLifecycle(state, order, context) {
     capacityExempt,
     countsTowardsCapacity: Boolean(order.status === 'active' && order.leaderId && activeAssignment && !stored && !fullRefund && !capacityExempt),
     executionBlockedReason: blocked,
+    playerOperationBlockedReason: blocked || (order.problem?.status === 'open'
+      ? { code: 'ORDER_PROBLEM', message: '问题单由后台客服处理，打手暂不可操作' } : null),
     refundSummary: refunds
   }
 }
 
 export const orderExecutable = (state, order, context) => !orderLifecycle(state, order, context).executionBlockedReason
+export const playerOrderExecutable = (state, order, context) => !orderLifecycle(state, order, context).playerOperationBlockedReason

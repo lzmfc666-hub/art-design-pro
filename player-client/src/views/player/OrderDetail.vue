@@ -6,7 +6,7 @@
       :online="resource.online.value"
       @retry="resource.refresh()"
     />
-    <OperationState v-for="item in operationStates" :key="item.family" :operation="item.operation" :online="resource.online.value" :allow-retry="!order?.historyOnly && !resource.stale.value" @check="checkOperation(item.family)" @retry="retryOperation(item.family)" />
+    <OperationState v-for="item in operationStates" :key="item.family" :operation="item.operation" :online="resource.online.value" :allow-retry="!!order && !order.historyOnly && !resource.stale.value && !readOnlyReason && item.family !== 'problem-feedback'" @check="checkOperation(item.family)" @retry="retryOperation(item.family)" />
     <div v-if="resource.error.value" class="p-actions">
       <RouterLink class="p-btn p-secondary" to="/player/tasks">返回我的任务</RouterLink>
       <RouterLink class="p-btn p-secondary" to="/player/lobby">返回订单大厅</RouterLink>
@@ -34,13 +34,13 @@
         <RouterLink class="p-btn p-secondary" to="/player/tasks?status=all">返回参与历史</RouterLink>
       </div>
       <template v-if="!order.historyOnly">
-      <p v-if="order.executionBlockedReason" class="p-notice p-warning" role="status">{{ order.executionBlockedReason.message }}</p>
+      <p v-if="readOnlyReason" class="p-notice p-warning" role="status">{{ readOnlyReason.message }}</p>
       <div v-if="order.storage" class="p-card">
         <h3>{{ order.storage.active ? '订单已存单' : '存单恢复记录' }}</h3>
         <p class="p-preline">{{ order.storage.reason }}</p>
         <p class="p-hint">存单时间 {{ dateTime(order.storage.storedAt) }}<template v-if="order.storage.resumedAt"> · 恢复时间 {{ dateTime(order.storage.resumedAt) }}</template></p>
         <p v-if="order.storage.active" class="p-hint">本单暂时停止履约，不占接单名额，已做进度与原接单历史保留。请等待后台恢复安排。</p>
-        <p v-if="order.capacityExempt" class="p-notice p-info">本单由存单恢复给原负责人继续完成，本轮不占接单名额。请按当前订单要求继续服务。</p>
+        <p v-if="order.capacityExempt" class="p-notice p-info">本单由存单恢复给原负责人继续完成，本轮不占接单名额。是否可以操作以当前限制为准。</p>
       </div>
       <div v-if="problemRecords.length" class="p-card">
         <h3>问题单与处理记录</h3>
@@ -52,11 +52,7 @@
           </div>
           <p v-if="problem.status === 'closed'" class="p-hint">后台确认：{{ problem.resolution || '已确认解决' }} · {{ dateTime(problem.closedAt) }}</p>
         </div>
-        <form v-if="canFeedback" @submit.prevent="submitProblemFeedback">
-          <p class="p-hint">提交处理情况后由后台确认关闭。反馈不会改变订单履约状态或接单名额。</p>
-          <label class="p-field">处理反馈<textarea v-model.trim="problemMessage" required maxlength="1000" rows="3" placeholder="说明问题处理情况，等待后台确认" :disabled="blocked" /></label>
-          <button class="p-btn p-primary p-full" :disabled="blocked || !problemMessage || !resource.online.value">{{ busy ? '正在提交…' : '提交问题反馈' }}</button>
-        </form>
+        <p v-if="order.problem?.status === 'open'" class="p-notice p-info">问题单当前仅可查看，请联系后台客服记录处理结果并关闭问题。关闭后是否可以继续操作，以订单当前状态为准。</p>
       </div>
       <div class="p-card"
         ><h3>服务要求</h3><p class="p-preline">{{ order.requirements || '请按订单要求完成服务' }}</p
@@ -113,7 +109,7 @@
         class="p-notice p-info"
         >本单已交回客服待分配。原拒单或退单记录保留，请以客服重新安排为准。</p
       >
-      <div v-if="isLeader && order.status === 'active' && !order.executionBlockedReason" class="p-card"
+      <div v-if="isLeader && order.status === 'active' && !readOnlyReason" class="p-card"
         ><h3>提交完成材料</h3
         ><p v-if="order.paymentConfirmed === false" class="p-notice p-warning">付款尚未确认，请联系后台确认付款。足额收款后才可正常上报。</p
         ><p v-if="order.canSubmit !== true" class="p-notice p-warning">{{ order.submitBlockedReason?.message || '当前暂不能上报，请刷新订单或联系后台。' }}</p
@@ -155,7 +151,7 @@
           >{{ busy ? '正在提交…' : '提交完成，等待验收' }}</button
         ></div
       >
-      <div v-if="isLeader && order.status === 'active' && !order.executionBlockedReason" class="p-card"
+      <div v-if="isLeader && order.status === 'active' && !readOnlyReason" class="p-card"
         ><h3>申请退单</h3><p class="p-hint">客服批准前仍需负责本单。{{ order.capacityExempt ? '本单沿用存单续做免名额规则。' : '退单待处理继续占用接单名额。' }}</p
         ><p v-if="pendingReturn" class="p-notice p-warning">退单申请正在处理中，请等待客服结果。</p
         ><form v-else @submit.prevent="requestReturn"
@@ -236,7 +232,7 @@
           ><p v-if="submission.reason" class="p-notice p-warning">{{ submission.reason }}</p></div
         ></div
       >
-      <p v-if="order.status === 'review' && !order.executionBlockedReason" class="p-notice p-info"
+      <p v-if="order.status === 'review' && !readOnlyReason" class="p-notice p-info"
         >正在等待财务验收，本单已释放接单名额。验收通过后报酬计入钱包。</p
       >
       </template>
@@ -251,7 +247,8 @@ import { playerApi } from '@/api/player'
 import type { Attachment } from '@/types/studio'
 import type { PlayerOrder, PlayerProfile } from '@/types/player'
 import { captureOperation, usePlayerOperation, operationMessage } from '@/api/operations'
-import { assignmentTarget, dispatchTarget, problemFeedbackTarget, orderSnapshot, orderTargetKey } from '@/api/orderTarget'
+import { assignmentTarget, dispatchTarget, orderSnapshot, orderTargetKey } from '@/api/orderTarget'
+import { playerOrderBlockedReason } from '@/api/orderAccess'
 import { invalidatePlayerReads } from '@/api/readScheduler'
 import { readOrderDraft, saveOrderDraft, clearOrderDraft } from '@/stores/orderDrafts'
 import { safeApiMessage, isAbortError } from '@/api/studio'
@@ -267,12 +264,11 @@ const resource = usePlayerResource<PlayerOrder | null>(signal => playerApi.order
 const profile = usePlayerResource<PlayerProfile | null>(playerApi.profile, null, true, { topics: ['orders', 'profile'] })
 const teammateResource = usePlayerResource(playerApi.teammates, [], true, { topics: ['profile'] })
 const order = computed(() => resource.data.value?.id === String(route.params.id) ? resource.data.value : null)
+const readOnlyReason = computed(() => playerOrderBlockedReason(order.value))
 const isLeader = computed(() => !order.value?.historyOnly && order.value?.leaderId === studio.user?.id)
 const pendingReturn = computed(() => order.value?.returnRequests?.some(item => item.status === 'pending'))
-const canAccept = computed(() => !order.value?.historyOnly && !order.value?.executionBlockedReason && order.value?.status === 'pending' && order.value.dispatchState !== 'unassigned' && (order.value.dispatchMode === 'pool' || order.value.assignedTo === studio.user?.id))
+const canAccept = computed(() => !order.value?.historyOnly && !readOnlyReason.value && order.value?.status === 'pending' && order.value.dispatchState !== 'unassigned' && (order.value.dispatchMode === 'pool' || order.value.assignedTo === studio.user?.id))
 const problemRecords = computed(() => [...(order.value?.problem ? [order.value.problem] : []), ...(order.value?.problemHistory || [])].filter((item, index, records) => records.findIndex(other => other.id === item.id) === index))
-const canFeedback = computed(() => !order.value?.historyOnly && order.value?.problem?.status === 'open' && (!!order.value.assignmentId || order.value.status === 'completed') && !!order.value.leaderId && !!studio.user?.id && [order.value.leaderId, order.value.teammateId].includes(studio.user.id))
-const problemMessage = ref('')
 const mode = ref(route.query.action === 'reject' ? 'reject' : ''), reason = ref(''), returnReason = ref(''), busy = ref(false), uploading = ref(false), actionError = ref(''), screenshots = ref<Attachment[]>([]), teammateId = ref(''), target = ref<PlayerOrder | null>(null)
 const teammates = computed(() => teammateResource.data.value)
 const actions = { claim: usePlayerOperation('claim'), reject: usePlayerOperation('reject'), return: usePlayerOperation('return'), submit: usePlayerOperation('submit'), 'problem-feedback': usePlayerOperation('problem-feedback') }
@@ -280,7 +276,7 @@ type Family = keyof typeof actions
 const operationStates = computed(() => Object.entries(actions).map(([family, controller]) => ({ family: family as Family, operation: controller.operation.value })))
 const hasPendingOperation = computed(() => Object.values(actions).some(item => item.pending.value))
 const targetChanged = computed(() => !!order.value && !!target.value && orderTargetKey(order.value) !== orderTargetKey(target.value))
-const blocked = computed(() => order.value?.historyOnly || busy.value || hasPendingOperation.value || targetChanged.value || resource.stale.value)
+const blocked = computed(() => order.value?.historyOnly || !!readOnlyReason.value || busy.value || hasPendingOperation.value || targetChanged.value || resource.stale.value)
 const hasDispatchTarget = computed(() => Number.isSafeInteger(order.value?.revision) && Number.isSafeInteger(order.value?.dispatchRound))
 const hasAssignmentTarget = computed(() => Number.isSafeInteger(order.value?.revision) && !!order.value?.assignmentId && order.value?.leaderId === studio.user?.id)
 interface UploadItem { file: File; phase: 'preparing' | 'uploading' | 'done' | 'error'; percent: number; error: string }
@@ -288,12 +284,12 @@ const uploadItems = ref<UploadItem[]>([])
 let uploadController: AbortController | null = null
 const returnStatus = { pending: '等待客服处理', approved: '已批准退单', rejected: '已驳回，继续执行', obsolete: '申请已失效' }
 function rememberDraft() {
-  if (target.value && !order.value?.historyOnly && viewEpoch === studio.epoch) saveOrderDraft(target.value.id, { target: target.value, reason: reason.value, returnReason: returnReason.value, problemMessage: problemMessage.value, teammateId: teammateId.value, screenshots: screenshots.value })
+  if (target.value && !order.value?.historyOnly && viewEpoch === studio.epoch) saveOrderDraft(target.value.id, { target: target.value, reason: reason.value, returnReason: returnReason.value, teammateId: teammateId.value, screenshots: screenshots.value })
 }
 watch(() => route.params.id, () => {
   rememberDraft()
   resource.cancel(); uploadController?.abort(); uploadController = null; uploading.value = false
-  target.value = null; screenshots.value = []; uploadItems.value = []; teammateId.value = ''; reason.value = ''; returnReason.value = ''; problemMessage.value = ''; actionError.value = ''; busy.value = false
+  target.value = null; screenshots.value = []; uploadItems.value = []; teammateId.value = ''; reason.value = ''; returnReason.value = ''; actionError.value = ''; busy.value = false
   resource.data.value = null
   void resource.refresh()
 })
@@ -302,23 +298,22 @@ watch(order, value => {
   if (value.historyOnly) {
     uploadController?.abort(); uploadController = null; uploading.value = false
     clearOrderDraft(value.id)
-    target.value = null; screenshots.value = []; uploadItems.value = []; teammateId.value = ''; reason.value = ''; returnReason.value = ''; problemMessage.value = ''; mode.value = ''; actionError.value = ''
+    target.value = null; screenshots.value = []; uploadItems.value = []; teammateId.value = ''; reason.value = ''; returnReason.value = ''; mode.value = ''; actionError.value = ''
     return
   }
   if (!target.value) {
     const saved = readOrderDraft(value.id)
-    if (saved) { target.value = saved.target; reason.value = saved.reason; returnReason.value = saved.returnReason; problemMessage.value = saved.problemMessage || ''; teammateId.value = saved.teammateId; screenshots.value = saved.screenshots }
+    if (saved) { target.value = saved.target; reason.value = saved.reason; returnReason.value = saved.returnReason; teammateId.value = saved.teammateId; screenshots.value = saved.screenshots }
     else target.value = orderSnapshot(value)
   }
-  if (targetChanged.value) uploadController?.abort()
+  if (targetChanged.value || readOnlyReason.value) uploadController?.abort()
 }, { flush: 'sync' })
-watch([reason, returnReason, problemMessage, teammateId, screenshots], rememberDraft, { deep: true })
+watch([reason, returnReason, teammateId, screenshots], rememberDraft, { deep: true })
 onBeforeUnmount(() => { rememberDraft(); uploadController?.abort() })
 function reconfirm() {
   if (!order.value || order.value.historyOnly || hasPendingOperation.value) return
   const changedRound = target.value && (target.value.assignmentId !== order.value.assignmentId || target.value.dispatchRound !== order.value.dispatchRound || target.value.submissionId !== order.value.submissionId || target.value.leaderId !== order.value.leaderId)
   if (changedRound) { screenshots.value = []; uploadItems.value = []; teammateId.value = '' }
-  if (target.value?.problem?.id !== order.value.problem?.id) problemMessage.value = ''
   target.value = orderSnapshot(order.value); mode.value = ''
   actionError.value = changedRound ? '执行轮次已更新，请为当前任务重新选择完成材料。' : ''
   Object.values(actions).forEach(item => item.dismiss())
@@ -333,18 +328,17 @@ async function finishOperation(family: Family, result: Awaited<ReturnType<typeof
     if (epoch !== studio.epoch || id !== String(route.params.id)) return
     mode.value = ''; reason.value = ''; returnReason.value = ''
     if (family === 'submit') { screenshots.value = []; uploadItems.value = [] }
-    if (family === 'problem-feedback') problemMessage.value = ''
     clearOrderDraft(id)
     if (order.value && !order.value.historyOnly) target.value = orderSnapshot(order.value)
   } else if (result.state === 'rejected') { actionError.value = result.message; await resource.refresh() }
 }
-async function run(family: Family, body: Record<string, unknown>) {
+async function run(family: Exclude<Family, 'problem-feedback'>, body: Record<string, unknown>) {
   if (blocked.value || !target.value || !resource.online.value) return
   const viewed = orderSnapshot(target.value), epoch = studio.epoch
   busy.value = true; actionError.value = ''
   try {
     const path = `player/orders/${encodeURIComponent(viewed.id)}/${family === 'return' ? 'return-request' : family}`
-    const goal = family === 'claim' || family === 'reject' ? dispatchTarget(viewed) : family === 'problem-feedback' ? problemFeedbackTarget(viewed, studio.user!.id) : assignmentTarget(viewed, studio.user!.id)
+    const goal = family === 'claim' || family === 'reject' ? dispatchTarget(viewed) : assignmentTarget(viewed, studio.user!.id)
     const intent = captureOperation(family, path, { ...goal, ...body })
     rememberDraft()
     await finishOperation(family, await actions[family].execute(intent), viewed.id, epoch)
@@ -359,10 +353,6 @@ function submit() {
   if (order.value?.canSubmit !== true || order.value.paymentConfirmed !== true) return
   return run('submit', { screenshots: screenshots.value, teammateId: teammateId.value || null })
 }
-function submitProblemFeedback() {
-  if (!canFeedback.value || !problemMessage.value || order.value?.problem?.id !== target.value?.problem?.id) return
-  return run('problem-feedback', { problemId: target.value!.problem!.id, message: problemMessage.value })
-}
 async function checkOperation(family: Family) {
   if (busy.value) return
   const id = String(route.params.id), epoch = studio.epoch
@@ -374,7 +364,7 @@ async function checkOperation(family: Family) {
   } finally { if (epoch === studio.epoch && id === String(route.params.id)) busy.value = false }
 }
 async function retryOperation(family: Family) {
-  if (busy.value || order.value?.historyOnly || resource.stale.value) return
+  if (busy.value || !order.value || order.value.historyOnly || resource.stale.value || readOnlyReason.value || family === 'problem-feedback') return
   const id = String(route.params.id), epoch = studio.epoch
   busy.value = true
   try { await finishOperation(family, await actions[family].retryOriginal(), id, epoch) }

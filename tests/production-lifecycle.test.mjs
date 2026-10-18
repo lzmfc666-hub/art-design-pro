@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { createStudioService, ApiError } from '../server/studio.mjs'
 import { createPlayerNotifications } from '../server/player-notifications.mjs'
+import { createBusinessRequests } from '../server/order-contract.mjs'
 
 const PASSWORD = 'isolated-production-fix-password'
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
@@ -160,35 +161,48 @@ test('存单期间全退后不能恢复，驳回退款只解除退款冻结而�
   rejected(() => f.action(order, 'resume'), 'ORDER_REFUNDED')
 })
 
-test('问题反馈仅当前参与者、编号和版本有效时可写，后台关闭且不改变名额', t => {
+test('问题单打手只读且不释放名额，客服直接处理关闭不能解除存单', t => {
   const f = fixture(t), order = f.order()
   f.claim(order)
   const problem = f.action(order, 'problem-open', { reason: '客户反馈问题' }).problem
   const body = { problemId: problem.id, message: '已联系处理' }
   rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, body, f.players[2].id))
-  f.mutate(`/player/orders/${order.id}/problem-feedback`, body, f.players[0].id)
+  rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, body, f.players[0].id), 'PROBLEM_STAFF_ONLY')
+  rejected(() => f.submit(order), 'ORDER_PROBLEM')
+  rejected(() => f.mutate(`/player/orders/${order.id}/return-request`, { reason: '试图退单' }, f.players[0].id), 'ORDER_PROBLEM')
   assert.equal(f.current(order).problem.status, 'open')
+  assert.equal(f.current(order).problem.feedback.length, 0)
+  assert.equal(f.current(order).executionBlockedReason, null)
+  assert.equal(f.service.playerOrderDetail(f.players[0].id, order.id).canSubmit, false)
   assert.equal(f.current(order).countsTowardsCapacity, true)
-  f.action(order, 'store')
-  f.mutate(`/player/orders/${order.id}/problem-feedback`, { ...body, message: '存单期间反馈' }, f.players[0].id)
-  f.action(order, 'problem-close', { problemId: problem.id, reason: '后台核实已解决' })
+  f.mutate(`/orders/${order.id}/action`, { action: 'store', reason: '客服存单' }, f.support.id)
+  rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, { ...body, message: '存单期间反馈' }, f.players[0].id), 'PROBLEM_STAFF_ONLY')
+  f.mutate(`/orders/${order.id}/action`, { action: 'problem-close', problemId: problem.id, reason: '客服核实已解决' }, f.support.id)
   assert.equal(f.current(order).displayStatus, 'stored')
-  rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, body, f.players[0].id), 'PROBLEM_CHANGED')
+  rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, body, f.players[0].id), 'PROBLEM_STAFF_ONLY')
   assert.equal(f.service.playerOrdersPage(f.players[0].id, { scope: 'mine', status: 'stored' }).total, 1)
 })
 
-test('问题反馈原请求成功后可核对成功凭据且不可重复写入', t => {
+test('问题反馈反复提交也不写入；旧成功凭据仅能只读核对且不能引导重发', t => {
   const f = fixture(t), order = f.order()
   f.claim(order)
   const problem = f.action(order, 'problem-open').problem
   const body = { ...f.intent(order), problemId: problem.id, message: '反馈', requestId: randomUUID() }
-  f.service.mutate(f.players[0].id, `/player/orders/${order.id}/problem-feedback`, body)
-  f.service.mutate(f.players[0].id, `/player/orders/${order.id}/problem-feedback`, body)
-  assert.equal(f.current(order).problem.feedback.length, 1)
+  for (let retry = 0; retry < 2; retry++)
+    rejected(() => f.service.mutate(f.players[0].id, `/player/orders/${order.id}/problem-feedback`, body), 'PROBLEM_STAFF_ONLY')
+  assert.equal(f.current(order).problem.feedback.length, 0)
+  const missing = f.service.playerOperationResult(f.players[0].id, body.requestId, 'problem-feedback')
+  assert.equal(missing.status, 'not-recorded')
+  assert.equal(missing.canRetryWithOriginal, false)
+  createBusinessRequests(f.service.db)(f.players[0], `/player/orders/${order.id}/problem-feedback`, body,
+    () => ({ PRIVATE: 'old response must remain unread' }), order.createdAt)
   assert.equal(f.service.playerOperationResult(f.players[0].id, body.requestId, 'problem-feedback').status, 'succeeded')
+  assert.equal(f.service.playerOperationResult(f.players[0].id, body.requestId, 'problem-feedback').canRetryWithOriginal, false)
+  rejected(() => f.service.mutate(f.players[0].id, `/player/orders/${order.id}/problem-feedback`, body), 'PROBLEM_STAFF_ONLY')
+  assert.equal(f.current(order).problem.feedback.length, 0)
 })
 
-test('完成后全退保留完成时间、验收与问题反馈资格，不产生新报酬', t => {
+test('完成后全退保留完成时间与验收，问题仍由客服处理不允许打手反馈', t => {
   const f = fixture(t), order = f.order()
   f.claim(order); f.submit(order); f.action(order, 'review-pass')
   const completedAt = f.current(order).completedAt
@@ -197,7 +211,7 @@ test('完成后全退保留完成时间、验收与问题反馈资格，不产�
   assert.equal(f.current(order).status, 'completed')
   assert.equal(f.current(order).completedAt, completedAt)
   assert.equal(f.current(order).displayStatus, 'refunded')
-  f.mutate(`/player/orders/${order.id}/problem-feedback`, { problemId: problem.id, message: '售后反馈' }, f.players[0].id)
+  rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, { problemId: problem.id, message: '售后反馈' }, f.players[0].id), 'PROBLEM_STAFF_ONLY')
   assert.equal(f.current(order).submissions[0].review, 'passed')
 })
 
@@ -217,11 +231,14 @@ test('问题原因不向未接单大厅用户泄露，接取后才可查看', t 
   assert.equal(lobby.problem.status, 'open')
   assert.equal(JSON.stringify(lobby).includes('PRIVATE-PROBLEM-DETAIL'), false)
   assert.equal(Object.hasOwn(lobby, 'refundSummary'), false)
+  rejected(() => f.claim(order), 'ORDER_PROBLEM')
+  f.action(order, 'problem-close', { problemId: f.current(order).problem.id })
   f.claim(order)
+  f.action(order, 'problem-open', { reason: 'PRIVATE-PROBLEM-DETAIL' })
   assert.equal(f.service.playerOrderDetail(f.players[0].id, order.id).problem.reason, 'PRIVATE-PROBLEM-DETAIL')
 })
 
-test('旧完成单没有接单编号时，问题反馈仍精确绑定负责人、问题和版本', t => {
+test('旧完成单没有接单编号时仍可读取原问题记录，但不能新增反馈', t => {
   const f = fixture(t), order = f.order()
   f.claim(order); f.submit(order); f.action(order, 'review-pass')
   const state = f.snapshot(), legacy = state.orders.find(row => row.id === order.id)
@@ -229,19 +246,20 @@ test('旧完成单没有接单编号时，问题反馈仍精确绑定负责人�
   f.service.db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(state))
   const problem = f.action(order, 'problem-open').problem
   assert.equal(f.current(order).assignmentId, null)
-  f.mutate(`/player/orders/${order.id}/problem-feedback`, { problemId: problem.id, message: '历史单售后反馈' }, f.players[0].id)
-  assert.equal(f.current(order).problem.feedback.length, 1)
-  rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, { problemId: problem.id, message: '错误身份', assignmentId: 'forged' }, f.players[0].id), 'ASSIGNMENT_CONFLICT')
+  rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, { problemId: problem.id, message: '历史单售后反馈' }, f.players[0].id), 'PROBLEM_STAFF_ONLY')
+  assert.equal(f.current(order).problem.feedback.length, 0)
+  rejected(() => f.mutate(`/player/orders/${order.id}/problem-feedback`, { problemId: problem.id, message: '错误身份', assignmentId: 'forged' }, f.players[0].id), 'PROBLEM_STAFF_ONLY')
 })
 
 test('问题通知随接入生成，关闭后旧问题提醒失效，存单恢复和退款解除均通知', t => {
   const f = fixture(t, { notifications: true }), order = f.order()
-  const problem = f.action(order, 'problem-open').problem
   f.claim(order)
+  const problem = f.action(order, 'problem-open').problem
   let rows = f.notices.list(f.players[0].id).records
   const opened = rows.find(row => row.type === 'problem-open')
   assert.ok(opened)
   assert.equal(opened.target.problemId, problem.id)
+  assert.match(opened.body, /客服处理/)
   f.action(order, 'problem-close', { problemId: problem.id })
   rows = f.notices.list(f.players[0].id).records
   assert.ok(rows.find(row => row.id === opened.id).invalidatedAt)
@@ -319,4 +337,74 @@ test('退款暂停和旧全退单不进入可办理退单待办，驳回后恢�
   assert.equal(f.service.ordersPage('admin', { status: 'return-pending' }).total, 0)
   assert.equal(f.service.bootstrap('admin').orderCounts['return-pending'], 0)
   assert.equal(f.snapshot().orders.find(row => row.id === order.id).returnRequests[0].status, 'pending')
+})
+
+test('指定问题单不能接取或拒绝，关闭后新派单提醒与轮次生效，指定存单同样拒写', t => {
+  const f = fixture(t, { notifications: true }), order = f.order()
+  f.action(order, 'dispatch', { dispatchMode: 'direct', assignedTo: f.players[0].id })
+  const initial = f.notices.list(f.players[0].id).records.find(row => row.type === 'assigned')
+  assert.ok(initial)
+  const originalIntent = f.intent(order), problem = f.action(order, 'problem-open').problem
+  rejected(() => f.claim(order), 'ORDER_PROBLEM')
+  rejected(() => f.mutate(`/player/orders/${order.id}/reject`, { reason: '问题期间拒绝' }, f.players[0].id), 'ORDER_PROBLEM')
+  assert.equal((f.current(order).rejections || []).length, 0)
+  assert.ok(f.notices.list(f.players[0].id).records.find(row => row.id === initial.id).invalidatedAt)
+  f.mutate(`/orders/${order.id}/action`, { action: 'problem-close', problemId: problem.id, reason: '客服已解决' }, f.support.id)
+  rejected(() => f.service.mutate(f.players[0].id, `/player/orders/${order.id}/claim`, { ...originalIntent, requestId: randomUUID() }))
+  assert.ok(f.current(order).dispatchRound > originalIntent.dispatchRound)
+  assert.ok(f.notices.list(f.players[0].id).records.some(row => row.type === 'assigned' && row.id !== initial.id && !row.invalidatedAt))
+  f.action(order, 'store')
+  assert.throws(() => f.mutate(`/player/orders/${order.id}/reject`, { reason: '存单期间拒绝' }, f.players[0].id), error => error.status === 403)
+  assert.equal(f.current(order).assignedTo, f.players[0].id)
+})
+
+test('恢复存单不会解除问题只读，客服关闭后仍沿用原免名额及退款限制', t => {
+  const f = fixture(t), order = f.order()
+  f.claim(order); f.action(order, 'store')
+  const problem = f.action(order, 'problem-open').problem
+  f.action(order, 'resume')
+  assert.equal(f.current(order).capacityExempt, true)
+  assert.equal(f.current(order).playerOperationBlockedReason.code, 'ORDER_PROBLEM')
+  rejected(() => f.submit(order), 'ORDER_PROBLEM')
+  f.mutate(`/orders/${order.id}/action`, { action: 'problem-close', problemId: problem.id, reason: '客服处理完成' }, f.support.id)
+  assert.equal(f.service.playerOrderDetail(f.players[0].id, order.id).canSubmit, true)
+  assert.equal(f.current(order).countsTowardsCapacity, false)
+  const another = f.action(order, 'problem-open').problem
+  f.refund(order, 2000, f.support.id)
+  f.mutate(`/orders/${order.id}/action`, { action: 'problem-close', problemId: another.id, reason: '客服已处理问题，退款仍审批中' }, f.support.id)
+  assert.equal(f.current(order).playerOperationBlockedReason.code, 'REFUND_PENDING')
+  rejected(() => f.submit(order), 'REFUND_PENDING')
+})
+
+test('旧问题反馈记录和提醒可只读回看，新规则不清历史也不引导打手继续反馈', t => {
+  const f = fixture(t, { notifications: true }), order = f.order()
+  f.claim(order)
+  f.action(order, 'problem-open')
+  const state = f.snapshot(), legacy = state.orders.find(row => row.id === order.id)
+  legacy.problem.feedback.push({ id: 'old-feedback', userId: f.players[0].id, userName: '原打手', message: '旧版已提交反馈', createdAt: order.createdAt })
+  f.service.db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(state))
+  f.service.db.prepare("UPDATE player_notifications SET body='请继续提交处理反馈' WHERE order_id=? AND type='problem-open'").run(order.id)
+  const view = f.service.playerOrderDetail(f.players[0].id, order.id)
+  assert.equal(view.problem.feedback[0].message, '旧版已提交反馈')
+  assert.equal(view.playerOperationBlockedReason.code, 'ORDER_PROBLEM')
+  const notice = f.notices.list(f.players[0].id).records.find(row => row.type === 'problem-open')
+  assert.match(notice.body, /客服处理/)
+  assert.doesNotMatch(notice.body, /提交处理反馈/)
+  assert.equal(f.snapshot().orders.find(row => row.id === order.id).problem.feedback.length, 1)
+})
+
+test('存单及问题只读限制在原成功请求重放之前检查，历史接单仅允许GET核对', t => {
+  const f = fixture(t), order = f.order(), body = { ...f.intent(order), requestId: randomUUID() }
+  const path = `/player/orders/${order.id}/claim`
+  f.service.mutate(f.players[0].id, path, body)
+  f.action(order, 'store')
+  const revision = f.current(order).revision
+  rejected(() => f.service.mutate(f.players[0].id, path, body), 'ORDER_STORED')
+  assert.equal(f.current(order).revision, revision)
+  assert.equal(f.service.playerOperationResult(f.players[0].id, body.requestId, 'claim').status, 'succeeded')
+  f.action(order, 'resume')
+  const problem = f.action(order, 'problem-open').problem
+  rejected(() => f.service.mutate(f.players[0].id, path, body), 'ORDER_PROBLEM')
+  assert.equal(f.current(order).problem.id, problem.id)
+  assert.equal(f.current(order).assignments.length, 1)
 })

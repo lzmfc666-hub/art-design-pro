@@ -27,7 +27,7 @@
           ? '接单权限已关闭，已有任务仍可提交。'
           : '当前执行名额已满，暂停新增接单。已有任务仍可查看，待验收后释放名额。'
       }}</div>
-      <OperationState :operation="claimOperation.operation.value" :online="resource.online.value && !busy" @check="checkClaim" @retry="retryClaim" />
+      <OperationState :operation="claimOperation.operation.value" :online="resource.online.value && !busy" :allow-retry="claimRetryAllowed" @check="checkClaim" @retry="retryClaim" />
       <PlayerState
         :loading="resource.loading.value && !resource.data.value"
         :error="resource.error.value || profile.error.value || actionError"
@@ -57,6 +57,7 @@
   import type { PlayerOrder, PlayerProfile, PlayerOrderPage, PlayerOrderQuery } from '@/types/player'
   import { captureOperation, operationMessage, usePlayerOperation } from '@/api/operations'
   import { dispatchTarget } from '@/api/orderTarget'
+  import { playerOrderBlockedReason } from '@/api/orderAccess'
   import { invalidatePlayerReads } from '@/api/readScheduler'
   import { usePlayerResource } from './usePlayer'
   import PlayerIcon from './PlayerIcon.vue'
@@ -76,6 +77,15 @@
   )
   const profile = usePlayerResource<PlayerProfile | null>(playerApi.profile, null, true, { topics: ['profile', 'orders'] })
   const claimOperation = usePlayerOperation('claim')
+  const claimRetryAllowed = computed(() => {
+    if (resource.stale.value || !resource.data.value) return false
+    const match = claimOperation.operation.value?.path.match(/^player\/orders\/([^/]+)\/claim$/)
+    if (!match) return false
+    let id: string
+    try { id = decodeURIComponent(match[1]!) } catch { return false }
+    const current = resource.data.value.records.find(order => order.id === id)
+    return !!current && current.canClaim === true && !playerOrderBlockedReason(current)
+  })
   const filters: { value: PlayerOrderQuery['scope']; label: string }[] = [
     { value: 'all', label: '全部' },
     { value: 'direct', label: '指定给我' },
@@ -111,7 +121,7 @@
     busy.value = snapshot.id
     actionError.value = ''
     try {
-      if (!resource.online.value || resource.stale.value || snapshot.canClaim !== true) {
+      if (!resource.online.value || resource.stale.value || snapshot.canClaim !== true || playerOrderBlockedReason(snapshot)) {
         actionError.value = '请刷新订单状态后重新确认'
         return
       }
@@ -133,7 +143,7 @@
     finally { busy.value = '' }
   }
   async function retryClaim() {
-    if (busy.value) return
+    if (busy.value || !claimRetryAllowed.value) return
     busy.value = 'retrying'
     try {
       const result = await claimOperation.retryOriginal()

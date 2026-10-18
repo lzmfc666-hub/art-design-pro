@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import webpush from 'web-push'
 import { ApiError, permissionsFor, playerAccess } from './studio.mjs'
 import { claimEligibility } from './order-contract.mjs'
-import { orderLifecycle, orderExecutable, createLifecycleContext } from './order-lifecycle.mjs'
+import { orderLifecycle, playerOrderExecutable, createLifecycleContext } from './order-lifecycle.mjs'
 
 const fail = (message, status = 400) => {
   throw new ApiError(message, status)
@@ -36,7 +36,7 @@ const publicNotice = (row) => ({
   id: row.id,
   type: row.type,
   title: row.title,
-  body: row.body,
+  body: row.type === 'problem-open' ? '订单已暂停打手操作，由后台客服处理；可查看问题及处理记录。' : row.body,
   orderId: row.order_id || null,
   target: publicTarget(row),
   href: row.href,
@@ -207,7 +207,7 @@ export function createPlayerNotifications(
     users: new Map(snapshot.users.map((row) => [row.id, row])),
     orders: new Map(snapshot.orders.map((row) => [row.id, row])),
     pendingCounts: snapshot.orders.reduce((result, order) => {
-      if (orderExecutable(snapshot, order, lifecycle) && order.status === 'pending' && order.assignedTo && order.dispatchState !== 'unassigned')
+      if (playerOrderExecutable(snapshot, order, lifecycle) && order.status === 'pending' && order.assignedTo && order.dispatchState !== 'unassigned')
         result.set(order.assignedTo, (result.get(order.assignedTo) || 0) + 1)
       return result
     }, new Map()),
@@ -254,7 +254,7 @@ export function createPlayerNotifications(
       return false
     }
     if (!expected || expected.dispatchToken !== dispatchToken(order)) return false
-    if (!orderExecutable(index.snapshot, order) || order.status !== 'pending' || order.dispatchState === 'unassigned' || order.leaderId)
+    if (!playerOrderExecutable(index.snapshot, order) || order.status !== 'pending' || order.dispatchState === 'unassigned' || order.leaderId)
       return false
     if (row.type === 'assignment-timeout')
       return (
@@ -373,7 +373,7 @@ export function createPlayerNotifications(
   }
   const playerTarget = (orderId) => `/#/player/orders/${encodeURIComponent(orderId)}`
   const schedule = (order, snapshot, timestamp) => {
-    if (!orderExecutable(snapshot, order) || order.status !== 'pending' || order.dispatchState === 'unassigned' || order.leaderId) return
+    if (!playerOrderExecutable(snapshot, order) || order.status !== 'pending' || order.dispatchState === 'unassigned' || order.leaderId) return
     const token = dispatchToken(order)
     const add = (type, levelId, dueAt) =>
       db
@@ -459,7 +459,8 @@ export function createPlayerNotifications(
         dispatchToken(old) !== dispatchToken(order) ||
         old.dispatchState !== order.dispatchState ||
         old.leaderId !== order.leaderId ||
-        orderLifecycle(before, old).displayStatus !== orderLifecycle(after, order).displayStatus
+        orderLifecycle(before, old).displayStatus !== orderLifecycle(after, order).displayStatus ||
+        orderLifecycle(before, old).playerOperationBlockedReason?.code !== orderLifecycle(after, order).playerOperationBlockedReason?.code
       if (changedDispatch) {
         invalidateRows(
           db
@@ -473,7 +474,7 @@ export function createPlayerNotifications(
         db.prepare(
           "UPDATE player_notification_candidates SET status='obsolete' WHERE order_id=? AND status='pending' AND dispatch_token<>?"
         ).run(order.id, dispatchToken(order))
-        if (!orderExecutable(after, order) || order.status !== 'pending' || order.dispatchState === 'unassigned' || order.leaderId)
+        if (!playerOrderExecutable(after, order) || order.status !== 'pending' || order.dispatchState === 'unassigned' || order.leaderId)
           db.prepare(
             "UPDATE player_notification_candidates SET status='obsolete' WHERE order_id=? AND status='pending'"
           ).run(order.id)
@@ -483,7 +484,7 @@ export function createPlayerNotifications(
       }
       if (
         changedDispatch &&
-        orderExecutable(after, order) &&
+        playerOrderExecutable(after, order) &&
         order.status === 'pending' &&
         order.dispatchMode === 'direct' &&
         order.assignedTo &&
@@ -506,7 +507,7 @@ export function createPlayerNotifications(
       if (old && oldLifecycle.displayStatus !== lifecycle.displayStatus &&
           (['stored', 'refunded', 'refund-pending'].includes(lifecycle.displayStatus) || oldLifecycle.stored || oldLifecycle.refundPending)) {
         const type = lifecycle.stored && !lifecycle.fullRefund && !lifecycle.refundPending ? 'order-stored' : oldLifecycle.stored && !lifecycle.stored && !lifecycle.executionBlockedReason ? 'order-resumed' : 'refund-result'
-        const title = type === 'order-stored' ? '订单已存单' : type === 'order-resumed' ? '存单已恢复，请继续任务' : lifecycle.fullRefund ? '订单已全额退款' : lifecycle.refundPending ? '订单退款审批中，暂时停止执行' : '订单退款暂停已解除'
+        const title = type === 'order-stored' ? '订单已存单' : type === 'order-resumed' ? '存单已恢复，请核对任务状态' : lifecycle.fullRefund ? '订单已全额退款' : lifecycle.refundPending ? '订单退款审批中，暂时停止执行' : '订单退款暂停已解除'
         for (const userId of new Set([...related, old.leaderId, old.teammateId].filter(Boolean)))
           insert({ userId, key: `${type}:${order.id}:${order.revision}`, type, title, body: '请打开任务核对当前状态与处理说明。', orderId: order.id, href: playerTarget(order.id), timestamp, index,
             target: { dispatchRound: order.dispatchRound, assignmentId: order.assignmentId || old.assignmentId, submissionId: null } })
@@ -515,7 +516,7 @@ export function createPlayerNotifications(
       if (order.problem?.status === 'open') {
         for (const userId of related) {
           if (old?.problem?.id === order.problem.id && old.problem.status === 'open' && old.assignmentId === order.assignmentId && old.dispatchRound === order.dispatchRound && [old.leaderId, old.teammateId].includes(userId)) continue
-          insert({ userId, key: `problem:${order.problem.id}:${order.dispatchRound}:${order.assignmentId || ''}`, type: 'problem-open', title: '订单有待处理的问题', body: '请打开问题单查看原因并提交处理反馈。', orderId: order.id, href: playerTarget(order.id), timestamp, index,
+          insert({ userId, key: `problem:${order.problem.id}:${order.dispatchRound}:${order.assignmentId || ''}`, type: 'problem-open', title: '订单有待处理的问题', body: '订单已暂停打手操作，由后台客服处理；可查看问题及处理记录。', orderId: order.id, href: playerTarget(order.id), timestamp, index,
             target: { dispatchRound: order.dispatchRound, assignmentId: order.assignmentId, submissionId: null, problemId: order.problem.id } })
         }
       } else if (order.problem?.status === 'closed' && old?.problem?.status === 'open' && old.problem.id === order.problem.id) {
@@ -675,7 +676,7 @@ export function createPlayerNotifications(
         if (processed >= budget) break
         const order = index.orders.get(candidate.order_id)
         if (
-          !order || !orderExecutable(index.snapshot, order) ||
+          !order || !playerOrderExecutable(index.snapshot, order) ||
           candidate.dispatch_token !== dispatchToken(order) ||
           order.status !== 'pending' ||
           order.dispatchState === 'unassigned' ||
