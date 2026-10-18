@@ -50,6 +50,7 @@ export interface PlayerOrder {
   assignmentId?: string | null
   submissionId?: string | null
   canSubmit?: boolean
+  payOnArrival?: boolean
   paymentConfirmed?: boolean
   claimBlockedReason?: { code: string; message: string } | null
   submitBlockedReason?: { code: string; message: string } | null

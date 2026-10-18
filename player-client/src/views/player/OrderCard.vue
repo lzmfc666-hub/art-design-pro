@@ -8,6 +8,7 @@
           : orderStatus[order.displayStatus || order.status]
       }}</span>
     </div>
+    <ArrivalPaymentNotice :order="order" />
     <div class="p-order-card-main">
       <div class="p-order-thumb" aria-hidden="true">
         <PrivateImage v-if="appearance.orderCardImage && failedImageKey !== appearance.playerImageKey"
@@ -114,6 +115,7 @@
   import PrivateImage from './PrivateImage.vue'
   import { playerOrderBlockedReason } from '@/api/orderAccess'
   import { effectiveOrderReward } from '@/api/orderPresentation'
+  import ArrivalPaymentNotice from './ArrivalPaymentNotice.vue'
   const props = defineProps<{
     order: PlayerOrder
     claim?: boolean

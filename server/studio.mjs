@@ -1103,6 +1103,7 @@ export function createStudioService({
       assignmentId: order.assignmentId,
       submissionId: order.submissionId,
       playerRemark: order.playerRemark || '',
+      payOnArrival: !historyOnly && Boolean(order.payOnArrival),
       paymentConfirmed: paymentConfirmed(order),
       canClaim: !historyOnly && eligibility.canClaim,
       claimBlockedReason: eligibility.reasonCode

@@ -15,6 +15,7 @@
       <div v-if="targetChanged && !order.historyOnly && !readOnlyReason" class="p-notice p-warning" role="status"><p>订单已变化，请重新确认。已填写内容暂时保留，确认前不会提交到新一轮任务。</p><button type="button" class="p-btn p-secondary" :disabled="busy || uploading || hasPendingOperation" @click="reconfirm">重新确认当前订单</button></div>
       <p v-if="resource.stale.value && resource.online.value" class="p-notice p-info">正在核对最新订单，请等待刷新完成后再操作。</p>
       <p v-if="profile.data.value && profile.data.value.activeOrders >= profile.data.value.maxActiveOrders" class="p-notice p-info">当前执行 {{ profile.data.value.activeOrders }} / {{ profile.data.value.maxActiveOrders }} 单，暂停新增接单。已有任务仍可查看，退单待处理继续占名额。</p>
+      <ArrivalPaymentNotice :order="order" />
       <div class="p-card p-detail-hero"
         ><div class="p-row"
           ><span class="p-order-no">{{ order.orderNo }}</span
@@ -259,6 +260,7 @@ import PlayerState from './PlayerState.vue'
 import PlayerIcon from './PlayerIcon.vue'
 import OperationState from './OperationState.vue'
 import PrivateImage from './PrivateImage.vue'
+import ArrivalPaymentNotice from './ArrivalPaymentNotice.vue'
 
 const route = useRoute(), studio = useSessionStore()
 const viewEpoch = studio.epoch
