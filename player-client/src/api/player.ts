@@ -1,4 +1,5 @@
 import { studioRequest, uploadStudioImage } from './studio'
+import { dailyPlayerOrderPage, isDailyPlayerOrder } from './orderPresentation'
 import type { Attachment, Staff } from '@/types/studio'
 import type {
   PlayerOrder,
@@ -46,14 +47,14 @@ export const playerApi = {
   logout: () => studioRequest('logout', {}, 'POST'),
   profile: (signal?: AbortSignal) => studioRequest<PlayerProfile>('player/profile', undefined, 'GET', signal),
   appearance: (signal?: AbortSignal) => studioRequest<PlayerAppearance>('player/appearance', undefined, 'GET', signal),
-  orders: (signal?: AbortSignal) => studioRequest<PlayerOrder[]>('player/orders', undefined, 'GET', signal),
-  ordersPage: (query: PlayerOrderQuery, signal?: AbortSignal) => {
+  orders: async (signal?: AbortSignal) => (await studioRequest<PlayerOrder[]>('player/orders', undefined, 'GET', signal)).filter(isDailyPlayerOrder),
+  ordersPage: async (query: PlayerOrderQuery, signal?: AbortSignal) => {
     const params = new URLSearchParams({ current: String(query.current), size: String(query.size), scope: query.scope })
     if (query.status) params.set('status', query.status)
     if (query.keyword) params.set('keyword', query.keyword)
     if (query.sortBy) params.set('sortBy', query.sortBy)
     if (query.sortOrder) params.set('sortOrder', query.sortOrder)
-    return studioRequest<PlayerOrderPage>(`player/orders?${params}`, undefined, 'GET', signal)
+    return dailyPlayerOrderPage(await studioRequest<PlayerOrderPage>(`player/orders?${params}`, undefined, 'GET', signal))
   },
   changes: (since?: string | number, signal?: AbortSignal) =>
     studioRequest<PlayerChanges>(`player/changes${since === undefined ? '' : `?since=${encodeURIComponent(since)}`}`, undefined, 'GET', signal),

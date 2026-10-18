@@ -12,7 +12,7 @@
       <RouterLink class="p-btn p-secondary" to="/player/lobby">返回订单大厅</RouterLink>
     </div>
     <template v-if="order">
-      <div v-if="targetChanged && !order.historyOnly" class="p-notice p-warning" role="status"><p>订单已变化，请重新确认。已填写内容暂时保留，确认前不会提交到新一轮任务。</p><button type="button" class="p-btn p-secondary" :disabled="busy || uploading || hasPendingOperation" @click="reconfirm">重新确认当前订单</button></div>
+      <div v-if="targetChanged && !order.historyOnly && !readOnlyReason" class="p-notice p-warning" role="status"><p>订单已变化，请重新确认。已填写内容暂时保留，确认前不会提交到新一轮任务。</p><button type="button" class="p-btn p-secondary" :disabled="busy || uploading || hasPendingOperation" @click="reconfirm">重新确认当前订单</button></div>
       <p v-if="resource.stale.value && resource.online.value" class="p-notice p-info">正在核对最新订单，请等待刷新完成后再操作。</p>
       <p v-if="profile.data.value && profile.data.value.activeOrders >= profile.data.value.maxActiveOrders" class="p-notice p-info">当前执行 {{ profile.data.value.activeOrders }} / {{ profile.data.value.maxActiveOrders }} 单，暂停新增接单。已有任务仍可查看，退单待处理继续占名额。</p>
       <div class="p-card p-detail-hero"
@@ -25,7 +25,8 @@
           }}</span></div
         ><h2>{{ order.title }}</h2
         ><div class="p-reward"
-          ><small>订单总报酬</small><strong>¥ {{ money(order.reward) }}</strong></div
+          ><small>订单总报酬</small><strong>¥ {{ money(effectiveOrderReward(order)) }}</strong></div
+        ><p v-if="order.effectiveReward !== undefined && effectiveOrderReward(order) !== order.reward" class="p-hint">原订单报酬（历史）¥ {{ money(order.reward) }}。当前报酬按后台结算记录显示，特殊报酬请联系财务核对。</p
         ></div
       >
       <div v-if="order.historyOnly" class="p-card p-info" role="status">
@@ -141,8 +142,8 @@
             }}</option></select
           ></label
         ><p v-if="teammateId" class="p-notice p-info"
-          >双人平分：负责人 ¥{{ money(Math.ceil(order.reward / 2)) }}，队友 ¥{{
-            money(Math.floor(order.reward / 2))
+          >双人平分：负责人 ¥{{ money(Math.ceil(effectiveOrderReward(order) / 2)) }}，队友 ¥{{
+            money(Math.floor(effectiveOrderReward(order) / 2))
           }}。由财务核对。</p
         ><button
           class="p-btn p-primary p-full"
@@ -249,6 +250,7 @@ import type { PlayerOrder, PlayerProfile } from '@/types/player'
 import { captureOperation, usePlayerOperation, operationMessage } from '@/api/operations'
 import { assignmentTarget, dispatchTarget, orderSnapshot, orderTargetKey } from '@/api/orderTarget'
 import { playerOrderBlockedReason } from '@/api/orderAccess'
+import { effectiveOrderReward } from '@/api/orderPresentation'
 import { invalidatePlayerReads } from '@/api/readScheduler'
 import { readOrderDraft, saveOrderDraft, clearOrderDraft } from '@/stores/orderDrafts'
 import { safeApiMessage, isAbortError } from '@/api/studio'

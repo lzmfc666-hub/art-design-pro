@@ -19,6 +19,12 @@ export interface PlayerOrder {
   orderNo: string
   title: string
   reward: number
+  effectiveReward?: number
+  rewardDisposition?: {
+    mode: 'zero-unsettled' | 'preserve-settled'
+    trigger: 'cancel' | 'full-refund'
+    policyVersion: number
+  } | null
   status: OrderStatus
   displayStatus?: OrderStatus | 'stored' | 'refunded' | 'refund-pending'
   fullRefund?: boolean

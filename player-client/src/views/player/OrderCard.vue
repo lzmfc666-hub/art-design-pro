@@ -1,5 +1,5 @@
 <template>
-  <article class="p-card p-order-card">
+  <article v-if="order.status !== 'canceled'" class="p-card p-order-card">
     <div class="p-order-card-header">
       <OrderNumber :order-no="order.orderNo" />
       <span class="p-badge" :class="order.displayStatus || order.status">{{
@@ -80,7 +80,7 @@
     }}</p>
     <div class="p-row p-order-footer p-order-footer-actions">
       <div class="p-reward"
-        ><small>订单报酬</small><strong>¥ {{ money(order.reward) }}</strong></div
+        ><small>订单报酬</small><strong>¥ {{ money(effectiveOrderReward(order)) }}</strong></div
       >
       <span v-if="order.historyOnly" class="p-muted">历史摘要</span>
       <div v-else-if="claim" class="p-order-action-group"
@@ -113,6 +113,7 @@
   import { useAppearanceStore } from '@/stores/appearance'
   import PrivateImage from './PrivateImage.vue'
   import { playerOrderBlockedReason } from '@/api/orderAccess'
+  import { effectiveOrderReward } from '@/api/orderPresentation'
   const props = defineProps<{
     order: PlayerOrder
     claim?: boolean
