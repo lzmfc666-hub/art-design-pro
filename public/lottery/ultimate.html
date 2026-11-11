@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f2e4fb">
+  <title>终极大转盘 · 金小盾电竞</title>
+  <meta name="description" content="金小盾电竞终极大转盘，三角洲护航专属福利。">
+  <link rel="stylesheet" href="./wheel-page.css?v=20261026-full">
+  <script defer src="./vendor/lucky-canvas.umd.js"></script>
+  <script defer src="./wheel-page.js"></script>
+</head>
+<body class="wheel-page" data-tier="ultimate-large">
+  <div class="page-backdrop" aria-hidden="true">
+    <span class="ambient-haze"></span>
+    <span class="ambient-bloom bloom-top"></span>
+    <span class="ambient-bloom bloom-bottom"></span>
+    <span class="ambient-spark spark-one"></span>
+    <span class="ambient-spark spark-two"></span>
+    <span class="ambient-spark spark-three"></span>
+    <span class="ambient-spark spark-four"></span>
+  </div>
+  <header class="brand-bar"><div class="brand-bar-inner">
+    <a class="brand-logo" href="./index.html" aria-label="金小盾电竞首页">金小盾电竞<span aria-hidden="true">®</span></a>
+    <span class="brand-chevrons" aria-hidden="true">❯❯❯ ❮❮❮</span>
+    <span class="brand-caption">三角洲行动护航</span>
+  </div></header>
+  <main class="campaign"><div class="campaign-grid">
+    <section class="hero" aria-labelledby="campaign-title">
+      <header class="campaign-heading">
+        <h1 id="campaign-title" class="title-sticker" data-text="终极大转盘" aria-label="终极大转盘"><span aria-hidden="true">终极大转盘</span></h1>
+        <p class="subtitle-sticker">三角洲护航专属福利</p>
+      </header>
+      <div class="stage">
+        <img class="operator operator-beret" src="./assets/operator-beret.png" alt="银发贝雷帽面罩女干员" width="1402" height="1122" fetchpriority="high">
+        <img class="operator operator-ponytail" src="./assets/operator-ponytail.png" alt="银灰马尾女干员" width="1230" height="1278">
+        <img class="operator operator-heavy" src="./assets/operator-heavy.png" alt="黑重装橙面甲干员" width="1175" height="1338">
+        <span class="decoration bolt bolt-one" aria-hidden="true">ϟ</span>
+        <span class="decoration bolt bolt-two" aria-hidden="true">ϟ</span>
+        <span class="decoration star star-one" aria-hidden="true">✦</span>
+        <span class="decoration star star-two" aria-hidden="true">✧</span>
+        <span class="go-sticker" aria-hidden="true">GO!<br>抽奖!</span>
+        <div class="wheel-assembly">
+          <span class="wheel-pointer" aria-hidden="true"></span>
+          <div class="wheel-rim">
+            <div id="my-lucky" role="img" aria-label="六格转盘，奖项加载中"></div>
+            <button class="wheel-center" type="button" data-spin aria-label="开始抽奖" disabled>抽奖<span aria-hidden="true">✦</span></button>
+          </div>
+          <i class="rim-bolt bolt-a" aria-hidden="true"></i><i class="rim-bolt bolt-b" aria-hidden="true"></i>
+          <i class="rim-bolt bolt-c" aria-hidden="true"></i><i class="rim-bolt bolt-d" aria-hidden="true"></i>
+        </div>
+      </div>
+    </section>
+    <aside class="info-rail" aria-label="活动信息">
+      <h2 class="rail-title"><span aria-hidden="true">●</span> 抽奖信息</h2>
+      <section class="draw-controls" aria-label="立即抽奖">
+        <form class="redemption-form" id="redemption-form" autocomplete="off">
+          <label for="redemption-code">客服兑换码</label>
+          <div class="redemption-input-row">
+            <input id="redemption-code" name="code" type="text" maxlength="96" placeholder="请输入本类目的兑换码" autocomplete="off" autocapitalize="off" spellcheck="false" required aria-describedby="code-status">
+            <button type="submit" id="redeem-button">验证</button>
+          </div>
+          <p class="code-status" id="code-status" role="status" aria-live="polite">请输入客服发送的兑换码</p>
+          <p class="code-expiry" id="code-expiry" aria-live="off" hidden></p>
+        </form>
+        <p class="remaining-line"><span class="ticket-icon" aria-hidden="true">▱</span><span>剩余抽奖次数：</span><strong data-remaining>—</strong><span>次</span></p>
+        <button class="spin-button" type="button" data-spin disabled><span aria-hidden="true">ϟ</span> 立即抽奖 <span aria-hidden="true">✦</span></button>
+        <p class="draw-feedback" id="draw-feedback" role="status" aria-live="polite"></p>
+      </section>
+      <section class="info-panel prizes-panel" aria-labelledby="prizes-title">
+        <h2 class="section-heading" id="prizes-title"><span aria-hidden="true">✦</span> 我的奖品</h2>
+        <ul class="prize-list" id="my-prizes"></ul>
+      </section>
+      <section class="info-panel broadcast-panel" aria-labelledby="broadcast-title" hidden>
+        <h2 class="section-heading" id="broadcast-title"><span aria-hidden="true">✦</span> 中奖播报</h2>
+        <ul class="broadcast-list" id="broadcasts"></ul>
+      </section>
+      <section class="info-panel rules-panel" aria-labelledby="rules-title">
+        <h2 class="section-heading" id="rules-title"><span aria-hidden="true">▤</span> 活动规则</h2>
+        <ol class="rules-list" id="activity-rules"></ol>
+      </section>
+    </aside>
+    <section class="recommendations" id="recommendations" aria-labelledby="recommendations-title" hidden>
+      <h2 class="recommendations-title" id="recommendations-title"><span aria-hidden="true">ϟ</span> 热门护航套餐推荐 <span aria-hidden="true">✦</span></h2>
+      <div class="recommendation-grid" id="recommendation-grid"></div>
+    </section>
+  </div></main>
+  <nav class="tier-navigation" aria-label="选择转盘">
+    <a href="./index.html" data-tier-link="special-small">特惠小转盘</a>
+    <a href="./medium.html" data-tier-link="special-medium">特惠中转盘</a>
+    <a href="./large.html" data-tier-link="value-large">超值大转盘</a>
+    <a href="./ultimate.html" data-tier-link="ultimate-large" aria-current="page">终极大转盘</a>
+  </nav>
+  <footer class="page-footer">金小盾电竞 · 三角洲行动护航<small class="page-disclaimer">最终解释权归金小盾电竞所有</small></footer>
+</body>
+</html>

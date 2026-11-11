@@ -1,0 +1,51 @@
+{
+  "format": "studio-ops-config-v1",
+  "environment": "local",
+  "mode": "internal",
+  "intervalMs": 60000,
+  "failureThreshold": 3,
+  "recoveryThreshold": 2,
+  "startupGraceMs": 60000,
+  "timeoutMs": 5000,
+  "expectedRelease": null,
+  "credentialEnv": "STUDIO_MONITOR_TOKEN",
+  "endpoints": {
+    "admin": "http://127.0.0.1:3006/",
+    "player": "http://127.0.0.1:3008/",
+    "live": "http://127.0.0.1:3007/api/studio/health/live",
+    "ready": "http://127.0.0.1:3007/api/studio/health/ready",
+    "summary": "http://127.0.0.1:3007/api/studio/ops/summary",
+    "diagnostics": "http://127.0.0.1:3007/api/studio/ops/diagnostics-summary"
+  },
+  "storage": {"dbPath": ".data/studio.sqlite", "opsDir": ".ops", "backupDir": ".data/backups"},
+  "thresholds": {
+    "rssBytes": 1073741824,
+    "p95Ms": 1500,
+    "minimumSamples": 20,
+    "serverErrorRate": 0.05,
+    "minimumRequests": 20,
+    "diskFreeBytes": 1073741824,
+    "walBytes": 268435456,
+    "logBytes": 471859200,
+    "pushDueWaitMs": 300000,
+    "backupAgeMs": 7200000,
+    "replicationAgeMs": 86400000,
+    "certificateDays": 21,
+    "restartCount": 5
+  },
+  "maintenance": [],
+  "diagnostics": {"enabled": false, "hoursUTC": [18], "intervalMs": 86400000},
+  "alerts": {"authorized": false, "targetEnv": "STUDIO_OPS_ALERT_WEBHOOK", "evidencePath": null},
+  "deployment": {
+    "region": null, "provider": null, "domain": null, "os": null,
+    "httpsConfigured": false, "secureCookie": false,
+    "allowedOrigins": [], "trustedProxies": [], "exposedPorts": [],
+    "serviceEvidence": null, "externalMonitorEvidence": null, "firewallEvidence": null
+  },
+  "backups": {
+    "enabled": false, "intervalMinutes": 0, "retentionCount": 7,
+    "directory": ".data/backups", "latestMetadata": null,
+    "replication": {"enabled": false, "kind": "none", "targetId": null, "evidencePath": null}
+  },
+  "recovery": {"evidencePath": null}
+}

@@ -1,0 +1,20 @@
+node_modules
+.DS_Store
+dist
+dist-ssr
+*.local
+.cursorrules
+
+# Auto-generated files
+src/types/import/auto-imports.d.ts
+src/types/import/components.d.ts
+.auto-import.json
+
+# Local studio database, sessions, uploads and initial administrator password
+.data/
+.qa/
+.ops/
+ops-private/
+backups/
+playwright-report/
+/outputs/production-fixes-20261018/

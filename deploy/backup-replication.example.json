@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "kind": "remote",
+  "targetId": "offsite-backup-1",
+  "remoteIdentity": {"host": "storage.example.invalid", "share": "studio-private"},
+  "directory": "\\\\storage.example.invalid\\studio-private\\backups",
+  "timeoutMs": 30000
+}

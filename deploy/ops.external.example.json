@@ -1,0 +1,20 @@
+{
+  "format": "studio-ops-config-v1",
+  "environment": "production",
+  "mode": "external",
+  "intervalMs": 60000,
+  "failureThreshold": 3,
+  "recoveryThreshold": 2,
+  "startupGraceMs": 60000,
+  "timeoutMs": 5000,
+  "monitorLockPort": 3011,
+  "expectedRelease": null,
+  "pageFingerprints": {"admin": null, "player": null},
+  "credentialEnv": null,
+  "endpoints": {"admin": null, "player": null, "live": null, "ready": null, "summary": null, "diagnostics": null},
+  "storage": {"opsDir": ".ops-external"},
+  "maintenance": [],
+  "diagnostics": {"enabled": false, "hoursUTC": [], "intervalMs": 86400000},
+  "alerts": {"authorized": false, "targetEnv": "STUDIO_OPS_ALERT_WEBHOOK", "evidencePath": null},
+  "deployment": {"region": null, "provider": null, "domain": null, "os": null, "externalMonitorEvidence": null}
+}
