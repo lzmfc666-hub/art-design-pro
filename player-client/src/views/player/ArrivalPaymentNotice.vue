@@ -15,6 +15,7 @@
     () =>
       props.order.payOnArrival === true &&
       props.order.paymentConfirmed === false &&
+      props.order.fulfillmentAuthorized !== true &&
       !props.order.historyOnly &&
       ['pending', 'active'].includes(props.order.status) &&
       !props.order.fullRefund &&

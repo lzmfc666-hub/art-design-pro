@@ -1,4 +1,5 @@
 import { effectiveOrderReward } from './order-reward-policy.mjs'
+import { fulfillmentAuthorized } from './order-contract.mjs'
 
 const MAX_ISSUES = 100
 const ORDER_STATUSES = new Set(['pending', 'active', 'review', 'completed', 'canceled'])
@@ -191,9 +192,7 @@ export function buildDiagnosticsReport({
       issue('orders', 'error', 'order', order.id, '已有实收金额但没有有效原付款时间。')
     if (
       order.status === 'completed' &&
-      (order.receivedAmount !== order.amount ||
-        !timestamp(order.paidAt) ||
-        !timestamp(order.completedAt))
+      (!fulfillmentAuthorized(order) || !timestamp(order.completedAt))
     )
       issue('orders', 'error', 'order', order.id, '已完成订单缺少足额收款或有效完成时间。')
     const latest = asRows(order.submissions).at(-1)

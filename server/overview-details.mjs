@@ -208,7 +208,7 @@ export function buildOverviewDetails(snapshots, overview, query, facts = {}) {
     dimension = 'date'
     notes.push('每日经营利润不扣月度底薪；完整月份扣底薪结果以主卡 summary 为准。')
   } else if (metric === 'people') {
-    records = snapshot.users.filter((row) =>
+    records = snapshot.users.filter((row) => row.role !== 'merchant').filter((row) =>
       view === 'current-people' || (view === 'unknown-date' ? !row.createdAt :
         (view === 'new-players' ? row.role === 'player' : row.role !== 'player') &&
         within(dayOf(row.createdAt), range))).map((row) => ({

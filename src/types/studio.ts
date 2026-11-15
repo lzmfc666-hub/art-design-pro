@@ -11,6 +11,7 @@ export type Role =
   | 'admin'
   | 'super_admin'
   | 'player'
+  | 'merchant'
 export type OrderStatus = 'pending' | 'active' | 'review' | 'completed' | 'canceled'
 export type OrderDisplayStatus = OrderStatus | 'stored' | 'refunded' | 'refund-pending'
 export type RefundDestination = 'cash' | 'balance'
@@ -21,6 +22,9 @@ export interface Staff {
   username: string
   name: string
   role: Role
+  merchantId?: string | null
+  merchantRole?: 'owner' | 'support'
+  deletedAt?: string | null
   status: 'active' | 'disabled'
   levelId?: string
   maxActiveOrders: number
@@ -87,6 +91,37 @@ export interface OrderTemplate {
   map: string
   remark: string
   active: boolean
+  merchantId?: string | null
+  merchantCustomerAmount?: number | null
+  revision?: number
+}
+export interface Merchant {
+  id: string
+  name: string
+  status: 'active' | 'disabled'
+  customerId?: string
+  platformId?: string
+  ownerUserId?: string | null
+}
+export interface MerchantOverview {
+  range: { start?: string; end?: string }
+  generatedAt: string
+  summary: {
+    orders: number
+    pending: number
+    active: number
+    review: number
+    completed: number
+    canceled: number
+    stored: number
+    refunded: number
+    refundPending: number
+    merchantCustomerAmount: number
+    receivableAmount: number
+    receivedAmount: number
+    outstandingAmount: number
+  }
+  recentOrders: Order[]
 }
 export interface Attachment {
   id: string
@@ -176,6 +211,15 @@ export interface OrderProblem {
 }
 export interface Order {
   id: string
+  merchantId?: string | null
+  merchantCustomerAmount?: number
+  settlementMode?: 'merchant-credit'
+  fulfillmentAuthorized?: boolean
+  merchantFinancials?: {
+    receivableAmount: number
+    receivedAmount: number
+    outstandingAmount: number
+  }
   revision: number
   dispatchRound: number
   assignmentId: string | null
@@ -544,6 +588,7 @@ export interface RewardReview {
   resolution?: string
 }
 export interface StudioData {
+  merchants?: Merchant[]
   appearance?: AppearanceConfig
   user: Staff
   permissions: string[]
@@ -564,6 +609,13 @@ export interface StudioData {
   payrolls: Payroll[]
   logs: AuditLog[]
   reports: {
+    merchantCredit?: {
+      orders: number
+      receivableAmount: number
+      receivedAmount: number
+      outstandingAmount: number
+      acceptedRewardAmount: number
+    }
     days: DayReport[]
     channels: ChannelReport[]
     performance: Performance[]

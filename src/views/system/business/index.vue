@@ -1,12 +1,13 @@
 <template>
   <div class="business-page">
     <BusinessPageHeader
+      v-if="!merchantTemplates"
       title="业务配置"
       description="维护订单项目、平台店铺和打手等级，新增业务沿用最新配置。"
       icon="ri:gamepad-line"
       badge="历史订单保留快照"
     />
-    <ElCard class="mb-4" shadow="never">
+    <ElCard v-if="!merchantTemplates" class="mb-4" shadow="never">
       <ElTabs v-model="tab" :before-leave="preservePanelHeight"
         ><ElTabPane name="templates" label="订单项目 / 模板" /><ElTabPane
           name="sources"
@@ -46,9 +47,11 @@
                 @click="editTemplate(undefined, 'lottery')"
                 v-ripple
                 >新增转盘单</ElButton
-              ><span class="ml-3 text-sm text-g-500"
-                >空白价格表示待配置，下单时必须填写有效金额。</span
-              ></template
+              ><span class="ml-3 text-sm text-g-500">{{
+                merchantTemplates
+                  ? '集中维护商家约定客户价、金小盾结算价及打手报酬。'
+                  : '空白价格表示待配置，下单时必须填写有效金额。'
+              }}</span></template
             >
           </ArtTableHeader>
           <ArtTable
@@ -61,7 +64,11 @@
             @pagination:current-change="templateTable.handleCurrentChange"
           >
             <template #playType="{ row }">{{ templatePlayLabel(row) }}</template>
-            <template #amount="{ row }">{{ money(row.amount) }}</template
+            <template #amount="{ row }"
+              >{{ money(row.amount)
+              }}<p v-if="row.merchantId" class="text-xs text-g-500"
+                >结算价 · 客户价 {{ money(row.merchantCustomerAmount) }}</p
+              ></template
             ><template #reward="{ row }">{{ money(row.reward) }}</template>
             <template #active="{ row }"
               ><ElTag :type="row.active ? 'success' : 'info'">{{
@@ -190,7 +197,7 @@
           </ArtTable>
         </ElCard>
       </template>
-      <ElCard v-else>
+      <ElCard v-else-if="tab === 'levels'">
         <ArtTableHeader
           v-model:columns="levelColumns.columnChecks.value"
           :loading="loading"
@@ -370,6 +377,21 @@
       >
         <ElForm :disabled="saving" label-position="top" @submit.prevent="save">
           <template v-if="open === 'template'">
+            <ElFormItem label="模板归属商家">
+              <ElSelect
+                v-model="template.merchantId"
+                :clearable="!merchantTemplates"
+                :disabled="merchantTemplates && Boolean(merchantId)"
+                :placeholder="merchantTemplates ? '请选择归属商家' : '留空为内部普通模板'"
+              >
+                <ElOption
+                  v-for="item in data?.merchants || []"
+                  :key="item.id"
+                  :value="item.id"
+                  :label="item.name"
+                />
+              </ElSelect>
+            </ElFormItem>
             <ElFormItem label="项目名称" required
               ><ElInput v-model="template.name" maxlength="100" placeholder="例如 70 788w / 娱乐单"
             /></ElFormItem>
@@ -403,12 +425,23 @@
             /></ElFormItem>
             <ElRow :gutter="16"
               ><ElCol :xs="24" :sm="12"
-                ><ElFormItem label="客户价格（元）"
+                ><ElFormItem
+                  :label="template.merchantId ? '金小盾结算金额（元）' : '客户价格（元）'"
                   ><BusinessAmount v-model="template.amount" /></ElFormItem></ElCol
               ><ElCol :xs="24" :sm="12"
                 ><ElFormItem label="整单打手报酬（元）"
                   ><BusinessAmount v-model="template.reward" /></ElFormItem></ElCol
             ></ElRow>
+            <ElFormItem v-if="template.merchantId" label="客户付款金额（元，模板约定价）" required
+              ><BusinessAmount v-model="template.merchantCustomerAmount"
+            /></ElFormItem>
+            <ElAlert
+              v-if="template.merchantId"
+              title="商家只可选择模板，无法维护价格；打手到手金额仅总后台可见。结算金额不是已确认到账。"
+              type="info"
+              :closable="false"
+              class="mb-4"
+            />
             <ElFormItem label="默认地图"
               ><ElInput v-model="template.map" maxlength="100"
             /></ElFormItem>
@@ -498,6 +531,7 @@
   } from '@/utils/business/platform-rules'
 
   defineOptions({ name: 'BusinessConfig' })
+  const props = defineProps<{ merchantTemplates?: boolean; merchantId?: string }>()
   const { data, user, loading, can, mutate, refresh } = useStudio()
   const canManageLottery = computed(
     () =>
@@ -549,6 +583,7 @@
   const templates = computed(() =>
     (data.value?.templates || []).filter(
       (row) =>
+        templateInScope(row) &&
         row.name.toLowerCase().includes((search.value.name || '').trim().toLowerCase()) &&
         row.game.toLowerCase().includes((search.value.game || '').trim().toLowerCase()) &&
         row.description
@@ -557,6 +592,12 @@
         (!search.value.active || row.active === (search.value.active === 'active'))
     )
   )
+  function templateInScope(row: OrderTemplate) {
+    return (
+      (!props.merchantTemplates || Boolean(row.merchantId)) &&
+      (!props.merchantId || row.merchantId === props.merchantId)
+    )
+  }
   const platforms = computed(() => data.value?.platforms || [])
   const shops = computed(() => data.value?.shops || [])
   const levels = computed(() =>
@@ -584,7 +625,12 @@
     { prop: 'playType', label: '项目玩法', minWidth: 150, useSlot: true },
     { prop: 'game', label: '游戏', minWidth: 140 },
     { prop: 'description', label: '规格 / 目标', minWidth: 200, showOverflowTooltip: true },
-    { prop: 'amount', label: '客户价格', width: 130, useSlot: true },
+    {
+      prop: 'amount',
+      label: props.merchantTemplates ? '金小盾结算金额' : '客户价格',
+      width: 150,
+      useSlot: true
+    },
     { prop: 'reward', label: '整单打手报酬', width: 150, useSlot: true },
     { prop: 'map', label: '默认地图', width: 130 },
     { prop: 'active', label: '状态', width: 90, useSlot: true },
@@ -628,7 +674,9 @@
   }
   const detailTemplate = computed(() =>
     detailTarget.value?.kind === 'template'
-      ? data.value?.templates.find((row) => row.id === detailTarget.value?.id)
+      ? data.value?.templates.find(
+          (row) => row.id === detailTarget.value?.id && templateInScope(row)
+        )
       : undefined
   )
   const detailPlatform = computed(() =>
@@ -652,7 +700,19 @@
   const detailSummary = computed(() =>
     detailTemplate.value
       ? [
-          { label: '客户价格', value: money(detailTemplate.value.amount), tone: 'primary' },
+          {
+            label: detailTemplate.value.merchantId ? '金小盾结算金额' : '客户价格',
+            value: money(detailTemplate.value.amount),
+            tone: 'primary'
+          },
+          ...(detailTemplate.value.merchantId
+            ? [
+                {
+                  label: '客户付款金额（约定）',
+                  value: money(detailTemplate.value.merchantCustomerAmount)
+                }
+              ]
+            : []),
           { label: '整单打手报酬', value: money(detailTemplate.value.reward) },
           { label: '项目状态', value: detailTemplate.value.active ? '启用' : '停用' }
         ]
@@ -686,7 +746,14 @@
               { label: '适用流程', value: '公共抢单池' }
             ]
   )
-  const template = reactive<Omit<OrderTemplate, 'id'> & { id?: string }>({
+  const template = reactive<
+    Omit<OrderTemplate, 'id' | 'merchantCustomerAmount'> & {
+      id?: string
+      merchantCustomerAmount: number | null
+    }
+  >({
+    merchantId: null,
+    merchantCustomerAmount: null,
     name: '',
     playType: 'normal',
     lotteryTier: null,
@@ -713,7 +780,14 @@
   const editingSummary = computed(() =>
     open.value === 'template'
       ? [
-          { label: '客户价格', value: money(template.amount), tone: 'primary' },
+          {
+            label: template.merchantId ? '金小盾结算金额' : '客户价格',
+            value: money(template.amount),
+            tone: 'primary'
+          },
+          ...(template.merchantId
+            ? [{ label: '客户付款金额（约定）', value: money(template.merchantCustomerAmount) }]
+            : []),
           { label: '整单报酬', value: money(template.reward) },
           { label: '保存后状态', value: template.active ? '启用' : '停用' }
         ]
@@ -765,6 +839,10 @@
     const request = pendingRestore.value
     pendingRestore.value = null
     const [kind, id] = (request.recordId || '').split(':')
+    if (props.merchantTemplates && kind !== 'template') {
+      restoreError.value = '请返回当前商家的专属模板列表重新选择。'
+      return
+    }
     if (!['template', 'platform', 'shop', 'level'].includes(kind || '') || !id) {
       restoreError.value = '配置标识无效，请返回业务配置重新选择。'
       return
@@ -778,7 +856,7 @@
     }
     tab.value = kind === 'template' ? 'templates' : kind === 'level' ? 'levels' : 'sources'
     if (kind === 'template') {
-      const row = data.value.templates.find((item) => item.id === id)
+      const row = data.value.templates.find((item) => item.id === id && templateInScope(item))
       if (request.kind === 'edit' && id === 'new') editTemplate()
       else if (!row) restoreError.value = '当前账号没有可读取的订单项目，请返回配置列表。'
       else if (request.kind === 'detail') detailTarget.value = { kind: 'template', id: row.id }
@@ -816,10 +894,13 @@
   function editTemplate(row?: OrderTemplate, playType: 'normal' | 'lottery' = 'normal') {
     if (!can('templates.manage') || saving.value) return
     if ((row?.playType === 'lottery' || playType === 'lottery') && !canManageLottery.value) return
+    if (row && !templateInScope(row)) return
     Object.assign(
       template,
       {
         id: undefined,
+        merchantId: props.merchantTemplates ? props.merchantId || null : null,
+        merchantCustomerAmount: null,
         name: playType === 'lottery' ? '转盘单' : '',
         game: '三角洲行动',
         description: '',
@@ -866,6 +947,14 @@
     open.value = 'level'
   }
   async function save() {
+    if (props.merchantTemplates && props.merchantId && template.merchantId !== props.merchantId) {
+      ElMessage.warning('模板归属与当前选择的商家不一致，请返回列表重试')
+      return
+    }
+    if (props.merchantTemplates && open.value === 'template' && !template.merchantId) {
+      ElMessage.warning('请选择模板归属商家')
+      return
+    }
     if (
       !open.value ||
       saving.value ||

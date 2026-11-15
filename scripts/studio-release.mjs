@@ -15,7 +15,9 @@ export const RUNTIME_CAPABILITIES = Object.freeze([
   'cancel-refund-v1',
   'reward-disposition-v1',
   'refund-destination-v1',
-  'lottery-onetime-v1'
+  'lottery-onetime-v1',
+  'merchant-credit-v1',
+  'merchant-staff-v1'
 ])
 const hash = (value) => createHash('sha256').update(value).digest('hex')
 export function buildFingerprint(directory) {

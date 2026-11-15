@@ -7,6 +7,8 @@ export function conflict(code, message, details) {
 }
 export const paymentConfirmed = (order) =>
   order.receivedAmount > 0 && Boolean(order.paidAt) && order.receivedAmount === order.amount
+export const fulfillmentAuthorized = (order) => paymentConfirmed(order) ||
+  (order.settlementMode === 'merchant-credit' && Boolean(order.merchantId))
 export const activeOrderCount = (state, userId, lifecycle = createLifecycleContext(state)) =>
   state.orders.filter(
     (order) =>
@@ -117,7 +119,7 @@ export function submitEligibility(user, order, state = { refunds: [] }) {
   } else if (order.status !== 'active') {
     code = 'ORDER_NOT_ACTIVE'
     message = '只有接单中订单可以上报'
-  } else if (!paymentConfirmed(order)) {
+  } else if (!fulfillmentAuthorized(order)) {
     code = 'PAYMENT_NOT_CONFIRMED'
     message = '足额收款后才允许正常上报'
   }

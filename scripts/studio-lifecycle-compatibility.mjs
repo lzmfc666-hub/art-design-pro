@@ -4,7 +4,7 @@ import { dirname, relative, resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readReleaseManifest } from './studio-release.mjs'
 
-export const LIFECYCLE_CAPABILITIES = Object.freeze(['refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1', 'problem-staff-only-v1', 'cancel-refund-v1', 'reward-disposition-v1', 'refund-destination-v1', 'lottery-onetime-v1'])
+export const LIFECYCLE_CAPABILITIES = Object.freeze(['refund-execution-v1', 'stored-orders-v1', 'problem-orders-v1', 'problem-staff-only-v1', 'cancel-refund-v1', 'reward-disposition-v1', 'refund-destination-v1', 'lottery-onetime-v1', 'merchant-credit-v1', 'merchant-staff-v1'])
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const failure = (code, message) => Object.assign(new Error(message), { code })
 const publicError = {
@@ -63,9 +63,19 @@ function analyze(state, capabilities, lotteryCounts) {
     terminalCanceledOrders: 0, rewardDispositionOrders: 0,
     lotteryTemplates: 0, lotteryPools: 0, lotteryOrders: 0, ...lotteryCounts }
   const lotteryDefinition = row => row?.playType === 'lottery' || row?.lotteryTier != null
-  for (const field of ['templates', 'lotteryPools'])
+  for (const field of ['templates', 'lotteryPools', 'merchants', 'users'])
     if (state[field] !== undefined && !Array.isArray(state[field]))
       throw failure('DATABASE_INVALID', publicError.DATABASE_INVALID)
+  const merchants = state.merchants || [], users = state.users || []
+  for (const rows of [merchants, users])
+    if (rows.some(row => !row || typeof row !== 'object' || Array.isArray(row)))
+      throw failure('DATABASE_INVALID', publicError.DATABASE_INVALID)
+  // These durable markers outlive individual sessions and order fulfillment.
+  // An older runtime would misread credit permissions or deleted login reuse.
+  if (merchants.length || users.some(row => row.role === 'merchant') ||
+      (state.templates || []).some(row => row?.merchantId)) required.add('merchant-credit-v1')
+  if (merchants.some(row => row.ownerUserId) ||
+      users.some(row => row.role === 'merchant' && row.deletedAt)) required.add('merchant-staff-v1')
   counts.lotteryTemplates = (state.templates || []).filter(lotteryDefinition).length
   counts.lotteryPools = (state.lotteryPools || []).length
   const ids = new Set()
@@ -73,6 +83,7 @@ function analyze(state, capabilities, lotteryCounts) {
     if (!order || typeof order.id !== 'string' || !order.id || ids.has(order.id) || !integer(order.receivedAmount ?? 0))
       throw failure('DATABASE_INVALID', publicError.DATABASE_INVALID)
     ids.add(order.id)
+    if (order.merchantId || order.settlementMode === 'merchant-credit') required.add('merchant-credit-v1')
     if (lotteryDefinition(order.snapshot) || lotteryDefinition(order) ||
         order.lotteryEligible === true || order.lotteryVoidedAt || order.lotteryNote)
       counts.lotteryOrders++

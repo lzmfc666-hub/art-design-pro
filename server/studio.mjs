@@ -33,6 +33,7 @@ import {
   claimEligibility,
   submitEligibility,
   paymentConfirmed,
+  fulfillmentAuthorized,
   activeOrderCount,
   conflict
 } from './order-contract.mjs'
@@ -71,6 +72,7 @@ const ROLES = [
   'operations',
   'support_lead',
   'support',
+  'merchant',
   'admin',
   'super_admin',
   'player'
@@ -104,6 +106,7 @@ const DEFAULT_PERMISSIONS = {
   operations: ['orders.view', 'orders.create', 'salary.view'],
   support_lead: ['orders.view', 'orders.create', 'orders.edit'],
   support: ['orders.view', 'orders.create', 'orders.edit'],
+  merchant: ['orders.view', 'orders.create', 'orders.edit'],
   admin: ['orders.view', 'users.manage', 'templates.manage', 'settings.manage', 'logs.view'],
   player: []
 }
@@ -121,7 +124,7 @@ const COMPLETE_AUDIT_PERMISSIONS = [
   'finance.expenses'
 ]
 for (const [role, permissions] of Object.entries(DEFAULT_PERMISSIONS))
-  if (!['support', 'support_lead'].includes(role) && !permissions.includes('reports.export'))
+  if (!['support', 'support_lead', 'merchant'].includes(role) && !permissions.includes('reports.export'))
     permissions.push('reports.export')
 export class ApiError extends Error {
   constructor(message, status = 400) {
@@ -226,6 +229,8 @@ export function permissionsFor(user) {
     else permissions.delete(key)
   }
   if (['support', 'support_lead'].includes(user.role)) permissions.delete('reports.export')
+  if (user.role === 'merchant')
+    return [...permissions].filter((permission) => DEFAULT_PERMISSIONS.merchant.includes(permission))
   return [...permissions]
 }
 const can = (user, permission) => permissionsFor(user).includes(permission)
@@ -262,6 +267,11 @@ const paidRefunds = (state, orderId) =>
     .reduce((total, r) => total + r.amount, 0)
 const netOrder = (state, order) =>
   Math.max(0, Math.min(order.amount, order.receivedAmount) - paidRefunds(state, order.id))
+const merchantFinancials = (state, order, lifecycle = orderLifecycle(state, order)) => {
+  const receivableAmount = order.status === 'canceled' || lifecycle.fullRefund ? 0 : order.amount
+  const receivedAmount = netOrder(state, order)
+  return { receivableAmount, receivedAmount, outstandingAmount: Math.max(0, receivableAmount - receivedAmount) }
+}
 const paidOrder = (order) => order.receivedAmount > 0 && Boolean(order.paidAt)
 const commission = (amount, configuredRate) =>
   configuredRate == null ? null : Math.round((amount * configuredRate) / 10000)
@@ -283,8 +293,14 @@ const safeProblem = (row) => ({
   feedback: (row.feedback || []).map(({ id, userId, userName, message, createdAt }) => ({ id, userId, userName, message, createdAt })),
   ...(row.closedAt ? { closedAt: row.closedAt, resolution: row.resolution } : {})
 })
-const publicStaff = (state, user, counts) => ({
+const merchantRole = (state, user) => state.merchants?.some((row) =>
+  row.id === user.merchantId && row.ownerUserId === user.id) ? 'owner' : 'support'
+const publicStaff = (state, user, counts) => user.deletedAt ? {
+  id: user.id, name: `${user.name}（已删除）`, role: user.role, merchantId: user.merchantId,
+  merchantRole: merchantRole(state, user), status: 'disabled', deletedAt: user.deletedAt
+} : ({
   ...user,
+  ...(user.role === 'merchant' ? { merchantRole: merchantRole(state, user), deletedAt: null } : {}),
   ...(user.role === 'player' ? { playerAccess: playerAccess(user) } : {}),
   activeOrders: counts ? counts.active.get(user.id) || 0 : activeCount(state, user.id),
   pendingAssignments: counts
@@ -532,6 +548,7 @@ export function createStudioService({
   db.exec(
     'CREATE TABLE IF NOT EXISTS player_private_uploads(attachment_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL)'
   )
+  db.exec('CREATE TABLE IF NOT EXISTS merchant_uploads(attachment_id TEXT PRIMARY KEY REFERENCES uploads(id) ON DELETE CASCADE,merchant_id TEXT NOT NULL)')
   const appearanceFor = (state) => {
     const config = state.appearance || defaultAppearance()
     return {
@@ -627,6 +644,8 @@ export function createStudioService({
     state.workSchedules ||= []
     state.playerPaymentMethods ||= {}
     state.dataVersion ||= 1
+    state.merchants ||= []
+    for (const merchant of state.merchants) merchant.ownerUserId ??= null
     for (const order of state.orders) normalizeOrderIdentity(order)
     // 旧账只登记当前余额快照；不能把已经更正的报酬伪装成原始入账流水。
     state.playerRewardLedger ||= state.rewardCredits.map((row) => ({
@@ -704,8 +723,10 @@ export function createStudioService({
         conflict('PRECONDITION_REQUIRED', '缺少本次操作所属账号，请刷新并重新确认')
       if (authentication.expectedActorId !== undefined && authentication.expectedActorId !== userId)
         conflict('PRINCIPAL_CHANGED', '本次操作所属账号与当前会话不一致，业务未执行，请重新确认')
-      if (user.status !== 'active' || (user.role === 'player' && !playerAccess(user).login))
+      if (user.deletedAt || user.status !== 'active' || (user.role === 'player' && !playerAccess(user).login))
         fail('账号已停用或关闭登录', 403)
+      if (user.role === 'merchant' && !state.merchants.some((row) => row.id === user.merchantId && row.status === 'active'))
+        fail('商家未绑定或已停用', 403)
       const beforeState = onTransaction ? clone(state) : null
       const transaction = { changed: true }
       const result = callback(state, user, transaction)
@@ -731,6 +752,7 @@ export function createStudioService({
     const deleted = image && deletedImageRecord(db, image.id)
     return deleted ? { ...image, retentionStatus: 'deleted', deletedAt: deleted.deleted_at } : image
   }
+  const merchantAttachment = (image) => ({ ...retainedAttachment(image), url: `/api/studio/merchant/uploads/${image.id}` })
   const imageRetentionVersion = () => db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_deletions'").get()
     ? db.prepare('SELECT max(rowid) AS version FROM image_deletions').get().version || 0 : 0
   const publicReference = (row) => ({
@@ -757,6 +779,7 @@ export function createStudioService({
     )
   })
   const requireCustomerAccess = (user, editing = false) => {
+    if (user.role === 'merchant') fail('商家不开放客户资料接口', 403)
     if (
       (user.role === 'player' && !can(user, 'orders.view')) ||
       (!can(user, 'orders.create') &&
@@ -814,7 +837,7 @@ export function createStudioService({
     can(user, 'users.manage') ||
     can(user, 'finance.refunds')
   const requireCustomerAccount = (user) => {
-    if (user.role === 'player' || !customerAccountVisible(user))
+    if (['player', 'merchant'].includes(user.role) || !customerAccountVisible(user))
       fail('没有查看客户储值余额的权限', 403)
   }
   const depositVisible = (user, userId) =>
@@ -822,9 +845,135 @@ export function createStudioService({
   const activeState = (userId) => {
     const state = read(),
       user = find(state, 'users', userId, '账号')
-    if (user.status !== 'active' || (user.role === 'player' && !playerAccess(user).login))
+    if (user.deletedAt || user.status !== 'active' || (user.role === 'player' && !playerAccess(user).login))
       fail('账号已停用或关闭登录', 403)
+    if (user.role === 'merchant' && !state.merchants.some((row) => row.id === user.merchantId && row.status === 'active'))
+      fail('商家未绑定或已停用', 403)
     return { state, user }
+  }
+  const requireMerchantOwner = (state, user) => {
+    if (user.role !== 'merchant' || merchantRole(state, user) !== 'owner')
+      fail('仅商家主账号可以管理本商家客服', 403)
+    return find(state, 'merchants', user.merchantId, '商家')
+  }
+  const accountFields = (body, allowed) => {
+    if (Object.keys(body).some((key) => ![...allowed, 'requestId', 'expectedActorId'].includes(key)))
+      fail('账号操作包含不允许的字段', 400)
+  }
+  const merchantSupport = (state, userId, ownMerchantId, allowDeleted = false) => {
+    const row = find(state, 'users', userId, '客服账号')
+    if (row.role !== 'merchant' || (!allowDeleted && row.deletedAt) || merchantRole(state, row) === 'owner' ||
+        (ownMerchantId && row.merchantId !== ownMerchantId))
+      fail('只能管理本商家未删除的客服账号，不能操作主账号', 403)
+    return row
+  }
+  const accountUsername = (state, value, existingId) => {
+    const username = text(value, '登录名', { required: true, max: 64 })
+    if (!/^[a-zA-Z0-9_.@-]+$/.test(username)) fail('登录名仅支持字母、数字和_.@-')
+    if (state.users.some((row) => !row.deletedAt && row.id !== existingId &&
+        row.username.toLowerCase() === username.toLowerCase())) fail('登录名已存在', 409)
+    return username
+  }
+  function saveMerchantSupport(state, user, body) {
+    const merchant = requireMerchantOwner(state, user)
+    accountFields(body, ['id', 'username', 'name', 'status', 'password'])
+    const existing = body.id ? merchantSupport(state, body.id, merchant.id) : null
+    const row = {
+      ...(existing || {}), id: existing?.id || id(),
+      username: accountUsername(state, body.username ?? existing?.username, existing?.id),
+      name: text(body.name ?? existing?.name, '客服称呼', { required: true, max: 100 }),
+      role: 'merchant', merchantId: merchant.id,
+      status: choice(body.status ?? existing?.status ?? 'active', ['active', 'disabled'], '状态'),
+      maxActiveOrders: existing?.maxActiveOrders || 1,
+      permissionOverrides: existing?.permissionOverrides || {},
+      createdAt: existing?.createdAt || now()
+    }
+    const before = existing ? clone(existing) : null
+    if (!existing && !body.password) fail('创建客服时请设置初始密码')
+    if (Object.hasOwn(body, 'password')) state.passwords[row.id] = hashPassword(body.password)
+    if (existing) state.users[state.users.indexOf(existing)] = row
+    else state.users.push(row)
+    if (body.password || row.status === 'disabled')
+      db.prepare('DELETE FROM sessions WHERE user_id=?').run(row.id)
+    audit(state, user, `${existing ? '修改' : '新增'}商家客服${body.password ? ' / 设置密码' : ''}`, 'user', row.id, before, row)
+    return publicStaff(state, row)
+  }
+  function deleteMerchantSupport(state, user, targetId, body, fromMerchant) {
+    accountFields(body, [])
+    const ownMerchantId = fromMerchant ? requireMerchantOwner(state, user).id : null
+    if (!fromMerchant && user.role !== 'super_admin') fail('仅超级管理员可以删除商家客服', 403)
+    const row = merchantSupport(state, targetId, ownMerchantId), before = clone(row)
+    Object.assign(row, { status: 'disabled', deletedAt: now() })
+    db.prepare('DELETE FROM sessions WHERE user_id=?').run(row.id)
+    delete state.passwords[row.id]
+    audit(state, user, '删除商家客服（保留历史）', 'user', row.id, before, row)
+    return publicStaff(state, row)
+  }
+  function transferMerchantOwner(state, user, merchantId, body) {
+    if (user.role !== 'super_admin') fail('仅超级管理员可以设置或更换商家主账号', 403)
+    accountFields(body, ['userId'])
+    const merchant = find(state, 'merchants', merchantId, '商家')
+    const target = find(state, 'users', body.userId, '新主账号')
+    if (target.role !== 'merchant' || target.merchantId !== merchant.id || target.deletedAt)
+      fail('新主账号必须是本商家未删除的账号', 403)
+    const before = clone(merchant)
+    const previous = merchant.ownerUserId ? find(state, 'users', merchant.ownerUserId, '原主账号') : null
+    if (previous && previous.id !== target.id) {
+      const previousBefore = clone(previous)
+      previous.status = 'disabled'
+      db.prepare('DELETE FROM sessions WHERE user_id=?').run(previous.id)
+      audit(state, user, '更换商家主账号：停用原主账号', 'user', previous.id, previousBefore, previous)
+    }
+    const targetBefore = clone(target)
+    target.status = 'active'
+    merchant.ownerUserId = target.id
+    db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id)
+    audit(state, user, '更换商家主账号：启用新主账号', 'user', target.id, targetBefore, target)
+    audit(state, user, '设置商家主账号', 'merchant', merchant.id, before, merchant)
+    return clone(merchant)
+  }
+  const isMerchantAccountWrite = (path) =>
+    /^\/(?:merchant\/staff(?:\/[^/]+\/delete)?|users\/[^/]+\/delete|merchants\/[^/]+\/owner)$/.test(path)
+  function merchantAccountFingerprint(user, path, body) {
+    if (!Object.hasOwn(body, 'password')) return body
+    if (typeof body.password !== 'string' || body.password.length < 8 || body.password.length > 128)
+      fail('密码长度应为8至128位')
+    if (typeof body.requestId !== 'string' || !body.requestId.trim() || body.requestId.length > 128)
+      conflict('PRECONDITION_REQUIRED', '请提供 requestId，网络重试须沿用原编号')
+    // Password writes must not leave a cheap SHA256 password verifier in the request log.
+    // Match the existing login password's scrypt cost, with a unique deterministic request salt.
+    const salt = createHash('sha256').update(JSON.stringify([
+      'studio-merchant-account-intent-v1', user.id, path, body.requestId
+    ])).digest()
+    return { ...body, password: `scrypt-v1:${scryptSync(body.password, salt, 64).toString('hex')}` }
+  }
+  function authorizeMerchantAccountWrite(state, user, path, body) {
+    if (path === '/merchant/staff') {
+      const merchant = requireMerchantOwner(state, user)
+      accountFields(body, ['id', 'username', 'name', 'status', 'password'])
+      if (body.id) merchantSupport(state, body.id, merchant.id)
+      return
+    }
+    const merchantDelete = path.match(/^\/merchant\/staff\/([^/]+)\/delete$/)
+    if (merchantDelete) {
+      const merchant = requireMerchantOwner(state, user)
+      accountFields(body, [])
+      merchantSupport(state, merchantDelete[1], merchant.id, true)
+      return
+    }
+    if (user.role !== 'super_admin') fail('仅超级管理员可以维护商家主账号或删除客服', 403)
+    const backendDelete = path.match(/^\/users\/([^/]+)\/delete$/)
+    if (backendDelete) {
+      accountFields(body, [])
+      merchantSupport(state, backendDelete[1], null, true)
+      return
+    }
+    const owner = path.match(/^\/merchants\/([^/]+)\/owner$/)
+    accountFields(body, ['userId'])
+    const merchant = find(state, 'merchants', owner[1], '商家')
+    const target = find(state, 'users', body.userId, '新主账号')
+    if (target.role !== 'merchant' || target.merchantId !== merchant.id || target.deletedAt)
+      fail('新主账号必须是本商家未删除的账号', 403)
   }
   const accountPage = (input = {}) => {
     const current = Number(input.current ?? 1),
@@ -953,6 +1102,10 @@ export function createStudioService({
   }
   const linkedAttachment = (state, user, attachmentId) => {
     const has = (item) => item?.id === attachmentId
+    if (user.role === 'merchant')
+      return state.users.some((row) => row.role === 'player' && row.status === 'active' && has(row.avatar)) ||
+        state.orders.some((order) => visibleOrder(state, user, order) &&
+        order.submissions.some((row) => row.screenshots.some(has)))
     if (
       state.users.some((row) => has(row.avatar)) &&
       (user.role === 'player' || can(user, 'users.manage') || can(user, 'orders.view'))
@@ -1022,8 +1175,9 @@ export function createStudioService({
       .prepare('SELECT id,owner_id,name,mime,size FROM uploads WHERE id=?')
       .get(attachmentId)
     if (!record) fail('附件不存在，请重新上传')
-    if (record.owner_id !== user.id && !linkedAttachment(state, user, attachmentId))
-      fail('无权使用此附件', 403)
+    const ownerAccess = record.owner_id === user.id && (user.role !== 'merchant' ||
+      Boolean(db.prepare('SELECT 1 FROM merchant_uploads WHERE attachment_id=? AND merchant_id=?').get(attachmentId, user.merchantId)))
+    if (!ownerAccess && !linkedAttachment(state, user, attachmentId)) fail('无权使用此附件', 403)
     if (deletedImageRecord(db, attachmentId)) fail('订单图片已按30天保留规则删除，请重新上传', 410)
     return metadata(record)
   }
@@ -1105,6 +1259,8 @@ export function createStudioService({
     )
   }
   function visibleOrder(state, user, order, context = {}) {
+    if (user.role === 'merchant')
+      return can(user, 'orders.view') && Boolean(user.merchantId) && order.merchantId === user.merchantId
     if (user.role !== 'player') return can(user, 'orders.view')
     return currentPlayerOrderAccess(state, user, order, context) || hasPlayerParticipation(order, user.id)
   }
@@ -1130,6 +1286,7 @@ export function createStudioService({
       playerRemark: playerRemarkWithLottery(order),
       payOnArrival: !historyOnly && Boolean(order.payOnArrival),
       paymentConfirmed: paymentConfirmed(order),
+      fulfillmentAuthorized: fulfillmentAuthorized(order),
       canClaim: !historyOnly && eligibility.canClaim,
       claimBlockedReason: eligibility.reasonCode
         ? { code: eligibility.reasonCode, message: eligibility.reason }
@@ -1233,6 +1390,40 @@ export function createStudioService({
   }
   function safeOrder(state, user, order, { historical = false, context = {} } = {}) {
     if (user.role === 'player') return playerOrder(state, user, order, context)
+    if (user.role === 'merchant') {
+      const clean = Object.fromEntries([
+        'id', 'merchantId', 'settlementMode', 'merchantCustomerAmount', 'revision', 'dispatchRound',
+        'assignmentId', 'submissionId', 'playerRemark', 'orderNo', 'templateId', 'title',
+        'customerId', 'platformId', 'shopId', 'externalOrderNo', 'roomCode', 'gameId', 'map',
+        'amount', 'receivedAmount', 'paidAt', 'receivedAt', 'status', 'dispatchMode', 'dispatchState',
+        'assignedTo', 'leaderId', 'teammateId', 'creatorId', 'createdAt', 'publishedAt', 'completedAt',
+        'canceledAt', 'cancelReason'
+      ].filter((key) => Object.hasOwn(order, key)).map((key) => [key, order[key]]))
+      clean.snapshot = Object.fromEntries(['id', 'name', 'game', 'description', 'map', 'amount',
+        'merchantCustomerAmount', 'revision'].filter((key) => Object.hasOwn(order.snapshot || {}, key))
+        .map((key) => [key, order.snapshot[key]]))
+      clean.submissions = (order.submissions || []).map((row) => ({
+        id: row.id, assignmentId: row.assignmentId, dispatchRound: row.dispatchRound,
+        submittedAt: row.submittedAt, leaderId: row.leaderId, teammateId: row.teammateId,
+        screenshots: (row.screenshots || []).map(merchantAttachment), review: row.review,
+        reviewedAt: row.reviewedAt, reason: row.reason
+      }))
+      clean.returnRequests = (order.returnRequests || []).map(({id, leaderId, reason, status, requestedAt, processedAt, processReason}) =>
+        ({id, leaderId, reason, status, requestedAt, processedAt, processReason}))
+      clean.assignments = (order.assignments || []).map(({id, leaderId, acceptedAt, releasedAt, reason, dispatchRound}) =>
+        ({id, leaderId, acceptedAt, releasedAt, reason, dispatchRound}))
+      clean.rejections = (order.rejections || []).map(({id, playerId, reason, rejectedAt, dispatchRound}) =>
+        ({id, playerId, reason, rejectedAt, dispatchRound}))
+      if (order.problem) clean.problem = Object.fromEntries(['id', 'status', 'openedAt']
+        .filter((key) => Object.hasOwn(order.problem, key)).map((key) => [key, order.problem[key]]))
+      if (!historical) {
+        const lifecycle = orderLifecycle(state, order, context.lifecycle)
+        for (const key of ['displayStatus', 'fullRefund', 'refundPending', 'stored', 'executionBlockedReason', 'capacityExempt'])
+          clean[key] = lifecycle[key]
+        clean.merchantFinancials = merchantFinancials(state, order, lifecycle)
+      }
+      return clone(clean)
+    }
     const clean = historical ? clone(order) : { ...clone(order), ...orderLifecycle(state, order, context.lifecycle) }
     clean.playerRemark = playerRemarkWithLottery(order)
     for (const submission of clean.submissions || [])
@@ -1245,6 +1436,13 @@ export function createStudioService({
     if (user.role === 'player') return null
     if (log.entity === 'lottery-pool' && !['admin', 'manager', 'owner', 'super_admin'].includes(user.role))
       return null
+    if (user.role === 'merchant') {
+      if (log.entity !== 'order' || !state.orders.some((order) => order.id === log.entityId && visibleOrder(state, user, order))) return null
+      return { id: log.id, action: '订单变更', entity: log.entity, entityId: log.entityId,
+        createdAt: log.createdAt, actorId: log.actorId, actorName: log.actorName,
+        before: log.before ? safeOrder(state, user, log.before, { historical: true }) : null,
+        after: log.after ? safeOrder(state, user, log.after, { historical: true }) : null }
+    }
     if (log.entity === 'player-content' && !can(user, 'settings.manage')) return null
     const pick = (value, keys) =>
       Object.fromEntries(
@@ -1664,6 +1862,10 @@ export function createStudioService({
       .sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom) || b.id.localeCompare(a.id))[0]
   }
   function snapshotCommission(state, order) {
+    if (order.settlementMode === 'merchant-credit') {
+      order.commissionSnapshot = { supportRate: 0, operationsRate: 0, operationsId: null }
+      return
+    }
     if (order.status !== 'completed' || !paidOrder(order)) return
     const date = shanghaiDate(order.completedAt)
     const creator = state.users.find((u) => u.id === order.creatorId)
@@ -1704,6 +1906,7 @@ export function createStudioService({
     }
   }
   const orderCommissions = (state, order) => {
+    if (order.settlementMode === 'merchant-credit') return { support: 0, operations: 0, incomplete: false }
     if (order.status !== 'completed' || !paidOrder(order))
       return { support: 0, operations: 0, incomplete: false }
     const snapshot = order.commissionSnapshot
@@ -2062,7 +2265,7 @@ export function createStudioService({
     const date = `${month}-31`
     const employees = state.users.filter(
       (u) =>
-        u.role !== 'player' &&
+        !['player', 'merchant'].includes(u.role) &&
         (!['super_admin', 'admin', 'owner'].includes(u.role) ||
           state.salaryPlans.some((p) => p.userId === u.id))
     )
@@ -2218,7 +2421,7 @@ export function createStudioService({
       ...state.shops.map((s) => summarizeChannel(s.platformId, s.id, s.name))
     ]
     const performance = state.users
-      .filter((u) => u.role !== 'player')
+      .filter((u) => !['player', 'merchant'].includes(u.role))
       .map((user) => {
         const rows = state.orders
           .filter(
@@ -2266,8 +2469,35 @@ export function createStudioService({
   ) {
     const state = stateSnapshot || read(),
       user = find(state, 'users', userId, '账号')
-    if (user.status !== 'active') fail('账号已停用', 403)
+    if (user.deletedAt || user.status !== 'active') fail('账号已停用', 403)
     month = validMonth(month || shanghaiDate(now()).slice(0, 7))
+    if (user.role === 'merchant') {
+      const merchant = state.merchants.find((row) => row.id === user.merchantId && row.status === 'active')
+      if (!merchant) fail('商家未绑定或已停用', 403)
+      const orders = state.orders.filter((order) => visibleOrder(state, user, order))
+      return clone({
+        user: { ...publicStaff(state, user), ...(user.avatar ? { avatar: merchantAttachment(user.avatar) } : {}) }, permissions: permissionsFor(user),
+        dataVersion: state.dataVersion, orderCounts: orderCounts(state, orders),
+        roleDefaults: { merchant: DEFAULT_PERMISSIONS.merchant }, appearance: appearanceFor(state),
+        merchants: [merchant],
+        users: state.users.filter((row) => (row.role === 'merchant' && row.merchantId === merchant.id) || (row.role === 'player' && row.status === 'active'))
+          .map((row) => row.deletedAt ? publicStaff(state, row) : row.id === user.id ?
+            { ...publicStaff(state, row), ...(row.avatar ? { avatar: merchantAttachment(row.avatar) } : {}) } :
+            { id: row.id, name: row.name, role: row.role, status: row.status,
+              ...(row.role === 'merchant' ? { merchantId: row.merchantId, merchantRole: merchantRole(state, row), deletedAt: null } : {}),
+              avatar: row.avatar ? merchantAttachment(row.avatar) : undefined, levelId: row.levelId }),
+        customers: [], platforms: state.platforms.filter((row) => row.id === merchant.platformId),
+        shops: state.shops.filter((row) => row.platformId === merchant.platformId), levels: state.levels,
+        templates: state.templates.filter((row) => row.merchantId === merchant.id && row.active)
+          .map((row) => Object.fromEntries(['id','merchantId','name','game','description','amount',
+            'merchantCustomerAmount','revision','map','active'].map((key) => [key, row[key]]))),
+        orders: includeOrders ? orders.map((order) => safeOrder(state, user, order)) : [],
+        refunds: [], withdrawals: [], expenses: [], attendance: [], workSchedules: [],
+        salaryPlans: [], payrolls: [], logs: [], playerAdjustments: [], rewardReviews: [],
+        customerBalances: [], playerDeposits: [], wallets: [], reports: emptyReports(month),
+        skipReportComputation: true, demo: state.demo
+      })
+    }
     if (user.role === 'player') {
       requirePlayer(user)
       const context = orderReadContext(state, user)
@@ -2335,6 +2565,21 @@ export function createStudioService({
       (can(user, 'profit.view') || can(user, 'salary.view') || can(user, 'salary.all')) &&
       (!modules || modules.some((key) => reportModules.includes(key)))
     const result = needsReports ? reports(state, month) : emptyReports(month)
+    if (can(user, 'profit.view') || can(user, 'finance.review')) {
+      const creditOrders = state.orders.filter((order) => order.settlementMode === 'merchant-credit')
+      const creditIds = new Set(creditOrders.map((order) => order.id))
+      const totals = { receivableAmount: 0, receivedAmount: 0, outstandingAmount: 0 }
+      const lifecycleContext = createLifecycleContext(state)
+      for (const order of creditOrders) {
+        const financials = merchantFinancials(state, order, orderLifecycle(state, order, lifecycleContext))
+        for (const key of Object.keys(totals)) totals[key] += financials[key]
+      }
+      result.merchantCredit = {
+        orders: creditOrders.length,
+        ...totals,
+        acceptedRewardAmount: state.rewardCredits.filter((row) => creditIds.has(row.orderId)).reduce((sum, row) => sum + row.amount, 0)
+      }
+    }
     if (includeReports && !needsReports && can(user, 'orders.view')) {
       const own = state.orders.filter(
         (o) =>
@@ -2402,6 +2647,7 @@ export function createStudioService({
       roleDefaults: DEFAULT_PERMISSIONS,
       appearance: appearanceFor(state),
       users: visibleUsers,
+      merchants: can(user, 'users.manage') || can(user, 'templates.manage') ? state.merchants : [],
       customers:
         user.role === 'player' && !can(user, 'orders.view')
           ? []
@@ -2611,6 +2857,21 @@ export function createStudioService({
       '订单模板'
     )
     if (!template.active) fail('该订单模板已停用')
+    let merchant
+    if (user.role === 'merchant') {
+      merchant = find(state, 'merchants', user.merchantId, '商家')
+      if (template.merchantId !== merchant.id) fail('无权使用其他商家的模板', 403)
+      if (!Number.isSafeInteger(body.expectedTemplateRevision) || body.expectedTemplateRevision !== template.revision)
+        conflict('TEMPLATE_REVISION_CONFLICT', '模板价格已变更，请刷新后重新确认')
+      const allowed = ['requestId','expectedActorId','templateId','expectedTemplateRevision','roomCode','gameId','map',
+        'playerRemark','dispatchMode','assignedTo','shopId','externalOrderNo']
+      if (Object.keys(body).some((key) => !allowed.includes(key)))
+        fail('商家发单不能自行指定价格、付款或内部字段', 403)
+      body = { ...body, customerId: merchant.customerId, platformId: merchant.platformId,
+        amount: template.amount, reward: template.reward, payOnArrival: true,
+        playerRemark: body.playerRemark ?? '报响箭电竞' }
+    } else if (template.merchantId || ['merchantId','settlementMode','merchantCustomerAmount'].some((key) => Object.hasOwn(body, key)))
+      fail('商家信用订单只能由对应商家入口发布', 403)
     const customerId = find(
       state,
       'customers',
@@ -2656,7 +2917,7 @@ export function createStudioService({
       dispatchMode === 'direct' ? validateDispatchTarget(state, body.assignedTo) : null
     const paymentMethod = choice(body.paymentMethod || 'cash', ['cash', 'balance'], '付款方式')
     if (paymentMethod === 'balance' && body.payOnArrival) fail('储值支付不支持落地付')
-    if (body.payOnArrival && !rules.allowPayOnArrival)
+    if (!merchant && body.payOnArrival && !rules.allowPayOnArrival)
       fail('当前平台不允许落地付，请先确认客户付款')
     let payment = { receivedAmount: 0, paidAt: null, receivedAt: null, receipt: null }
     if (paymentMethod === 'balance')
@@ -2668,6 +2929,7 @@ export function createStudioService({
     const order = {
       id: id(),
       revision: 1,
+      ...(merchant ? { merchantId: merchant.id, settlementMode: 'merchant-credit', merchantCustomerAmount: template.merchantCustomerAmount } : {}),
       dispatchRound: 1,
       assignmentId: null,
       submissionId: null,
@@ -2884,7 +3146,7 @@ export function createStudioService({
             (priorSettlement ? priorSettlement.teammateId : order.teammateId))
       )
         fail('已结算订单不能直接更换结算打手，请先由财务处理原打手与新打手的扣补款差额', 409)
-      if (next === 'completed' && (!paidOrder(order) || order.receivedAmount !== order.amount))
+      if (next === 'completed' && !fulfillmentAuthorized(order))
         fail('完成前必须确认客户足额收款')
       if (
         (['completed', 'canceled'].includes(order.status) || order.compensationSettled) &&
@@ -2994,7 +3256,7 @@ export function createStudioService({
       const submission = order.submissions.at(-1)
       if (!submission || submission.review) fail('提交材料已审核，不能重复处理', 409)
       if (action === 'review-pass') {
-        if (!paidOrder(order) || order.receivedAmount !== order.amount) fail('验收前请确认足额收款')
+        if (!fulfillmentAuthorized(order)) fail('验收前请确认足额收款')
         if (
           !submission.screenshots.length &&
           !(
@@ -3421,7 +3683,7 @@ export function createStudioService({
         )
           return false
         if (
-          ['platformId', 'shopId', 'leaderId', 'creatorId'].some(
+          ['merchantId', 'platformId', 'shopId', 'leaderId', 'creatorId'].some(
             (key) => input[key] && order[key] !== input[key]
           )
         )
@@ -3537,6 +3799,17 @@ export function createStudioService({
     const order = path.match(/^\/orders\/([^/]+)\/action$/)
     if (order) {
       const target = find(state, 'orders', order[1])
+      if (user.role === 'merchant') {
+        if (!visibleOrder(state, user, target)) fail('没有操作该订单的权限', 403)
+        if (!['edit','remark','dispatch','release','cancel','return-approve','return-reject'].includes(body.action))
+          fail('商家不能执行财务或内部更正操作', 403)
+        const allowed = ['requestId','expectedActorId','action','expectedRevision','dispatchRound','assignmentId','leaderId',
+          'submissionId','reason','returnRequestId','roomCode','gameId','map','playerRemark',
+          'dispatchMode','assignedTo','externalOrderNo','shopId']
+        if (Object.keys(body).some((key) => !allowed.includes(key))) fail('商家只能修改订单服务信息', 403)
+      }
+      if (target.settlementMode === 'merchant-credit' && body.action === 'confirm-payment')
+        requirePermission(user, 'finance.review')
       if (body.action === 'correct-status' && !['finance', 'manager', 'owner', 'super_admin'].includes(user.role))
         fail('仅财务、店长、老板或超级管理员可以更正订单状态', 403)
       if (['cancel', 'cancel-refund'].includes(body.action) || (body.action === 'correct-status' && body.status === 'canceled')) {
@@ -3574,7 +3847,17 @@ export function createStudioService({
     return transact(
       userId,
       (state, user, transaction) => {
+        if (user.role === 'merchant' && !['/orders','/profile','/profile/password','/merchant/staff'].includes(path) &&
+            !/^\/orders\/[^/]+\/action$/.test(path) && !/^\/merchant\/staff\/[^/]+\/delete$/.test(path))
+          fail('此操作不向商家开放', 403)
         const execute = () => {
+          if (path === '/merchant/staff') return saveMerchantSupport(state, user, body)
+          const merchantStaffDelete = path.match(/^\/merchant\/staff\/([^/]+)\/delete$/)
+          if (merchantStaffDelete) return deleteMerchantSupport(state, user, merchantStaffDelete[1], body, true)
+          const backendStaffDelete = path.match(/^\/users\/([^/]+)\/delete$/)
+          if (backendStaffDelete) return deleteMerchantSupport(state, user, backendStaffDelete[1], body, false)
+          const merchantOwner = path.match(/^\/merchants\/([^/]+)\/owner$/)
+          if (merchantOwner) return transferMerchantOwner(state, user, merchantOwner[1], body)
           const contentResult = mutatePlayerContent({
             db,
             state,
@@ -3990,10 +4273,41 @@ export function createStudioService({
             audit(state, user, `费用：${body.action}`, 'expense', row.id, before, row)
             return clone(row)
           }
+          if (path === '/merchants') {
+            requirePermission(user, 'users.manage')
+            const existing = body.id ? find(state, 'merchants', body.id, '商家') : null
+            const name = text(body.name || '响箭电竞', '商家名称', { required: true, max: 100 })
+            const status = choice(body.status || 'active', ['active','disabled'], '状态')
+            const merchantId = existing?.id || id()
+            const customerId = existing?.customerId || id(), platformId = existing?.platformId || id()
+            if (!existing) {
+              state.platforms.push({ id: platformId, name, operatorCommission: false,
+                rules: { requiresShop: false, requiresExternalOrderNo: false, requiresReceipt: false, allowPayOnArrival: true } })
+              state.customers.push({ id: customerId, name, platformId, contact: '', gameId: '', remark: '', createdAt: now() })
+            }
+            if (Object.hasOwn(body, 'ownerUserId')) fail('请使用专用主账号设置操作', 403)
+            const merchant = { id: merchantId, name, status, customerId, platformId,
+              ownerUserId: existing?.ownerUserId || null, createdAt: existing?.createdAt || now() }
+            if (existing) state.merchants[state.merchants.indexOf(existing)] = merchant
+            else state.merchants.push(merchant)
+            if (status === 'disabled')
+              for (const account of state.users.filter((row) => row.role === 'merchant' && row.merchantId === merchantId))
+                db.prepare('DELETE FROM sessions WHERE user_id=?').run(account.id)
+            audit(state, user, existing ? '修改商家' : '新增商家', 'merchant', merchantId, existing, merchant)
+            return clone(merchant)
+          }
           if (path === '/users') {
             requirePermission(user, 'users.manage')
             const existing = body.id ? find(state, 'users', body.id, '账号') : null,
               before = existing ? clone(existing) : null
+            if (existing?.deletedAt) fail('已删除账号不能修改或恢复，请创建新账号', 403)
+            if (Object.hasOwn(body, 'ownerUserId') || (body.deletedAt != null)) fail('不能修改账号管理身份或删除状态', 403)
+            const existingOwner = existing?.role === 'merchant' && merchantRole(state, existing) === 'owner'
+            if (existingOwner && user.role !== 'super_admin') fail('仅超级管理员可以修改商家主账号', 403)
+            if (existingOwner && (body.role !== 'merchant' || body.merchantId !== existing.merchantId))
+              fail('商家主账号不能直接换角色或商家，请先更换主账号', 403)
+            if (body.merchantRole != null && body.merchantRole !== (existing ? merchantRole(state, existing) : 'support'))
+              fail('商家管理身份由主账号绑定确定，不能直接修改', 403)
             if (body.password && !['super_admin', 'admin'].includes(user.role))
               fail('仅管理员可以创建或重置密码', 403)
             if (
@@ -4001,16 +4315,10 @@ export function createStudioService({
               user.role !== 'super_admin'
             )
               fail('仅超级管理员可以维护超级管理员账号', 403)
-            const username = text(body.username, '登录名', { required: true, max: 64 })
-            if (!/^[a-zA-Z0-9_.@-]+$/.test(username)) fail('登录名仅支持字母、数字和_.@-')
-            if (
-              state.users.some(
-                (u) => u.username.toLowerCase() === username.toLowerCase() && u.id !== existing?.id
-              )
-            )
-              fail('登录名已存在', 409)
+            const username = accountUsername(state, body.username, existing?.id)
             const role = choice(body.role, ROLES, '角色'),
               status = choice(body.status || 'active', ['active', 'disabled'], '状态')
+            const merchantId = role === 'merchant' ? find(state, 'merchants', body.merchantId, '商家').id : undefined
             if (existing?.role === 'player' && role !== 'player') {
               const currentWallet = wallet(state, existing.id)
               const unfinished = state.orders.some(
@@ -4062,6 +4370,7 @@ export function createStudioService({
               name: text(body.name, '姓名', { required: true, max: 100 }),
               role,
               status,
+              ...(merchantId ? { merchantId } : {}),
               ...(levelId ? { levelId } : {}),
               ...(existing
                 ? existing.createdAt
@@ -4087,6 +4396,7 @@ export function createStudioService({
               body.password ||
               status === 'disabled' ||
               existing?.role !== row.role ||
+              existing?.merchantId !== row.merchantId ||
               (role === 'player' && !row.playerAccess.login)
             )
               db.prepare('DELETE FROM sessions WHERE user_id=?').run(row.id)
@@ -4146,14 +4456,18 @@ export function createStudioService({
           if (path === '/templates') {
             requirePermission(user, 'templates.manage')
             const existing = body.id ? find(state, 'templates', body.id, '订单模板') : null
+            const merchantId = body.merchantId ? find(state, 'merchants', body.merchantId, '商家').id : null
             const row = {
               id: existing?.id || id(),
+              revision: (existing?.revision || 0) + 1,
+              merchantId,
+              ...(merchantId ? { merchantCustomerAmount: cents(body.merchantCustomerAmount, '客户付款金额', { positive: true }) } : {}),
               name: text(body.name, '模板名称', { required: true, max: 100 }),
               game: text(body.game, '游戏', { required: true, max: 100 }),
               ...templatePlay(body, existing),
               description: text(body.description, '规格说明'),
-              amount: cents(body.amount, '客户价格', { nullable: true }),
-              reward: cents(body.reward, '打手报酬', { nullable: true }),
+              amount: cents(body.amount, merchantId ? '金小盾结算金额' : '客户价格', { positive: Boolean(merchantId), nullable: !merchantId }),
+              reward: cents(body.reward, '打手报酬', { nullable: !merchantId }),
               map: text(body.map, '默认地图', { max: 100 }),
               remark: text(body.remark, '默认备注'),
               active: body.active !== false
@@ -4583,7 +4897,7 @@ export function createStudioService({
               before = clone(order)
             checkOrderPreconditions(order, body, 'submit')
             ensurePlayerOrderExecutable(state, order)
-            if (!paymentConfirmed(order))
+            if (!fulfillmentAuthorized(order))
               throw Object.assign(new ApiError('足额收款后才允许正常上报', 409), {
                 code: 'PAYMENT_NOT_CONFIRMED'
               })
@@ -4706,13 +5020,14 @@ export function createStudioService({
           }
           fail('接口不存在', 404)
         }
-        if (isCriticalWrite(path)) {
-          authorizeCriticalWrite(state, user, path, body)
+        if (isCriticalWrite(path) || (isMerchantAccountWrite(path) && Object.hasOwn(body, 'requestId'))) {
+          if (isMerchantAccountWrite(path)) authorizeMerchantAccountWrite(state, user, path, body)
+          else authorizeCriticalWrite(state, user, path, body)
           let executed = false
           const result = businessRequest(
             user,
             path,
-            body,
+            isMerchantAccountWrite(path) ? merchantAccountFingerprint(user, path, body) : body,
             () => {
               executed = true
               return execute()
@@ -4723,8 +5038,10 @@ export function createStudioService({
           if (
             user.role !== 'player' &&
             (path === '/orders' || /^\/orders\/[^/]+\/action$/.test(path))
-          )
+          ) {
+            if (user.role === 'merchant' && !visibleOrder(state, user, result)) fail('原操作不属于当前商家', 403)
             return safeOrder(state, user, result)
+          }
           return result
         }
         return execute()
@@ -4798,7 +5115,42 @@ export function createStudioService({
       }, {}, { id: 'lottery-customer', name: '客户凭码抽奖', role: 'lottery-customer', status: 'active' })
     },
     withReadScope: (callback) => readScope.run({}, callback),
-    requiresWriteIdentity: (path) => isCriticalWrite(path) || path === '/lottery/pools',
+    requiresWriteIdentity: (path) => isCriticalWrite(path) || isMerchantAccountWrite(path) || path === '/lottery/pools',
+    merchantStaff(userId) {
+      const { state, user } = activeState(userId)
+      const merchant = requireMerchantOwner(state, user)
+      return { records: state.users.filter((row) => row.role === 'merchant' &&
+        row.merchantId === merchant.id && row.id !== merchant.ownerUserId).map((row) => publicStaff(state, row)) }
+    },
+    merchants(userId) {
+      const { state, user } = activeState(userId)
+      requirePermission(user, 'users.manage')
+      return clone(state.merchants)
+    },
+    merchantOverview(userId, input = {}) {
+      const { state, user } = activeState(userId)
+      if (user.role !== 'merchant') fail('此看板仅供商家使用', 403)
+      const normalized = normalizeOverviewRange(input, shanghaiDate(now()))
+      const range = input.start == null && input.end == null ? {} : normalized.range
+      const rows = state.orders.filter((order) => visibleOrder(state, user, order) &&
+        (!range.start || shanghaiDate(order.createdAt) >= range.start) &&
+        (!range.end || shanghaiDate(order.createdAt) <= range.end))
+      const summary = { orders: rows.length, pending: 0, active: 0, review: 0, completed: 0, canceled: 0,
+        stored: 0, refunded: 0, refundPending: 0,
+        merchantCustomerAmount: 0, receivableAmount: 0, receivedAmount: 0, outstandingAmount: 0 }
+      const lifecycleContext = createLifecycleContext(state)
+      for (const order of rows) {
+        const lifecycle = orderLifecycle(state, order, lifecycleContext)
+        summary[lifecycle.displayStatus === 'refund-pending' ? 'refundPending' : lifecycle.displayStatus]++
+        const financials = merchantFinancials(state, order, lifecycle)
+        for (const key of ['receivableAmount', 'receivedAmount', 'outstandingAmount']) summary[key] += financials[key]
+        if (order.status !== 'canceled' && !lifecycle.fullRefund)
+          summary.merchantCustomerAmount += order.merchantCustomerAmount || 0
+      }
+      return { range, generatedAt: now(), summary, recentOrders: rows
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+        .slice(0, 10).map((order) => safeOrder(state, user, order)) }
+    },
     playerOperationResult(userId, requestId, family) {
       const { user } = activeState(userId)
       return readPlayerOperationResult(db, user, requestId, family, now())
@@ -4904,6 +5256,10 @@ export function createStudioService({
       const { state, user } = activeState(userId)
       if (user.role === 'player' || (!can(user, 'orders.create') && !can(user, 'orders.edit')))
         fail('没有派单权限', 403)
+      if (user.role === 'merchant')
+        return { records: state.users.filter((row) => row.role === 'player' && !row.deletedAt && row.status === 'active' &&
+            playerAccess(row).login && playerAccess(row).claim)
+          .map((row) => ({ id: row.id, name: row.name, status: row.status, levelId: row.levelId })) }
       const counts = staffOrderCounts(state)
       return {
         records: state.users
@@ -4945,7 +5301,7 @@ export function createStudioService({
         : []
       return {
         order: safeOrder(state, user, order),
-        refunds,
+        refunds: user.role === 'merchant' ? [] : refunds,
         logs: [...orderLogs, ...refundLogs]
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
           .slice(0, 200)
@@ -4994,7 +5350,7 @@ export function createStudioService({
       const { state, user } = activeState(userId)
       if (user.role === 'player') fail('该摘要仅供后台使用', 403)
       const version = `${state.dataVersion || 1}:${createHash('sha256')
-        .update(JSON.stringify([user.id, permissionsFor(user), imageRetentionVersion()]))
+        .update(JSON.stringify([user.id, user.merchantId, permissionsFor(user), imageRetentionVersion()]))
         .digest('hex')
         .slice(0, 16)}`
       const orders = state.orders.filter((row) => visibleOrder(state, user, row))
@@ -5668,10 +6024,10 @@ export function createStudioService({
       requireBackupAudit(user)
       return diagnosticsReport(state)
     },
-    login(username, passwordValue, { requiredRole } = {}) {
+    login(username, passwordValue, { requiredRole, excludeMerchant = false } = {}) {
       const state = read(),
         loginName = text(username, '登录名', { required: true, max: 64 })
-      const user = state.users.find((u) => u.username.toLowerCase() === loginName.toLowerCase())
+      const user = state.users.find((u) => !u.deletedAt && u.username.toLowerCase() === loginName.toLowerCase())
       if (
         !user ||
         user.status !== 'active' ||
@@ -5680,6 +6036,7 @@ export function createStudioService({
       )
         fail('账号或密码错误，或账号已停用', 401)
       if (requiredRole && user.role !== requiredRole) fail('此客户端不允许该账号角色登录', 403)
+      if (excludeMerchant && user.role === 'merchant') fail('商家账号请从商家入口登录', 403)
       const token = randomBytes(32).toString('base64url'),
         expiresAt = Date.parse(now()) + 12 * 3600000
       const registerSession = () => {
@@ -5729,8 +6086,9 @@ export function createStudioService({
         user = state.users.find(
           (u) =>
             u.id === row.user_id &&
-            u.status === 'active' &&
+            !u.deletedAt && u.status === 'active' &&
             (u.role !== 'player' || playerAccess(u).login)
+            && (u.role !== 'merchant' || state.merchants?.some((row) => row.id === u.merchantId && row.status === 'active'))
         )
       return user ? publicStaff(state, user) : null
     },
@@ -5929,7 +6287,10 @@ export function createStudioService({
           db.prepare(
             'INSERT INTO uploads(id,owner_id,name,mime,size,data,created_at) VALUES(?,?,?,?,?,?,?)'
           ).run(attachmentId, user.id, name, mime, data.length, data, now())
-          const result = metadata({ id: attachmentId, name, mime, size: data.length })
+          if (user.role === 'merchant')
+            db.prepare('INSERT INTO merchant_uploads VALUES(?,?)').run(attachmentId, user.merchantId)
+          const uploaded = metadata({ id: attachmentId, name, mime, size: data.length })
+          const result = user.role === 'merchant' ? merchantAttachment(uploaded) : uploaded
           audit(state, user, '上传附件', 'upload', attachmentId, null, result)
           return result
         },
@@ -5961,12 +6322,9 @@ export function createStudioService({
         appearanceAttachments(state.appearance, { activeOnly: !can(user, 'settings.manage') }).some(
           (image) => image.id === attachmentId
         )
-      if (
-        row.owner_id !== user.id &&
-        !linkedAttachment(state, user, attachmentId) &&
-        !appearanceReadable &&
-        !lottery.isAsset(state, attachmentId)
-      )
+      const ownerAccess = row.owner_id === user.id && (user.role !== 'merchant' ||
+        Boolean(db.prepare('SELECT 1 FROM merchant_uploads WHERE attachment_id=? AND merchant_id=?').get(attachmentId, user.merchantId)))
+      if (!ownerAccess && !linkedAttachment(state, user, attachmentId) && !appearanceReadable && !lottery.isAsset(state, attachmentId))
         fail('无权查看此附件', 403)
       if (deletedImageRecord(db, attachmentId)) fail('订单完成满30天，图片已删除', 410)
       const archived = archivedImageRecord(db, attachmentId)

@@ -1,19 +1,11 @@
 <template>
   <BusinessDetailPanel
-    :page-key="accountKind === 'player' ? 'player-editor' : 'employee-editor'"
+    :page-key="editorPageKey"
     :record-id="row?.id || 'new'"
     @restore="emit('restore', $event)"
     class="business-detail-dialog"
     v-model="visible"
-    :title="
-      accountKind === 'player'
-        ? row
-          ? '编辑打手档案'
-          : '新增打手账号'
-        : row
-          ? '编辑人员档案'
-          : '新增人员账号'
-    "
+    :title="editorTitle"
     width="min(1040px, 94vw)"
     destroy-on-close
     :close-on-click-modal="!saving"
@@ -21,8 +13,12 @@
     :show-close="!saving"
   >
     <BusinessDetailHeader
-      :title="form.name || (accountKind === 'player' ? '新打手账号' : '新员工账号')"
-      description="维护档案、账号状态与个人授权，保存时继续核对原岗位和权限规则。"
+      :title="form.name || newAccountTitle"
+      :description="
+        accountKind === 'merchant'
+          ? '维护商家客服账号与状态。主账号指定、交接由超级管理员在账号列表处理。'
+          : '维护档案、账号状态与个人授权，保存时继续核对原岗位和权限规则。'
+      "
       icon="ri:user-settings-line"
       :badge="row ? '编辑档案' : '新增账号'"
       :context="
@@ -68,7 +64,7 @@
                     :disabled="!isAdmin"
                     maxlength="64" /></ElFormItem
               ></ElCol>
-              <ElCol v-if="accountKind !== 'player'" :xs="24" :sm="12"
+              <ElCol v-if="accountKind !== 'player' && accountKind !== 'merchant'" :xs="24" :sm="12"
                 ><ElFormItem label="角色" prop="role"
                   ><ElSelect v-model="form.role" :disabled="row?.id === user?.id"
                     ><ElOption
@@ -86,6 +82,18 @@
                     active-text="启用"
                     inactive-text="停用"
                     :disabled="row?.id === user?.id" /></ElFormItem
+              ></ElCol>
+              <ElCol v-if="form.role === 'merchant'" :xs="24" :sm="12"
+                ><ElFormItem label="所属商家" prop="merchantId" required
+                  ><ElSelect
+                    v-model="form.merchantId"
+                    :disabled="row?.merchantRole === 'owner'"
+                    placeholder="请选择所属商家"
+                    ><ElOption
+                      v-for="item in data?.merchants || []"
+                      :key="item.id"
+                      :value="item.id"
+                      :label="item.name" /></ElSelect></ElFormItem
               ></ElCol>
               <template v-if="form.role === 'player'">
                 <ElCol :xs="24" :sm="12"
@@ -160,11 +168,13 @@
           <ElAlert
             :closable="false"
             :title="
-              form.role === 'super_admin'
-                ? '超级管理员始终拥有全部权限，只能由超级管理员维护。'
-                : exportRestricted
-                  ? '客服岗位固定不可导出；其他权限默认继承角色，可按个人覆盖。'
-                  : '默认继承角色权限；允许或禁止会覆盖此人员的角色默认值。'
+              form.role === 'merchant'
+                ? '商家权限固定为本商家业务；不能额外授予财务、模板管理或导出权限。'
+                : form.role === 'super_admin'
+                  ? '超级管理员始终拥有全部权限，只能由超级管理员维护。'
+                  : exportRestricted
+                    ? '客服岗位固定不可导出；其他权限默认继承角色，可按个人覆盖。'
+                    : '默认继承角色权限；允许或禁止会覆盖此人员的角色默认值。'
             "
             type="info"
             class="mb-4"
@@ -185,7 +195,7 @@
                 ><ElSelect
                   v-else
                   :model-value="overrideValue(permission.key)"
-                  :disabled="form.role === 'super_admin'"
+                  :disabled="form.role === 'super_admin' || form.role === 'merchant'"
                   @update:model-value="setOverride(permission.key, $event)"
                   ><ElOption label="继承角色" value="default" /><ElOption
                     label="允许"
@@ -214,24 +224,71 @@
   import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   import type { Role, Staff } from '@/types/studio'
   import { permissionLabels } from './permissions'
+  import { canEditMerchantAccount } from '@/utils/auth/studio-user'
 
   const visible = defineModel<boolean>('visible', { required: true })
-  const props = defineProps<{ row?: Staff; defaultRole?: Role; accountKind?: 'staff' | 'player' }>()
+  const props = defineProps<{
+    row?: Staff
+    defaultRole?: Role
+    accountKind?: 'staff' | 'player' | 'merchant'
+    defaultMerchantId?: string
+  }>()
   const emit = defineEmits<{
     saved: []
     busy: [value: boolean]
     restore: [value: { recordId?: string; isCurrent?: () => boolean }]
   }>()
   const { data, user, can, mutate } = useStudio()
-  const canManage = computed(() => can('users.manage'))
+  const canManage = computed(
+    () =>
+      can('users.manage') &&
+      (!props.row ||
+        props.row.role !== 'merchant' ||
+        canEditMerchantAccount(user.value, props.row, can('users.manage')))
+  )
   const isAdmin = computed(() => ['super_admin', 'admin'].includes(user.value?.role || ''))
+  const editorPageKey = computed(() =>
+    props.accountKind === 'merchant'
+      ? 'merchant-editor'
+      : props.accountKind === 'player'
+        ? 'player-editor'
+        : 'employee-editor'
+  )
+  const editorTitle = computed(() =>
+    props.accountKind === 'merchant'
+      ? props.row
+        ? '编辑商家账号'
+        : '新增商家账号'
+      : props.accountKind === 'player'
+        ? props.row
+          ? '编辑打手档案'
+          : '新增打手账号'
+        : props.row
+          ? '编辑人员档案'
+          : '新增人员账号'
+  )
+  const newAccountTitle = computed(() =>
+    props.accountKind === 'merchant'
+      ? '新商家账号'
+      : props.accountKind === 'player'
+        ? '新打手账号'
+        : '新员工账号'
+  )
+  const defaultAccountRole = computed<Role>(() =>
+    props.accountKind === 'merchant'
+      ? 'merchant'
+      : props.accountKind === 'player'
+        ? 'player'
+        : props.defaultRole || 'support'
+  )
   const selectableRoles = computed(() =>
     Object.fromEntries(
       Object.entries(roleLabels).filter(
         ([key]) =>
           (key !== 'super_admin' || user.value?.role === 'super_admin') &&
-          (props.accountKind !== 'staff' || key !== 'player') &&
-          (props.accountKind !== 'player' || key === 'player')
+          (props.accountKind !== 'staff' || !['player', 'merchant'].includes(key)) &&
+          (props.accountKind !== 'player' || key === 'player') &&
+          (props.accountKind !== 'merchant' || key === 'merchant')
       )
     )
   )
@@ -241,6 +298,7 @@
     username: '',
     name: '',
     role: 'support' as Role,
+    merchantId: '',
     status: 'active' as Staff['status'],
     levelId: '',
     maxActiveOrders: 1,
@@ -249,8 +307,17 @@
     playerAccess: { login: true, claim: true, withdraw: true }
   })
   watch(saving, (value) => emit('busy', value))
-  const exportRestricted = computed(() => ['support', 'support_lead'].includes(form.role))
+  const exportRestricted = computed(() =>
+    ['support', 'support_lead', 'merchant'].includes(form.role)
+  )
   const rules: FormRules = {
+    merchantId: [
+      {
+        validator: (_rule, value, callback) =>
+          callback(form.role === 'merchant' && !value ? new Error('请选择所属商家') : undefined),
+        trigger: 'change'
+      }
+    ],
     name: [{ required: true, message: '请输入姓名或称呼', trigger: 'blur' }],
     username: [
       { required: true, message: '请输入登录账号', trigger: 'blur' },
@@ -285,23 +352,37 @@
   watch(visible, (open) => {
     if (!open) return
     if (!canManage.value) return clearPrivateEditor()
+    if (props.accountKind === 'merchant' && props.row && props.row.role !== 'merchant')
+      return clearPrivateEditor()
     Object.assign(
       form,
       {
         username: '',
         name: '',
-        role: props.accountKind === 'player' ? 'player' : props.defaultRole || 'support',
+        role: defaultAccountRole.value,
+        merchantId: props.accountKind === 'merchant' ? props.defaultMerchantId || '' : '',
         status: 'active',
         levelId: '',
         maxActiveOrders: 1,
         password: ''
       },
-      props.row || {}
+      props.row
+        ? {
+            username: props.row.username,
+            name: props.row.name,
+            role: props.row.role,
+            merchantId: props.row.merchantId || '',
+            status: props.row.status,
+            levelId: props.row.levelId || '',
+            maxActiveOrders: props.row.maxActiveOrders
+          }
+        : {}
     )
     form.password = ''
     form.permissionOverrides = { ...(props.row?.permissionOverrides || {}) }
     form.playerAccess = { login: true, claim: true, withdraw: true, ...props.row?.playerAccess }
     if (props.accountKind === 'player') form.role = 'player'
+    if (props.accountKind === 'merchant') form.role = 'merchant'
     nextTick(() => formRef.value?.clearValidate())
   })
   function clearPrivateEditor() {
@@ -309,7 +390,13 @@
     Object.assign(form, {
       username: '',
       name: '',
-      role: props.accountKind === 'player' ? 'player' : 'support',
+      role:
+        props.accountKind === 'merchant'
+          ? 'merchant'
+          : props.accountKind === 'player'
+            ? 'player'
+            : 'support',
+      merchantId: '',
       status: 'active',
       levelId: '',
       maxActiveOrders: 1,
@@ -340,12 +427,14 @@
   }
   async function submit() {
     if (saving.value || !canManage.value) return
+    if (props.accountKind === 'merchant' && form.role !== 'merchant') return
     saving.value = true
     try {
       if (!(await formRef.value?.validate().catch(() => false))) return
       await mutate('/users', {
         ...form,
         playerAccess: form.role === 'player' ? { ...form.playerAccess } : undefined,
+        merchantId: form.role === 'merchant' ? form.merchantId : undefined,
         permissionOverrides: exportRestricted.value
           ? { ...form.permissionOverrides, 'reports.export': false }
           : form.permissionOverrides,
@@ -354,7 +443,7 @@
         password: form.password || undefined
       })
       visible.value = false
-      ElMessage.success('人员档案已保存')
+      ElMessage.success(props.accountKind === 'merchant' ? '商家账号已保存' : '人员档案已保存')
       emit('saved')
     } catch (error) {
       if ([401, 403].includes((error as { status?: number }).status || 0)) clearPrivateEditor()

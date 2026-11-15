@@ -39,10 +39,11 @@
   import type { RefundDestination } from '@/types/studio'
   import { lotteryTiers, lotteryStatusLabels, type LotteryCodeResponse } from '@/types/lottery'
 
-  const props = defineProps<{ orderId: string }>()
+  const props = defineProps<{ orderId: string; merchantId?: string }>()
   const router = useRouter()
   const emit = defineEmits<{ busy: [value: boolean] }>()
   const { data, user, can, mutate, upload, clearSession } = useStudio()
+  const isMerchant = computed(() => user.value?.role === 'merchant')
   const detail = ref<Order | null>(null)
   const detailRefunds = ref<Refund[] | null>(null)
   const detailLogs = ref<AuditLog[] | null>(null)
@@ -60,6 +61,7 @@
     () =>
       order.value?.snapshot.playType === 'lottery' &&
       user.value?.role !== 'player' &&
+      !isMerchant.value &&
       can('orders.view')
   )
   const lotteryStatus = computed(() => {
@@ -177,12 +179,21 @@
     }
     const version = ++detailVersion
     const id = props.orderId
-    const accountId = user.value?.id
+    const accountId = `${user.value?.id}:${user.value?.merchantId}`
     detailLoading.value = true
     detailError.value = ''
     try {
       const result = await studioRequest<OrderDetailResponse>(`orders/${encodeURIComponent(id)}`)
-      if (version !== detailVersion || id !== props.orderId || accountId !== user.value?.id) return
+      if (
+        version !== detailVersion ||
+        id !== props.orderId ||
+        accountId !== `${user.value?.id}:${user.value?.merchantId}`
+      )
+        return
+      if (props.merchantId && result.order.merchantId !== props.merchantId)
+        throw Object.assign(new Error('该订单不属于当前选择的商家，请返回商家订单列表重新选择'), {
+          status: 404
+        })
       detail.value = result.order
       detailRefunds.value = result.refunds || null
       detailLogs.value = result.logs || null
@@ -269,14 +280,14 @@
   let targetsVersion = 0
   async function loadTargets() {
     const version = ++targetsVersion
-    const accountId = user.value?.id
+    const accountId = `${user.value?.id}:${user.value?.merchantId}`
     targetsLoading.value = true
     targetsError.value = ''
     try {
       const result = await studioRequest<{ records: OrderDispatchTarget[] }>(
         'orders/dispatch-targets'
       )
-      if (version === targetsVersion && accountId === user.value?.id)
+      if (version === targetsVersion && accountId === `${user.value?.id}:${user.value?.merchantId}`)
         dispatchTargets.value = result.records
     } catch (cause) {
       if ((cause as { status?: number }).status === 401) clearSession()
@@ -351,6 +362,7 @@
   function playerCapacity(id: string) {
     const player = (dispatchTargets.value ?? data.value?.users ?? []).find((item) => item.id === id)
     if (!player) return '打手信息待刷新'
+    if (isMerchant.value) return ''
     return `接单中 ${player.activeOrders || 0}/${player.maxActiveOrders} · 待接受 ${player.pendingAssignments || 0}`
   }
   const correctionWarnings = computed(() => {
@@ -411,16 +423,17 @@
   )
   const canStore = computed(
     () =>
+      !isMerchant.value &&
       canEdit.value &&
       executionAllowed.value &&
       ['pending', 'active'].includes(order.value?.status || '')
   )
   const canResume = computed(
     () =>
-      canEdit.value && order.value?.stored && !order.value.fullRefund && !order.value.refundPending
+      !isMerchant.value && canEdit.value && order.value?.stored && !order.value.fullRefund && !order.value.refundPending
   )
   const problems = computed(() =>
-    [order.value?.problem, ...(order.value?.problemHistory || [])].filter(
+    (isMerchant.value ? [] : [order.value?.problem, ...(order.value?.problemHistory || [])]).filter(
       (item): item is NonNullable<typeof item> => !!item
     )
   )
@@ -462,11 +475,15 @@
         (canReview.value && order.value.status === 'completed'))
   )
   const canRefund = computed(
-    () => !isHall.value && refundAvailable.value > 0 && (canEdit.value || can('finance.refunds'))
+    () =>
+      !isMerchant.value &&
+      !isHall.value &&
+      refundAvailable.value > 0 &&
+      (canEdit.value || can('finance.refunds'))
   )
   const cancelReasons = ['老板取消订单', '重复下单', '下错订单', '无人接单', '自定义']
   const cancelSubmitText = computed(() =>
-    !toCents(fields.amount)
+    isMerchant.value || !toCents(fields.amount)
       ? '确认取消订单'
       : fields.refundDestination === 'balance' && can('finance.refunds')
         ? '确认取消并退回余额'
@@ -495,7 +512,7 @@
         payment: '确认客户收款',
         dispatch: '重新派单',
         release: '解除当前接单',
-        cancel: '取消订单与退款',
+        cancel: isMerchant.value ? '取消订单' : '取消订单与退款',
         refund: '退款处理',
         edit: '编辑实际订单',
         adjust: '财务金额更正',
@@ -517,8 +534,9 @@
       payment: '核对付款方式、实际金额与付款时间后登记收款。',
       dispatch: '调整本轮派单安排；指定打手仍需本人接受订单。',
       release: '核对当前负责人后解除接单，原履约与接单记录继续保留。',
-      cancel:
-        '一次保存取消订单及本次退款。按实收扣除已退和待审批金额核对可退额度；取消不在此填写打手报酬。',
+      cancel: isMerchant.value
+        ? '整单取消未验收订单并说明原因，保留历史与操作记录。'
+        : '一次保存取消订单及本次退款。按实收扣除已退和待审批金额核对可退额度；取消不在此填写打手报酬。',
       refund: '选择本次退款去向和渠道，核实实际完成情况后提交。退款去向不由原付款方式自动决定。',
       edit: '修改当前履约资料与备注，历史记录和下单快照继续保留。',
       adjust: '核对原金额与报酬，按实际业务填写更正依据。',
@@ -545,7 +563,11 @@
     image.thumbnailUrl || `${image.url}${image.url.includes('?') ? '&' : '?'}variant=thumb`
 
   watch(
-    [() => props.orderId, () => user.value?.id, () => data.value?.permissions.join('|')],
+    [
+      () => props.orderId,
+      () => `${user.value?.id}:${user.value?.merchantId}`,
+      () => data.value?.permissions.join('|')
+    ],
     () => {
       actionIntent.complete()
       remarkIntent.complete()
@@ -573,7 +595,9 @@
     }
     expected.value = expectedState(order.value)
     Object.assign(fields, {
-      amount: ['refund', 'cancel'].includes(action)
+      amount: isMerchant.value && action === 'cancel'
+        ? 0
+        : ['refund', 'cancel'].includes(action)
         ? isHall.value
           ? 0
           : refundAvailable.value / 100
@@ -628,7 +652,12 @@
     const row = order.value
     if (!row || saving.value || uploading.value) return
     const permitted: Record<NonNullable<typeof dialog.value>, boolean> = {
-      payment: canEdit.value && row.status !== 'canceled' && !row.receivedAmount,
+      payment:
+        !isMerchant.value &&
+        canEdit.value &&
+        (row.settlementMode !== 'merchant-credit' || can('finance.review')) &&
+        row.status !== 'canceled' &&
+        !row.receivedAmount,
       dispatch: canEdit.value && executionAllowed.value && row.status === 'pending',
       release: canEdit.value && executionAllowed.value && row.status === 'active',
       cancel: canCancel.value,
@@ -649,8 +678,8 @@
       'return-reject': canEdit.value && executionAllowed.value && !!pendingReturn.value,
       store: canStore.value,
       resume: !!canResume.value,
-      'problem-open': canEdit.value && row.status !== 'canceled' && row.problem?.status !== 'open',
-      'problem-close': canEdit.value && row.problem?.status === 'open'
+      'problem-open': !isMerchant.value && canEdit.value && row.status !== 'canceled' && row.problem?.status !== 'open',
+      'problem-close': !isMerchant.value && canEdit.value && row.problem?.status === 'open'
     }
     if (permitted[action]) openAction(action)
     else ElMessage.warning('这项操作当前不可用，请返回订单核对最新状态和权限')
@@ -762,6 +791,7 @@
       return
     }
     if (
+      !isMerchant.value &&
       action === 'cancel' &&
       (fields.amount === null ||
         !Number.isFinite(fields.amount) ||
@@ -774,7 +804,7 @@
       )
       return
     }
-    if (['refund', 'cancel'].includes(action)) {
+    if (!isMerchant.value && ['refund', 'cancel'].includes(action)) {
       const warning = validateRefundRoute(
         fields.refundDestination,
         fields.refundChannel,
@@ -784,6 +814,7 @@
       if (warning) return void ElMessage.warning(warning)
     }
     if (
+      !isMerchant.value &&
       ['edit', 'adjust', 'cancel-settle'].includes(action) &&
       (fields.reward === null || fields.reward < 0 || !Number.isFinite(fields.reward))
     ) {
@@ -791,6 +822,7 @@
       return
     }
     if (
+      !isMerchant.value &&
       (action === 'adjust' || action === 'edit') &&
       (fields.amount === null || fields.amount <= 0 || !Number.isFinite(fields.amount))
     ) {
@@ -844,7 +876,7 @@
           reason: fields.reason.trim(),
           ...expected.value
         }
-        if (action === 'cancel')
+        if (action === 'cancel' && !isMerchant.value)
           Object.assign(body, {
             action: 'cancel-refund',
             refundAmount: toCents(fields.amount),
@@ -886,15 +918,19 @@
           Object.assign(body, { amount: toCents(fields.amount), reward: toCents(fields.reward) })
         if (action === 'edit')
           Object.assign(body, {
-            amount: toCents(fields.amount),
-            reward: toCents(fields.reward),
+            ...(!isMerchant.value
+              ? {
+                  amount: toCents(fields.amount),
+                  reward: toCents(fields.reward),
+                  remark: fields.remark
+                }
+              : {}),
             roomCode: fields.roomCode.trim(),
             gameId: fields.gameId.trim(),
             map: fields.map,
-            remark: fields.remark,
             playerRemark: fields.playerRemark
           })
-        if (cashAmountChanged.value)
+        if (!isMerchant.value && cashAmountChanged.value)
           Object.assign(body, {
             amountChangeKind:
               order.value.receivedAmount > 0 ? 'historical-correction' : 'price-change',
@@ -919,7 +955,9 @@
       await loadOrder()
       ElMessage.success(
         action === 'cancel'
-          ? `取消已保存；${refundOutcome(fields.refundDestination, can('finance.refunds'), fields.actualRefundConfirmed, toCents(fields.amount))}`
+          ? isMerchant.value
+            ? '订单已取消，并保留操作记录'
+            : `取消已保存；${refundOutcome(fields.refundDestination, can('finance.refunds'), fields.actualRefundConfirmed, toCents(fields.amount))}`
           : action === 'refund'
             ? refundOutcome(
                 fields.refundDestination,
@@ -1115,16 +1153,52 @@
         </template>
       </BusinessDetailHeader>
       <BusinessDetailSummary
-        :items="[
-          { label: '订单金额', value: money(order.amount), hint: '当前客户应付金额' },
-          { label: '累计收款', value: money(order.receivedAmount), tone: 'primary' },
-          { label: '累计退款', value: money(refunded), hint: '仅已完成退款', tone: 'warning' },
-          {
-            label: '剩余净收入',
-            value: money(order.receivedAmount - refunded),
-            hint: '实收减已退款'
-          }
-        ]"
+        :items="
+          isMerchant
+            ? [
+                { label: '约定结算价', value: money(order.amount), hint: '订单原约定价格，保留历史' },
+                {
+                  label: '应付金小盾',
+                  value: order.merchantFinancials
+                    ? money(order.merchantFinancials.receivableAmount)
+                    : '待核对',
+                  hint: '以当前订单结算状态为准'
+                },
+                {
+                  label: '净已付',
+                  value: order.merchantFinancials
+                    ? money(order.merchantFinancials.receivedAmount)
+                    : '待核对',
+                  hint: '总后台确认到账减已完成退款',
+                  tone: 'primary'
+                },
+                { label: '约定客户金额', value: money(order.merchantCustomerAmount) },
+                {
+                  label: '尚未结清',
+                  value: order.merchantFinancials
+                    ? money(order.merchantFinancials.outstandingAmount)
+                    : '待核对',
+                  hint: '当前应付减净已付'
+                }
+              ]
+            : [
+                {
+                  label: '订单金额',
+                  value: money(order.amount),
+                  hint:
+                    order.settlementMode === 'merchant-credit'
+                      ? '模板约定结算金额'
+                      : '当前客户应付金额'
+                },
+                { label: '累计收款', value: money(order.receivedAmount), tone: 'primary' },
+                { label: '累计退款', value: money(refunded), hint: '仅已完成退款', tone: 'warning' },
+                {
+                  label: '剩余净收入',
+                  value: money(order.receivedAmount - refunded),
+                  hint: '实收减已退款'
+                }
+              ]
+        "
       />
       <ElAlert
         v-if="order.executionBlockedReason"
@@ -1146,8 +1220,10 @@
         v-if="order.problem?.status === 'open'"
         title="问题单待客服处理 · 打手仅可查看"
         :description="
-          order.problem.reason +
-          '；由后台客服处理并确认关闭，打手暂时不能操作此订单，名额仍按原规则计算。'
+          isMerchant
+            ? '总后台正在处理本单问题，请联系总后台跟进。'
+            : order.problem.reason +
+              '；由后台客服处理并确认关闭，打手暂时不能操作此订单，名额仍按原规则计算。'
         "
         type="error"
         :closable="false"
@@ -1189,7 +1265,11 @@
       />
       <ElAlert
         v-if="order.receivedAmount !== order.amount && order.status !== 'canceled'"
-        title="尚未足额收款：可以按来源规则接单，打手正常上报前必须确认足额付款。"
+        :title="
+          order.settlementMode === 'merchant-credit'
+            ? '商家信用订单：平台垫付允许履约，实际到账仍由总后台确认。'
+            : '尚未足额收款：可以按来源规则接单，打手正常上报前必须确认足额付款。'
+        "
         type="warning"
         :closable="false"
         show-icon
@@ -1224,7 +1304,13 @@
           >编辑订单</ElButton
         >
         <ElButton
-          v-if="canEdit && order.status !== 'canceled' && !order.receivedAmount"
+          v-if="
+            !isMerchant &&
+            canEdit &&
+            (order.settlementMode !== 'merchant-credit' || can('finance.review')) &&
+            order.status !== 'canceled' &&
+            !order.receivedAmount
+          "
           type="primary"
           :disabled="saving"
           @click="openAction('payment')"
@@ -1267,14 +1353,14 @@
           >恢复存单</ElButton
         >
         <ElButton
-          v-if="canEdit && order.status !== 'canceled' && order.problem?.status !== 'open'"
+          v-if="!isMerchant && canEdit && order.status !== 'canceled' && order.problem?.status !== 'open'"
           type="warning"
           :disabled="saving || uploading"
           @click="openAction('problem-open')"
           >标记问题单</ElButton
         >
         <ElButton
-          v-if="canEdit && order.problem?.status === 'open'"
+          v-if="!isMerchant && canEdit && order.problem?.status === 'open'"
           type="success"
           :disabled="saving || uploading"
           @click="openAction('problem-close')"
@@ -1315,7 +1401,7 @@
           :disabled="saving"
           @click="openAction(canCancel ? 'cancel' : 'refund')"
         >
-          {{ canCancel ? '取消订单／退款' : '退款处理' }}
+          {{ canCancel ? (isMerchant ? '取消订单' : '取消订单／退款') : '退款处理' }}
         </ElButton>
       </ElSpace>
       <ElTabs v-model="activeTab">
@@ -1326,7 +1412,7 @@
           >
             <ElDescriptions :column="2" border>
               <ElDescriptionsItem label="客户">{{ customer?.name || '—' }}</ElDescriptionsItem
-              ><ElDescriptionsItem label="联系方式">{{
+              ><ElDescriptionsItem v-if="!isMerchant" label="联系方式">{{
                 customer?.contact || '—'
               }}</ElDescriptionsItem>
               <ElDescriptionsItem label="订单来源">{{ platform?.name || '—' }}</ElDescriptionsItem
@@ -1368,7 +1454,7 @@
               ><ElDescriptionsItem label="客服确认时间">{{
                 formatTime(order.receivedAt)
               }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="实际打手报酬"
+              <ElDescriptionsItem v-if="!isMerchant" label="实际打手报酬"
                 >{{ money(effectiveOrderReward(order))
                 }}<ElTag v-if="order.compensationPending" size="small" type="warning" class="ml-2"
                   >待财务确认</ElTag
@@ -1379,7 +1465,7 @@
               ><ElDescriptionsItem label="订单完成时间">{{
                 formatTime(order.completedAt)
               }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="付款凭证" :span="2"
+              <ElDescriptionsItem v-if="!isMerchant" label="付款凭证" :span="2"
                 ><ElLink
                   v-if="order.receipt"
                   :href="order.receipt.url"
@@ -1480,9 +1566,12 @@
           <p class="text-xs text-g-500 mt-3"
             >仅此备注向符合接单资格的打手展示，内部及历史备注不会自动公开。</p
           >
-          <ElDivider content-position="left">内部备注 / 历史备注</ElDivider>
-          <p class="whitespace-pre-wrap text-sm leading-6">{{ order.remark || '暂无内部备注' }}</p>
+          <ElDivider v-if="!isMerchant" content-position="left">内部备注 / 历史备注</ElDivider>
+          <p v-if="!isMerchant" class="whitespace-pre-wrap text-sm leading-6">{{
+            order.remark || '暂无内部备注'
+          }}</p>
           <BusinessDetailSection
+            v-if="!isMerchant"
             title="退款记录"
             description="该订单的退款申请与处理记录；取消订单和实际退款分别记录。"
           >
@@ -1546,13 +1635,13 @@
                 ><ElDescriptionsItem label="模板客户价">{{
                   money(order.snapshot.amount)
                 }}</ElDescriptionsItem
-                ><ElDescriptionsItem label="模板打手价">{{
+                ><ElDescriptionsItem v-if="!isMerchant" label="模板打手价">{{
                   money(order.snapshot.reward)
                 }}</ElDescriptionsItem
                 ><ElDescriptionsItem label="规格 / 目标" :span="2">{{
                   order.snapshot.description || '—'
                 }}</ElDescriptionsItem
-                ><ElDescriptionsItem label="默认备注" :span="2">{{
+                ><ElDescriptionsItem v-if="!isMerchant" label="默认备注" :span="2">{{
                   order.snapshot.remark || '—'
                 }}</ElDescriptionsItem></ElDescriptions
               ></ElCollapseItem
@@ -1689,7 +1778,12 @@
                 { label: '提交时间', value: formatTime(submission.submittedAt) },
                 {
                   label: '审核人',
-                  value: submission.reviewerId ? staffName(submission.reviewerId) : '尚未审核'
+                  value:
+                    isMerchant && submission.reviewedAt
+                      ? '总后台'
+                      : submission.reviewerId
+                        ? staffName(submission.reviewerId)
+                        : '尚未审核'
                 },
                 { label: '审核时间', value: formatTime(submission.reviewedAt) }
               ]" /><ElSpace wrap
@@ -1766,7 +1860,7 @@
               }}</template></ElTableColumn
             ><ElTableColumn prop="reason" label="解除原因" /></ArtTable
         ></ElTabPane>
-        <ElTabPane :label="'存单记录 (' + storageRecords.length + ')'" name="storage">
+        <ElTabPane v-if="!isMerchant" :label="'存单记录 (' + storageRecords.length + ')'" name="storage">
           <ElEmpty v-if="!storageRecords.length" description="暂无存单记录" />
           <BusinessDetailSection
             v-for="record in storageRecords"
@@ -1802,7 +1896,7 @@
             </ElDescriptions>
           </BusinessDetailSection>
         </ElTabPane>
-        <ElTabPane :label="'问题记录 (' + problems.length + ')'" name="problems">
+        <ElTabPane v-if="!isMerchant" :label="'问题记录 (' + problems.length + ')'" name="problems">
           <ElEmpty v-if="!problems.length" description="暂无问题记录" />
           <BusinessDetailSection
             v-for="problem in problems"
@@ -1879,9 +1973,14 @@
         <BusinessDetailSummary
           v-if="dialog !== 'cancel'"
           :items="[
-            { label: '当前订单金额', value: money(order.amount) },
-            { label: '已收款', value: money(order.receivedAmount) },
-            { label: '实际打手报酬', value: money(effectiveOrderReward(order)) },
+            { label: isMerchant ? '约定结算价' : '当前订单金额', value: money(order.amount) },
+            {
+              label: isMerchant ? '净已付' : '已收款',
+              value: isMerchant
+                ? order.merchantFinancials ? money(order.merchantFinancials.receivedAmount) : '待核对'
+                : money(order.receivedAmount)
+            },
+            ...(!isMerchant ? [{ label: '实际打手报酬', value: money(effectiveOrderReward(order)) }] : []),
             { label: '当前负责人', value: staffName(order.leaderId || order.assignedTo) }
           ]"
         />
@@ -1897,44 +1996,46 @@
             description="请核对下方填写内容及现有业务提示；保存后保留原历史记录。"
           >
             <template v-if="dialog === 'cancel'">
-              <ElAlert
-                title="取消后订单不可恢复；本次只保存一次取消与退款，不会自动向微信、支付宝或银行卡转账。"
-                type="warning"
-                :closable="false"
-                class="mb-4"
-              />
-              <ElDescriptions :column="1" border class="mb-4"
-                ><ElDescriptionsItem label="订单号">{{ order.orderNo }}</ElDescriptionsItem
-                ><ElDescriptionsItem label="真实可退额度"
-                  >{{
-                    money(isHall ? 0 : refundAvailable)
-                  }}（已扣除已退及待审批）</ElDescriptionsItem
-                ></ElDescriptions
-              >
-              <ElFormItem label="本次退款金额（元，0表示仅取消）" required
-                ><ElInputNumber
-                  v-model="fields.amount"
-                  :min="0"
-                  :max="isHall ? 0 : refundAvailable / 100"
-                  :precision="2"
-                  :disabled="isHall || refundAvailable === 0"
-                  class="!w-full"
-              /></ElFormItem>
-              <ElAlert
-                v-if="isHall"
-                title="游戏大厅来源不提供退款，本次仅取消订单。"
-                type="info"
-                :closable="false"
-                class="mb-4"
-              />
-              <BusinessRefundOptions
-                v-model:destination="fields.refundDestination"
-                v-model:channel="fields.refundChannel"
-                v-model:channel-note="fields.refundChannelNote"
-                v-model:actual-refund-confirmed="fields.actualRefundConfirmed"
-                :can-confirm="can('finance.refunds')"
-                :amount="toCents(fields.amount)"
-              />
+              <template v-if="!isMerchant">
+                <ElAlert
+                  title="取消后订单不可恢复；本次只保存一次取消与退款，不会自动向微信、支付宝或银行卡转账。"
+                  type="warning"
+                  :closable="false"
+                  class="mb-4"
+                />
+                <ElDescriptions :column="1" border class="mb-4"
+                  ><ElDescriptionsItem label="订单号">{{ order.orderNo }}</ElDescriptionsItem
+                  ><ElDescriptionsItem label="真实可退额度"
+                    >{{
+                      money(isHall ? 0 : refundAvailable)
+                    }}（已扣除已退及待审批）</ElDescriptionsItem
+                  ></ElDescriptions
+                >
+                <ElFormItem label="本次退款金额（元，0表示仅取消）" required
+                  ><ElInputNumber
+                    v-model="fields.amount"
+                    :min="0"
+                    :max="isHall ? 0 : refundAvailable / 100"
+                    :precision="2"
+                    :disabled="isHall || refundAvailable === 0"
+                    class="!w-full"
+                /></ElFormItem>
+                <ElAlert
+                  v-if="isHall"
+                  title="游戏大厅来源不提供退款，本次仅取消订单。"
+                  type="info"
+                  :closable="false"
+                  class="mb-4"
+                />
+                <BusinessRefundOptions
+                  v-model:destination="fields.refundDestination"
+                  v-model:channel="fields.refundChannel"
+                  v-model:channel-note="fields.refundChannelNote"
+                  v-model:actual-refund-confirmed="fields.actualRefundConfirmed"
+                  :can-confirm="can('finance.refunds')"
+                  :amount="toCents(fields.amount)"
+                />
+              </template>
               <ElFormItem label="取消原因" required
                 ><ElSpace wrap
                   ><ElButton
@@ -2100,7 +2201,9 @@
             <template v-if="dialog === 'edit'"
               ><ElAlert
                 :title="
-                  order.paymentMethod === 'balance'
+                  isMerchant
+                    ? '仅修改履约资料与公开备注，模板价格由总后台维护。'
+                    : order.paymentMethod === 'balance'
                     ? '储值已支付订单的客户金额固定；可修改履约信息及报酬并记录原因，退款时须另行选择去向。'
                     : '保留原创建人和模板快照。已付款现金金额仅允许明确的历史录错更正，未付款改价不产生实收；实际退款单独登记，不能用改价代替追加收款。'
                 "
@@ -2116,7 +2219,7 @@
                 ><ElCol :xs="24" :sm="12"
                   ><ElFormItem label="地图"
                     ><ElInput v-model="fields.map" maxlength="100" /></ElFormItem></ElCol></ElRow
-              ><ElFormItem label="内部备注（保留历史内容，不向打手公开）"
+              ><ElFormItem v-if="!isMerchant" label="内部备注（保留历史内容，不向打手公开）"
                 ><ElInput
                   v-model="fields.remark"
                   type="textarea"
@@ -2198,7 +2301,7 @@
               :closable="false"
               class="mb-4"
             />
-            <ElRow v-if="dialog === 'edit' || dialog === 'adjust'" :gutter="16"
+            <ElRow v-if="!isMerchant && (dialog === 'edit' || dialog === 'adjust')" :gutter="16"
               ><ElCol :xs="24" :sm="12"
                 ><ElFormItem label="订单金额（元）" required
                   ><ElInputNumber
@@ -2265,7 +2368,11 @@
             ></template>
             <ElAlert
               v-if="dialog === 'cancel'"
-              title="本次取消与退款一次提交；特殊打手补扣在取消历史中进入已有调整窗口办理。"
+              :title="
+                isMerchant
+                  ? '确认后整单取消本商家未验收订单，无需审批。订单历史保留；已验收订单请联系总后台处理。'
+                  : '本次取消与退款一次提交；特殊打手补扣在取消历史中进入已有调整窗口办理。'
+              "
               type="warning"
               :closable="false"
               class="mb-4"

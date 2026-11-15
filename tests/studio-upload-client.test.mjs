@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 
-function loadSource(path, imports, fetch) {
+function loadSource(path, imports, fetch, browser) {
   const compiled = ts.transpileModule(readFileSync(new URL(path, import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
     reportDiagnostics: true
@@ -13,13 +13,14 @@ function loadSource(path, imports, fetch) {
     []
   )
   const exports = {}
-  new Function('exports', 'require', 'fetch', compiled.outputText)(
+  new Function('exports', 'require', 'fetch', 'window', compiled.outputText)(
     exports,
     (name) => {
       assert.ok(Object.hasOwn(imports, name), `Unexpected source dependency: ${name}`)
       return imports[name]
     },
-    fetch
+    fetch,
+    browser
   )
   return exports
 }
@@ -32,18 +33,22 @@ function deferred() {
   return { promise, resolve }
 }
 
-function fixture(fetch) {
-  const store = { user: { id: 'staff-a' } }
+function fixture(fetch, { hash = '#/orders/list', user = { id: 'staff-a' } } = {}) {
+  const store = { user }
+  const browser = { location: { hash } }
   // Execute the real upload and mutation modules; only replace the Pinia boundary
   // and transport so account changes and late responses are deterministic.
-  const mutation = loadSource('../src/api/studio-mutation.ts', {}, fetch)
+  const mutation = loadSource('../src/api/studio-mutation.ts', {}, fetch, browser)
+  const entry = loadSource('../src/utils/auth/admin-entry.ts', {}, fetch, browser)
   const api = loadSource(
     '../src/api/studio.ts',
     {
       '@/store/modules/studio': { useStudioStore: () => store },
-      './studio-mutation': mutation
+      './studio-mutation': mutation,
+      '@/utils/auth/admin-entry': entry
     },
-    fetch
+    fetch,
+    browser
   )
   return { store, upload: api.uploadStudioImage }
 }
@@ -143,3 +148,62 @@ test('上传期间退出也不交付旧附件，无登录账号时不发送请�
   await assert.rejects(f.upload(image()), /请先登录/)
   assert.equal(requests, 1)
 })
+
+test('商家二进制上传选择商家会话通道并保留原始图片和发起账号', async () => {
+  let request
+  const merchantAttachment = { id: 'merchant-upload', url: '/api/studio/merchant/uploads/merchant-upload' }
+  const f = fixture(async (url, options) => {
+    request = { url, options }
+    return Response.json(merchantAttachment)
+  }, {
+    hash: '#/merchant/orders',
+    user: { id: 'merchant-user', role: 'merchant', merchantId: 'merchant-a' }
+  })
+  const file = image()
+  assert.deepEqual(await f.upload(file), merchantAttachment)
+  assert.equal(request.url, '/api/studio/uploads')
+  assert.equal(request.options.method, 'POST')
+  assert.equal(request.options.credentials, 'same-origin')
+  assert.equal(request.options.body, file)
+  assert.deepEqual(new Uint8Array(await request.options.body.arrayBuffer()), bytes)
+  assert.deepEqual(request.options.headers, {
+    'X-Studio-Client': 'merchant',
+    'Content-Type': 'image/png',
+    'X-Upload-Name': encodeURIComponent(file.name),
+    'X-Studio-Actor': 'merchant-user'
+  })
+})
+
+for (const status of [200, 401]) {
+  for (const changedUser of [
+    { id: 'merchant-user', role: 'merchant', merchantId: 'merchant-b' },
+    { id: 'merchant-user', role: 'support', merchantId: undefined }
+  ]) {
+    test(`同账号${changedUser.role === 'merchant' ? '换绑商家' : '更换角色'}后丢弃上传迟到${status}响应`, async () => {
+      const entered = deferred(), body = deferred()
+      const f = fixture(async () => ({
+        ok: status === 200,
+        status,
+        headers: new Headers(),
+        json() {
+          entered.resolve()
+          return body.promise
+        }
+      }), {
+        hash: '#/merchant/orders',
+        user: { id: 'merchant-user', role: 'merchant', merchantId: 'merchant-a' }
+      })
+      const pending = f.upload(image())
+      const checked = assert.rejects(pending, (error) => {
+        assert.match(error.message, /账号已变化/)
+        assert.equal(error.status, undefined)
+        assert.equal(error.code, undefined)
+        return true
+      })
+      await entered.promise
+      f.store.user = changedUser
+      body.resolve(status === 200 ? attachment : { message: '旧商家会话已失效', code: 'SESSION_EXPIRED' })
+      await checked
+    })
+  }
+}

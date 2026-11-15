@@ -52,6 +52,7 @@ export interface PlayerOrder {
   canSubmit?: boolean
   payOnArrival?: boolean
   paymentConfirmed?: boolean
+  fulfillmentAuthorized?: boolean
   claimBlockedReason?: { code: string; message: string } | null
   submitBlockedReason?: { code: string; message: string } | null
   roomCode?: string

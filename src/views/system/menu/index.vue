@@ -223,7 +223,7 @@
         permissionMode: route.meta.studioPermissionMode === 'all' ? 'all' : 'any',
         access:
           (business || user.value?.role === 'super_admin') &&
-          canAccessStudioPage(permissions, route.meta.studioPermissionMode, route.meta.studioRoles)
+          canAccessStudioPage(permissions, route.meta.studioPermissionMode, route.meta.merchantOwnerOnly, route.meta.studioRoles)
       }
       if (route.children?.length) row.children = mapMenus(route.children, path, business)
       if (row.children?.length)

@@ -17,12 +17,16 @@ import { formatMenuTitle } from '@/utils'
 import { useStudio } from '@/hooks/business/useStudio'
 import { isStudioSuperAdmin } from '@/utils/auth/studio-user'
 import { canAccessStudioPage } from '@/utils/auth/studio-access'
+import { merchantRoutes } from '../modules/merchant'
 
 export class MenuProcessor {
   /**
    * 获取菜单数据
    */
   async getMenuList(): Promise<AppRouteRecord[]> {
+    if (useStudio().user.value?.role === 'merchant') {
+      return this.normalizeMenuPaths(this.filterForCurrentUser([merchantRoutes]))
+    }
     const { isFrontendMode } = useAppMode()
 
     let menuList: AppRouteRecord[]
@@ -83,6 +87,7 @@ export class MenuProcessor {
         canAccessStudioPage(
           item.meta.studioPermissions,
           item.meta.studioPermissionMode,
+          item.meta.merchantOwnerOnly,
           item.meta.studioRoles
         )
 

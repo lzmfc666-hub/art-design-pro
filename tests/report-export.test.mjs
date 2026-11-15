@@ -6,7 +6,7 @@ import { getExportCatalog, buildExportSheets } from '../server/report-export.mjs
 
 const password = 'report-export-test-password-123'
 function fixture(t) {
-  const service = createStudioService({ dbPath: ':memory:', password, seed: true })
+  const service = createStudioService({ dbPath: ':memory:', password, seed: true, clock: () => new Date('2026-10-14T04:00:00Z') })
   t.after(() => service.close())
   const customer = testMutate(service, 'admin', '/customers', {
     name: '=1+1',
