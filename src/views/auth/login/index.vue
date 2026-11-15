@@ -12,9 +12,9 @@
 
       <div class="auth-right-wrap">
         <div class="form">
-          <h3 class="title">{{ config.login.title }}</h3>
-          <p v-if="config.login.subtitle" class="sub-title whitespace-pre-line">{{
-            config.login.subtitle
+          <h3 class="title">{{ isMerchant ? '商家登录' : config.login.title }}</h3>
+          <p v-if="isMerchant || config.login.subtitle" class="sub-title whitespace-pre-line">{{
+            isMerchant ? '查看本商家订单与经营数据' : config.login.subtitle
           }}</p>
           <ElAlert
             v-if="studioError"
@@ -107,10 +107,12 @@
   import { ElMessage, ElNotification, type FormInstance, type FormRules } from 'element-plus'
   import { useSettingStore } from '@/store/modules/setting'
   import { useStudio } from '@/hooks/business/useStudio'
-  import { adminLoginRedirect } from '@/utils/auth/admin-entry'
+  import { adminLoginRedirect, merchantLoginRedirect } from '@/utils/auth/admin-entry'
+  import { studioClient } from '@/api/studio'
 
   defineOptions({ name: 'Login' })
   const { config } = useAppearance()
+  const isMerchant = studioClient === 'merchant'
   const loginBackground = computed(() => appearanceBackgroundStyle(config.value.login.background))
 
   const settingStore = useSettingStore()
@@ -172,10 +174,10 @@
         password
       })
 
-      if (studio.user.value?.role === 'player') {
+      if (studio.user.value?.role === 'player' || (studio.user.value?.role === 'merchant') !== isMerchant) {
         userStore.clearSession()
         studio.clearSession()
-        throw new Error('此入口为管理后台，请使用管理员或员工账号登录。打手账号请前往打手端。')
+        throw new Error(isMerchant ? '请使用已绑定商家的账号登录' : '请使用管理后台账号登录；商家和打手请使用各自入口')
       }
 
       userStore.setUserInfo(userInfo)
@@ -191,7 +193,7 @@
       showLoginSuccessNotice()
 
       // 获取 redirect 参数，如果存在则跳转到指定页面，否则跳转到首页
-      await router.push(adminLoginRedirect(route.query.redirect))
+      await router.push(isMerchant ? merchantLoginRedirect(route.query.redirect) : adminLoginRedirect(route.query.redirect))
     } catch (error) {
       if (error instanceof Error) ElMessage.error(error.message)
     } finally {

@@ -254,6 +254,7 @@ export function createPlayerNotifications(
       return (
         user.role !== 'player' &&
         permissionsFor(user).includes('orders.edit') &&
+        (user.role !== 'merchant' || user.merchantId === order.merchantId) &&
         order.dispatchMode === 'direct' &&
         Boolean(order.assignedTo) &&
         Date.parse(timestamp) >= Date.parse(order.assignedAt || order.publishedAt) + 300_000
@@ -682,7 +683,8 @@ export function createPlayerNotifications(
               user.id > candidate.cursor &&
               (candidate.type === 'pool'
                 ? user.role === 'player' && user.levelId === candidate.level_id
-                : user.role !== 'player' && permissionsFor(user).includes('orders.edit'))
+                : user.role !== 'player' && permissionsFor(user).includes('orders.edit') &&
+                  (user.role !== 'merchant' || user.merchantId === order.merchantId))
           )
           .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
         const batch = recipients.slice(0, budget - processed)
@@ -706,7 +708,7 @@ export function createPlayerNotifications(
             href:
               candidate.type === 'pool'
                 ? '/#/player/lobby'
-                : `/#/orders/list?id=${encodeURIComponent(order.id)}`,
+                : `/#/${user.role === 'merchant' ? 'merchant/orders' : 'orders/list'}?id=${encodeURIComponent(order.id)}`,
             timestamp,
             index
           })

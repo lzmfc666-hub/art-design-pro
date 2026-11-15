@@ -46,7 +46,10 @@ export const useStudioStore = defineStore('studio', () => {
     try {
       const path =
         typeof window === 'undefined' ? '' : window.location.hash.replace(/^#/, '').split('?')[0]
-      const lightOrders = path.startsWith('/orders/')
+      const lightOrders =
+        path.startsWith('/orders/') ||
+        path.startsWith('/merchant/') ||
+        path.startsWith('/merchants/')
       const needsReports = [
         '/finance/salary',
         '/dashboard/console',

@@ -91,7 +91,8 @@
       >
       <div v-if="isLeader && order.status === 'active'" class="p-card"
         ><h3>提交完成材料</h3
-        ><p v-if="order.paymentConfirmed === false" class="p-notice p-warning">付款尚未确认，请联系后台确认付款。足额收款后才可正常上报。</p
+        ><p v-if="order.paymentConfirmed === false && order.fulfillmentAuthorized !== true" class="p-notice p-warning">付款尚未确认，请联系后台确认付款。足额收款后才可正常上报。</p
+        ><p v-if="order.paymentConfirmed === false && order.fulfillmentAuthorized === true" class="p-notice p-info">本单由平台垫付，可正常上报；财务验收后按原规则结算报酬。</p
         ><p v-if="order.canSubmit !== true" class="p-notice p-warning">{{ order.submitBlockedReason?.message || '当前暂不能上报，请刷新订单或联系后台。' }}</p
         ><p class="p-hint"
           >上传 1～10 张截图，单张不超过 8 MB。支持 JPG、PNG、WebP。财务验收通过后才结算报酬。</p
@@ -126,7 +127,7 @@
           }}。由财务核对。</p
         ><button
           class="p-btn p-primary p-full"
-          :disabled="blocked || uploading || !screenshots.length || !resource.online.value || order.canSubmit !== true || order.paymentConfirmed !== true || !hasAssignmentTarget"
+          :disabled="blocked || uploading || !screenshots.length || !resource.online.value || order.canSubmit !== true || !hasAssignmentTarget"
           @click="submit"
           >{{ busy ? '正在提交…' : '提交完成，等待验收' }}</button
         ></div
@@ -326,7 +327,7 @@ function claim() { if (order.value?.canClaim === true) return run('claim', {}) }
 function reject() { return run('reject', { reason: reason.value }) }
 function requestReturn() { return run('return', { reason: returnReason.value }) }
 function submit() {
-  if (order.value?.canSubmit !== true || order.value.paymentConfirmed !== true) return
+  if (order.value?.canSubmit !== true) return
   return run('submit', { screenshots: screenshots.value, teammateId: teammateId.value || null })
 }
 async function checkOperation(family: Family) {

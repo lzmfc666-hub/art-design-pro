@@ -19,6 +19,7 @@ import { readLocalMonitorBinding } from './local-monitor-binding.mjs'
 const PREFIX = '/api/studio'
 const COOKIE_NAME = 'studio_session'
 const PLAYER_COOKIE_NAME = 'studio_player_session'
+const MERCHANT_COOKIE_NAME = 'studio_merchant_session'
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -286,7 +287,9 @@ export function createStudioServer(options = {}) {
         // The independent player proxy selects its own cookie. The channel can
         // only narrow access; it never grants a role or trusts the admin cookie.
         const playerClient = req.headers['x-studio-client'] === 'player'
-        const cookieName = playerClient ? PLAYER_COOKIE_NAME : COOKIE_NAME
+        const merchantAsset = path.match(/^\/merchant\/uploads\/([^/]+)$/)
+        const merchantClient = req.headers['x-studio-client'] === 'merchant' || Boolean(merchantAsset)
+        const cookieName = playerClient ? PLAYER_COOKIE_NAME : merchantClient ? MERCHANT_COOKIE_NAME : COOKIE_NAME
         const token = cookieToken(req, cookieName)
         const secure = process.env.STUDIO_SECURE_COOKIE === 'true' ? '; Secure' : ''
         if (req.method === 'GET' && path === '/appearance/public')
@@ -303,13 +306,14 @@ export function createStudioServer(options = {}) {
         }
         if (req.method === 'GET' && path === '/session') {
           const user = service.session(token)
-          return json(res, 200, { user: playerClient && user?.role !== 'player' ? null : user })
+          return json(res, 200, { user: (playerClient && user?.role !== 'player') ||
+            (merchantClient !== (user?.role === 'merchant')) ? null : user })
         }
         if (req.method === 'POST') checkOrigin(req)
         if (req.method === 'POST' && path === '/login') {
           const body = await parseBody(req)
           const attempt = {
-            channel: playerClient ? 'player' : 'admin',
+            channel: playerClient ? 'player' : merchantClient ? 'merchant' : 'admin',
             address: requestAddress,
             username: body.username
           }
@@ -321,7 +325,8 @@ export function createStudioServer(options = {}) {
           }
           try {
             const result = service.login(body.username, body.password, {
-              requiredRole: playerClient ? 'player' : undefined
+              requiredRole: playerClient ? 'player' : merchantClient ? 'merchant' : undefined,
+              excludeMerchant: !merchantClient
             })
             loginAttempts.success(attempt)
             res.setHeader(
@@ -356,6 +361,16 @@ export function createStudioServer(options = {}) {
         if (!user) throw new ApiError('请先登录', 401)
         if (playerClient && user.role !== 'player')
           throw new ApiError('打手端仅允许打手账号访问', 403)
+        if (merchantClient !== (user.role === 'merchant'))
+          throw new ApiError('商家账号须使用商家入口', 403)
+        if (merchantClient) {
+          const allowed = req.method === 'GET'
+            ? ['/bootstrap','/appearance','/changes','/orders','/orders/dispatch-targets','/merchant/overview','/notifications/timeouts'].includes(path) ||
+              /^\/(orders|uploads)\/[^/]+$/.test(path) || Boolean(merchantAsset)
+            : ['/orders','/uploads','/profile','/profile/password'].includes(path) || /^\/orders\/[^/]+\/action$/.test(path) ||
+              /^\/notifications\/[^/]+\/read$/.test(path)
+          if (!allowed) throw new ApiError('此接口不向商家开放', 403)
+        }
         res.setHeader('X-Studio-User', user.id)
         if (user.role === 'player') {
           const playerPath =
@@ -375,6 +390,9 @@ export function createStudioServer(options = {}) {
           if (!playerPath) throw new ApiError('此接口不向打手账号开放', 403)
         }
         if (req.method === 'GET') {
+          if (path === '/merchants') return json(res, 200, service.merchants(user.id))
+          if (path === '/merchant/overview')
+            return json(res, 200, service.merchantOverview(user.id, Object.fromEntries(url.searchParams)))
           if (path === '/runtime/metrics') {
             const permissions = permissionsFor(user)
             if (
@@ -686,7 +704,7 @@ export function createStudioServer(options = {}) {
             )
           if (path === '/notifications/delivery-status')
             return json(res, 200, notifications.deliveryStatus(user.id))
-          const uploadMatch = path.match(/^\/uploads\/([^/]+)$/)
+          const uploadMatch = merchantAsset || path.match(/^\/uploads\/([^/]+)$/)
           if (uploadMatch) {
             const attachment = service.download(user.id, uploadMatch[1])
             res.writeHead(200, {

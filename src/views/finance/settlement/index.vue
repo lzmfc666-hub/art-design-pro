@@ -66,6 +66,16 @@
           >管理费用<ArtSvgIcon icon="ri:arrow-right-line" class="ml-1" /></ElButton
       ></BusinessStatCard>
     </div>
+    <ElCard v-if="data?.reports.merchantCredit && (can('finance.review') || can('profit.view'))" shadow="never" class="mb-4">
+      <ElDescriptions title="商家信用单累计 / 当前应收" :column="3" border>
+        <ElDescriptionsItem label="订单数量">{{ data.reports.merchantCredit.orders }}</ElDescriptionsItem>
+        <ElDescriptionsItem label="商家应收">{{ money(data.reports.merchantCredit.receivableAmount) }}</ElDescriptionsItem>
+        <ElDescriptionsItem label="实际回款">{{ money(data.reports.merchantCredit.receivedAmount) }}</ElDescriptionsItem>
+        <ElDescriptionsItem label="未结金额">{{ money(data.reports.merchantCredit.outstandingAmount) }}</ElDescriptionsItem>
+        <ElDescriptionsItem label="累计已计入报酬">{{ money(data.reports.merchantCredit.acceptedRewardAmount) }}</ElDescriptionsItem>
+      </ElDescriptions>
+      <p class="text-xs text-g-500 mt-3">此处为全量累计数据，不随月报筛选。应收与回款分别记录；累计已计入报酬包含已支付部分，不代表当前欠款，不重复发放或计为成本。</p>
+    </ElCard>
     <ElCard shadow="never">
       <ElTabs v-model="activeTab" :before-leave="() => !operationBusy">
         <ElTabPane

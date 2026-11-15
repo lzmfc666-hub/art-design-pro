@@ -27,6 +27,7 @@ export const roleLabels: Record<Role, string> = {
   admin: '管理员',
   super_admin: '超级管理员',
   player: '打手'
+  ,merchant: '商家'
 }
 export const statusLabels: Record<OrderStatus, string> = {
   pending: '待接单',

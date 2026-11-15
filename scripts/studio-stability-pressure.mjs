@@ -14,6 +14,7 @@ import { createPlayerNotifications } from '../server/player-notifications.mjs'
 import { backupStudioDatabase, restoreStudioDatabase } from './studio-backup.mjs'
 import { sourceFingerprint } from './studio-source-fingerprint.mjs'
 import { runPlayerClientLoad } from './studio-pressure-client-load.mjs'
+import { runMerchantClientLoad } from './studio-pressure-merchant-load.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const qaRoot = process.env.STUDIO_FINAL_QA_ROOT
@@ -21,6 +22,7 @@ const qaRoot = process.env.STUDIO_FINAL_QA_ROOT
   : join(root, '.qa', 'backend-stability-pressure')
 const round = (value) => Math.round(value * 100) / 100
 const counts = { orders: 1000, players: 100, customers: 50, poolOptedIn: 10, pushDevices: 3 }
+const merchantCounts = { merchants: 2, accounts: 3, orders: 60 }
 const percentile = (values, percent) =>
   [...values].sort((a, b) => a - b)[Math.max(0, Math.ceil(values.length * percent) - 1)] || 0
 
@@ -239,6 +241,24 @@ async function worker() {
             },
             support.id
           )
+        const merchants = [0, 1].map(() =>
+          mutate('/merchants', { name: '响箭电竞', status: 'active' })
+        )
+        const merchantAccounts = [0, 0, 1].map((merchant, index) =>
+          mutate('/users', { username: `pressure-merchant-${index}`, name: `商家压力账号${index}`,
+            role: 'merchant', merchantId: merchants[merchant].id, status: 'active', password,
+            maxActiveOrders: 1, permissionOverrides: {} })
+        )
+        const merchantTemplates = merchants.map((merchant, index) =>
+          mutate('/templates', { name: `商家压力任务${index}`, game: '隔离商家测试', merchantId: merchant.id,
+            merchantCustomerAmount: 10000, amount: 8000, reward: 6000, active: true })
+        )
+        const merchantOrders = []
+        for (let index = 0; index < merchantCounts.orders; index++) {
+          const merchant = index % 2, template = merchantTemplates[merchant]
+          merchantOrders.push(mutate('/orders', { templateId: template.id, expectedTemplateRevision: template.revision,
+            roomCode: `MERCHANT-${index}`, dispatchMode: 'pool' }, merchantAccounts[merchant ? 2 : 0].id))
+        }
         // Nonempty capacity pages use real business writes, never synthetic wallet balances.
         const qr = service.upload(players[0].id, { name: 'isolated-payment.png', mime: 'image/png',
           data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=' })
@@ -257,6 +277,8 @@ async function worker() {
               `studio_player_session=${service.login(user.username, password, { requiredRole: 'player' }).token}`
           )
         }
+        for (let index = 0; index < merchantAccounts.length; index++)
+          cookies[`merchant${index}`] = `studio_merchant_session=${service.login(merchantAccounts[index].username, password, { requiredRole: 'merchant' }).token}`
         simulatedClockOffset = 0
         const realClockStartedAt = Date.now()
         await new Promise((done) => server.listen(0, '127.0.0.1', done))
@@ -268,10 +290,13 @@ async function worker() {
           base: `http://127.0.0.1:${server.address().port}/api/studio`,
           directory,
           cookies,
-          actorIds: { admin: 'admin', support: support.id },
+          actorIds: { admin: 'admin', support: support.id,
+            ...Object.fromEntries(merchantAccounts.map((row, index) => [`merchant${index}`, row.id])) },
+          merchantIds: merchants.map((row) => row.id),
+          merchantOrderIds: merchantOrders.map((row) => row.id),
           playerIds: players.map((user) => user.id),
           customerId: customers[0].id,
-          orderIdentities: state.orders.slice(0, 30).map((row) => ({
+          orderIdentities: state.orders.filter((row) => !row.merchantId).slice(0, 30).map((row) => ({
             id: row.id,
             revision: row.revision,
             dispatchRound: row.dispatchRound
@@ -383,6 +408,9 @@ async function worker() {
           restored = {
             orders: copied.orders.length,
             players: copied.users.filter((row) => row.role === 'player').length,
+            merchants: copied.merchants.length,
+            merchantAccounts: copied.users.filter((row) => row.role === 'merchant').length,
+            merchantCreditOrders: copied.orders.filter((row) => row.settlementMode === 'merchant-credit').length,
             uploads: recovered.prepare('SELECT COUNT(*) AS count FROM uploads').get().count,
             notifications: recovered
               .prepare('SELECT COUNT(*) AS count FROM player_notifications')
@@ -476,6 +504,8 @@ async function worker() {
 }
 
 async function main() {
+  mkdirSync(join(qaRoot, 'tmp'), { recursive: true })
+  process.env.TEMP = process.env.TMP = join(qaRoot, 'tmp')
   const child = fork(fileURLToPath(import.meta.url), ['--isolated-worker'], {
     cwd: root,
     windowsHide: true,
@@ -537,6 +567,7 @@ async function main() {
     output = join(context.directory, 'report.json')
     report.data = {
       ...counts,
+      merchantExtension: merchantCounts,
       fixtureClockAdvanceMs: 360_000,
       seedMs: context.seedMs,
       initialDatabaseBytes: context.databaseBytes
@@ -550,7 +581,7 @@ async function main() {
         method: body === undefined ? 'GET' : 'POST',
         headers: {
           Cookie: playerIndex == null ? cookies[role] : cookies.players[playerIndex],
-          ...(playerIndex == null ? {} : { 'X-Studio-Client': 'player' }),
+          ...(playerIndex == null ? (String(role).startsWith('merchant') ? { 'X-Studio-Client': 'merchant' } : {}) : { 'X-Studio-Client': 'player' }),
           ...(body === undefined
             ? {}
             : {
@@ -633,18 +664,22 @@ async function main() {
         ,() => request('/player/withdrawals?current=2&size=20&status=canceled', 0)
         ,() => request('/player/wallet/ledger?current=2&size=20', 0)
         ,() => request('/player/push-subscriptions/status', playerIndex)
+        ,() => request('/merchant/overview', 'merchant0')
+        ,() => request('/orders?current=2&size=20&title=商家压力', 'merchant0')
+        ,() => request('/orders?current=1&size=20&status=pending', 'merchant2')
+        ,() => request('/bootstrap', 'merchant1')
       ]
       return requests[index % requests.length]()
     }
     const adminPage = await request('/orders?current=1&size=20')
     assert.equal(adminPage.status, 200)
-    assert.equal(adminPage.data.total, counts.orders)
+    assert.equal(adminPage.data.total, counts.orders + merchantCounts.orders)
     assert.equal(adminPage.data.records.length, 20)
     const playerPage = await request('/player/orders?current=1&size=20&scope=pool', 99)
     assert.equal(playerPage.status, 200)
-    assert.equal(playerPage.data.total, 800)
+    assert.equal(playerPage.data.total, 800 + merchantCounts.orders)
     for (const value of playerPage.data.records) {
-      assert.equal(value.playerRemark, '打手可见压测说明')
+      assert.equal(value.playerRemark, context.merchantOrderIds.includes(value.id) ? '报响箭电竞' : '打手可见压测说明')
       assert.equal(Object.hasOwn(value, 'amount'), false)
       assert.equal(Object.hasOwn(value, 'receipt'), false)
       assert.equal(JSON.stringify(value).includes('内部压测备注不可公开'), false)
@@ -656,6 +691,18 @@ async function main() {
     )
     for (const concurrency of [1, 10, 30, 50])
       await phase('mixed-paged-shared-reads', concurrency, 240, mixed)
+    for (const role of ['merchant0', 'merchant1', 'merchant2']) {
+      const page = await request('/orders?current=2&size=20&title=商家压力', role)
+      assert.equal(page.status, 200)
+      assert.equal(page.data.total, 30)
+      assert.equal(page.data.records.length, 10)
+      assert.ok(page.data.records.every((row) => row.merchantId === context.merchantIds[role === 'merchant2' ? 1 : 0]))
+      for (const row of page.data.records) {
+        assert.equal(Object.hasOwn(row, 'reward'), false)
+        assert.equal(Object.hasOwn(row.snapshot || {}, 'reward'), false)
+      }
+    }
+    report.checks.push('Three merchant accounts see exact own-merchant search/page totals, including two accounts sharing one merchant; no player reward fields returned.')
     const withdrawalsPage = await request('/player/withdrawals?current=2&size=20&status=canceled', 0)
     assert.equal(withdrawalsPage.data.total, 25)
     assert.equal(withdrawalsPage.data.records.length, 5)
@@ -775,6 +822,10 @@ async function main() {
       cookies: cookies.players.slice(0, 3), playerIds: context.playerIds.slice(0, 3),
       output: join(context.directory, 'real-client-load') })
     assert.equal(report.realClientLoad.success, true)
+    report.realMerchantClientLoad = await runMerchantClientLoad({ apiBase: base.replace(/\/api\/studio$/, ''),
+      cookies: [cookies.merchant0, cookies.merchant1, cookies.merchant2], merchantIds: context.merchantIds,
+      output: join(context.directory, 'merchant-client-load') })
+    assert.equal(report.realMerchantClientLoad.success, true)
     const selected = {
       period: { type: 'total' },
       modules: [{ id: 'orders', fields: ['orderNo', 'status', 'amount', 'playerRemark'] }]
@@ -808,6 +859,7 @@ async function main() {
     report.unexpectedErrors = report.phases.reduce((sum, row) => sum + row.unexpectedErrors, 0)
     report.requestCounts = { phaseRequests: report.phases.reduce((sum,row) => sum + row.requests,0),
       directHttpRequests: httpRequests, realClientRequests: report.realClientLoad.requestCount,
+      realMerchantClientRequests: report.realMerchantClientLoad.requestCount,
       note: 'Direct count includes explicit checks and read-all preparation. Browser requests are separate actual app traffic.' }
     report.success = true
   } catch (error) {

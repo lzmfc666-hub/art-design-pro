@@ -1,6 +1,8 @@
 import type { Attachment } from '@/types/studio'
 import { useStudioStore } from '@/store/modules/studio'
 import { setStudioMutationActorResolver } from './studio-mutation'
+import { studioClient } from '@/utils/auth/admin-entry'
+export { studioClient } from '@/utils/auth/admin-entry'
 
 setStudioMutationActorResolver(() => useStudioStore().user?.id)
 
@@ -23,6 +25,7 @@ export async function studioRequest<T>(
     signal,
     credentials: 'same-origin',
     headers: {
+      ...(studioClient === 'merchant' ? { 'X-Studio-Client': 'merchant' } : {}),
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       ...(actorId && method !== 'GET' && method !== 'HEAD' ? { 'X-Studio-Actor': actorId } : {})
     },

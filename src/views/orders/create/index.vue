@@ -22,8 +22,11 @@
   import { studioRequest } from '@/api/studio'
   import { createStudioMutationIntent } from '@/api/studio-mutation'
   import { businessConfirmMessage } from '@/utils/business/confirm-message'
+  import { merchantOrderPayload } from '@/utils/auth/admin-entry'
 
   const { data, user, can, mutate, refresh, clearSession } = useStudio()
+  const isMerchant = computed(() => user.value?.role === 'merchant')
+  const ordersPath = computed(() => isMerchant.value ? '/merchant/orders' : '/orders/list')
   const isMobile = useMediaQuery('(max-width: 640px)')
   const router = useRouter()
   const saving = ref(false)
@@ -64,7 +67,7 @@
     amount: null as number | null,
     reward: null as number | null,
     remark: '',
-    playerRemark: '',
+    playerRemark: user.value?.role === 'merchant' ? '报响箭电竞' : '',
     dispatchMode: 'pool' as 'pool' | 'direct',
     assignedTo: '',
     payOnArrival: false,
@@ -85,14 +88,14 @@
   async function loadTargets() {
     if (!can('orders.create')) return
     const version = ++targetsVersion
-    const accountId = user.value?.id
+    const accountId = `${user.value?.id}:${user.value?.merchantId}`
     targetsLoading.value = true
     targetsError.value = ''
     try {
       const result = await studioRequest<{ records: OrderDispatchTarget[] }>(
         'orders/dispatch-targets'
       )
-      if (version === targetsVersion && accountId === user.value?.id)
+      if (version === targetsVersion && accountId === `${user.value?.id}:${user.value?.merchantId}`)
         dispatchTargets.value = result.records
     } catch (cause) {
       if (version === targetsVersion) targetsError.value = errorText(cause)
@@ -115,11 +118,11 @@
       return
     }
     const version = ++pendingVersion
-    const accountId = user.value?.id
+    const accountId = `${user.value?.id}:${user.value?.merchantId}`
     pendingLoading.value = true
     try {
       const result = await studioRequest<OrderPage>('orders?current=1&size=8&status=pending')
-      if (version === pendingVersion && accountId === user.value?.id && can('orders.view')) {
+      if (version === pendingVersion && accountId === `${user.value?.id}:${user.value?.merchantId}` && can('orders.view')) {
         pendingOrders.value = result.records
         pendingTotal.value = result.total
       }
@@ -130,7 +133,7 @@
     }
   }
   watch(
-    [() => user.value?.id, () => can('orders.create')],
+    [() => `${user.value?.id}:${user.value?.merchantId}`, () => can('orders.create')],
     () => {
       dispatchTargets.value = []
       targetsVersion++
@@ -139,7 +142,7 @@
     { immediate: true }
   )
   watch(
-    [() => user.value?.id, () => can('orders.view')],
+    [() => `${user.value?.id}:${user.value?.merchantId}`, () => can('orders.view')],
     () => {
       pendingVersion++
       pendingOrders.value = []
@@ -168,8 +171,12 @@
       if (version === balanceVersion) balanceLoading.value = false
     }
   }
-  const templates = computed(() => data.value?.templates.filter((item) => item.active) ?? [])
-  const steps = computed(() => [
+  const templates = computed(() => data.value?.templates.filter((item) => item.active && (isMerchant.value || !item.merchantId)) ?? [])
+  const steps = computed(() => isMerchant.value ? [
+    { label: '选择项目', done: !!form.templateId },
+    { label: '完善任务', done: !!(form.roomCode || form.gameId) },
+    { label: '核对并发布', done: !!form.templateId && !!(form.roomCode || form.gameId) }
+  ] : [
     { label: '选择项目', done: !!form.templateId },
     {
       label: '完善客户与来源',
@@ -207,7 +214,7 @@
         form.roomCode ||
         form.gameId ||
         form.remark ||
-        form.playerRemark ||
+        (form.playerRemark && (!isMerchant.value || form.playerRemark !== '报响箭电竞')) ||
         form.receipt ||
         customerDraft.name ||
         customerDraft.contact
@@ -280,10 +287,10 @@
   function selectTemplate(template: OrderTemplate) {
     form.templateId = template.id
     form.amount = template.amount === null ? null : template.amount / 100
-    form.reward = template.reward === null ? null : template.reward / 100
+    form.reward = template.reward == null ? null : template.reward / 100
     form.receivedAmount = form.amount
     form.map = template.map || '不限'
-    form.remark = template.remark
+    form.remark = isMerchant.value ? '' : template.remark
   }
   function changeTemplate(id: string) {
     const item = templates.value.find((template) => template.id === id)
@@ -502,7 +509,11 @@
       toCents(form.amount) > customerBalance.value
     )
       return void ElMessage.warning('客户储值余额不足，请先充值或选择现金 / 平台收款')
-    const warning = !form.templateId
+    const warning = isMerchant.value
+      ? !form.templateId ? '请选择订单模板'
+        : !form.roomCode.trim() && !form.gameId.trim() ? '房间码与客户游戏 ID 至少填写一项'
+        : form.dispatchMode === 'direct' && !form.assignedTo ? '请选择要指派的打手' : ''
+      : !form.templateId
       ? '请先选择订单项目'
       : !form.customerId
         ? '请选择或新增客户'
@@ -546,7 +557,7 @@
     try {
       const result = (await mutate(
         '/orders',
-        orderIntent.prepare('/orders', {
+        orderIntent.prepare('/orders', isMerchant.value ? merchantOrderPayload(form, selectedTemplate.value) : {
           ...form,
           amount: toCents(form.amount),
           reward: toCents(form.reward),
@@ -574,7 +585,7 @@
       const id = result?.id ?? result?.order?.id
       if (can('orders.view')) {
         submitted.value = true
-        await router.push(id ? { path: '/orders/list', query: { id } } : '/orders/list')
+        await router.push(id ? { path: ordersPath.value, query: { id } } : ordersPath.value)
       } else {
         Object.assign(form, {
           templateId: '',
@@ -619,7 +630,7 @@
   <div>
     <BusinessPageHeader
       title="创建与派单"
-      description="先选择订单项目，再补充客户、来源与付款信息，发布到抢单池或指定打手。"
+      :description="isMerchant ? '选择总后台模板，填写任务后直接发布；客户与平台默认为响箭电竞。' : '先选择订单项目，再补充客户、来源与付款信息，发布到抢单池或指定打手。'"
       icon="ri:add-box-line"
       badge="价格与模板快照随单保存"
     />
@@ -675,7 +686,7 @@
               />
               <ElRow :gutter="20">
                 <ElCol :xs="24" :sm="12"
-                  ><ElFormItem label="客户档案" required
+                  v-if="!isMerchant"><ElFormItem label="客户档案" required
                     ><div class="flex w-full gap-2"
                       ><ElSelect v-model="form.customerId" filterable placeholder="选择客户"
                         ><ElOption
@@ -692,7 +703,7 @@
                   ></ElCol
                 >
                 <ElCol :xs="24" :sm="12"
-                  ><ElFormItem label="订单来源" required
+                  v-if="!isMerchant"><ElFormItem label="订单来源" required
                     ><ElSelect v-model="form.platformId" placeholder="选择来源"
                       ><ElOption
                         v-for="item in data?.platforms"
@@ -751,7 +762,7 @@
                         :label="item" /></ElSelect></ElFormItem
                 ></ElCol>
                 <ElCol :xs="24" :sm="12"
-                  ><ElFormItem label="客户订单金额（元）" required
+                  v-if="!isMerchant"><ElFormItem label="客户订单金额（元）" required
                     ><ElInputNumber
                       v-model="form.amount"
                       :min="0.01"
@@ -762,7 +773,7 @@
                       placeholder="待配置，请填写" /></ElFormItem
                 ></ElCol>
                 <ElCol :xs="24" :sm="12"
-                  ><ElFormItem label="整单打手报酬（元）" required
+                  v-if="!isMerchant"><ElFormItem label="整单打手报酬（元）" required
                     ><ElInputNumber
                       v-model="form.reward"
                       :min="0"
@@ -773,7 +784,7 @@
                       placeholder="待配置，请填写" /></ElFormItem
                 ></ElCol>
               </ElRow>
-              <ElFormItem label="内部备注（模板及历史备注默认保留内部）"
+              <ElFormItem v-if="!isMerchant" label="内部备注（模板及历史备注默认保留内部）"
                 ><ElInput
                   v-model="form.remark"
                   type="textarea"
@@ -794,7 +805,7 @@
               </ElFormItem>
             </BusinessDetailSection>
             <BusinessDetailSection
-              title="收款确认"
+              v-if="!isMerchant" title="收款确认"
               description="填写实际付款信息，储值支付以服务端读取的账户余额为准。"
             >
               <ElFormItem label="收款方式" required>
@@ -898,7 +909,7 @@
                     :key="item.id"
                     :value="item.id"
                     :label="
-                      item.name +
+                      isMerchant ? item.name : item.name +
                       ' · 接单中 ' +
                       (item.activeOrders || 0) +
                       '/' +
@@ -924,14 +935,14 @@
                 :closable="false"
               />
               <p class="text-xs text-g-500 mt-3">
-                指定待接受不预占名额，接受时由服务器核对最新资格；足额收款后才能正常上报，待验收释放名额，验收后产生报酬。
+                {{ isMerchant ? '指定待接受不预占名额，接受时仍核对原资格。商家信用订单允许先履约，实际回款由总后台另行确认。' : '指定待接受不预占名额，接受时由服务器核对最新资格；足额收款后才能正常上报，待验收释放名额，验收后产生报酬。' }}
               </p>
             </BusinessDetailSection>
             <div class="flex justify-end gap-3 mt-5"
               ><ElButton
                 v-if="can('orders.view')"
                 :disabled="operationBusy"
-                @click="router.push('/orders/list')"
+                @click="router.push(ordersPath)"
                 >返回订单</ElButton
               ><ElButton
                 type="primary"
@@ -943,7 +954,7 @@
                 "
                 native-type="submit"
                 >{{
-                  form.paymentMethod === 'balance'
+                  isMerchant ? '发布商家订单' : form.paymentMethod === 'balance'
                     ? '确认储值扣款并发布订单'
                     : form.payOnArrival
                       ? '发布落地付订单'
@@ -962,17 +973,17 @@
             ><ElDescriptionsItem label="订单项目">{{
               selectedTemplate?.name || '未选择'
             }}</ElDescriptionsItem
-            ><ElDescriptionsItem label="客户金额">{{
+            ><ElDescriptionsItem :label="isMerchant ? '金小盾结算金额' : '客户金额'">{{
               form.amount == null ? '待填写' : money(toCents(form.amount))
             }}</ElDescriptionsItem
-            ><ElDescriptionsItem label="整单报酬">{{
+            ><ElDescriptionsItem v-if="!isMerchant" label="整单报酬">{{
               form.reward == null ? '待填写' : money(toCents(form.reward))
             }}</ElDescriptionsItem
-            ><ElDescriptionsItem label="订单来源">{{
-              selectedPlatform?.name || '未选择'
+            ><ElDescriptionsItem v-if="isMerchant" label="约定客户金额">{{ money(selectedTemplate?.merchantCustomerAmount) }}</ElDescriptionsItem><ElDescriptionsItem label="订单来源">{{
+              isMerchant ? '响箭电竞' : selectedPlatform?.name || '未选择'
             }}</ElDescriptionsItem></ElDescriptions
           ><p class="text-xs text-g-500 mt-4 leading-6"
-            >单人完成获得整单报酬；有一名队友时固定平分。完成材料由打手本人提交，再由财务验收。</p
+            >{{ isMerchant ? '模板价格由总后台维护；平台垫付履约，真实结算由总后台确认。' : '单人完成获得整单报酬；有一名队友时固定平分。完成材料由打手本人提交，再由财务验收。' }}</p
           ></div
         >
         <div v-if="can('orders.view')" class="art-card p-5"
@@ -993,7 +1004,7 @@
                   v-if="can('orders.view')"
                   link
                   type="primary"
-                  @click="router.push({ path: '/orders/list', query: { id: row.id } })"
+                  @click="router.push({ path: ordersPath, query: { id: row.id } })"
                   >{{ row.title }}</ElButton
                 ><span v-else>{{ row.title }}</span
                 ><p class="text-xs text-g-500">{{ formatTime(row.publishedAt) }}</p></template

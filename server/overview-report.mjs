@@ -295,7 +295,7 @@ export function buildOverviewReport(snapshots, dates, generatedAt) {
         .filter((row) => row.status === 'paid' && inRange(dayOf(row.paidAt), range))
         .reduce((total, row) => total + row.amount, 0)
     }
-    const staff = snapshot.users.filter((row) => row.role !== 'player')
+    const staff = snapshot.users.filter((row) => !['player', 'merchant'].includes(row.role))
     const players = snapshot.users.filter((row) => row.role === 'player')
     const coverage = {
       staff: creationCoverage(staff, range),

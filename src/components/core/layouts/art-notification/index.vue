@@ -132,7 +132,7 @@
 
   const isStaff = computed(() => Boolean(user.value && user.value.role !== 'player'))
   const orderTarget = (orderId: string): BusinessTodoTarget => ({
-    path: '/orders/list',
+    path: user.value?.role === 'merchant' ? '/merchant/orders' : '/orders/list',
     query: { id: orderId }
   })
   const settlementTarget = (tab: string): BusinessTodoTarget => ({
@@ -233,7 +233,7 @@
   })
   const pendingList = computed<BusinessNotice[]>(() => {
     if (!isStaff.value) return []
-    const result: BusinessNotice[] = bootstrapPendingList.value.filter(
+    const result: BusinessNotice[] = user.value?.role === 'merchant' ? [] : bootstrapPendingList.value.filter(
       (item) => !['payment', 'review', 'compensation'].includes(item.key)
     )
     for (const [key, title, description, permission, icon, target] of [
@@ -263,7 +263,7 @@
       ]
     ] as const) {
       const count = orderCounts.value[key] || 0
-      if (!count || !can(permission)) continue
+      if (!count || !can(permission) || (user.value?.role === 'merchant' && key === 'unpaid')) continue
       result.push({
         id: `order-count:${key}`,
         title: `${title} · ${count} 单`,
@@ -337,7 +337,7 @@
   async function reload() {
     if (loading.value || !user.value) return
     const version = ++loadVersion
-    const accountId = user.value.id
+    const accountId = `${user.value.id}:${user.value.merchantId}`
     loading.value = true
     error.value = ''
     try {
@@ -347,7 +347,7 @@
           ? studioRequest<OrderPage>('orders?current=1&size=20')
           : Promise.resolve(null)
       ])
-      if (disposed || version !== loadVersion || accountId !== user.value?.id) return
+      if (disposed || version !== loadVersion || accountId !== `${user.value?.id}:${user.value?.merchantId}`) return
       orderCounts.value = summary.orderCounts
       recentOrders.value = orders?.records || []
     } catch (cause) {
@@ -358,7 +358,7 @@
       if (version === loadVersion) loading.value = false
     }
   }
-  watch([() => user.value?.id, () => data.value?.permissions.join('|')], () => {
+  watch([() => `${user.value?.id}:${user.value?.merchantId}`, () => data.value?.permissions.join('|')], () => {
     loadVersion++
     loading.value = false
     recentOrders.value = []

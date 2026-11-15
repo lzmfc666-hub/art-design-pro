@@ -281,7 +281,7 @@ try {
   await page.locator('.business-detail-summary-item').filter({ has: page.getByText('请求 P95', { exact: true }) }).waitFor()
   await page.screenshot({ path: resolve(output, 'actual-runtime-metrics.png') })
   pass('真实运行指标与原框架随机演示明确区分')
-  await page.goto(base + '/#/reports/export?modules=orders')
+  await page.goto(base + '/#/reports/export?modules=orders&periodType=total')
   await page.getByRole('button', { name: '预览所选内容', exact: true }).waitFor()
   await page.getByText('预览后显示行数', { exact: true }).first().waitFor()
   assert.ok((await page.locator('#app-main').innerText()).includes('待预览'))
@@ -358,7 +358,8 @@ async function refreshMobileOrder(id) {
   await mobile.evaluate(()=>window.dispatchEvent(new Event('focus')))
   assert.equal((await response).status(),200)
   const confirm = mobile.getByRole('button',{name:'重新确认当前订单',exact:true})
-  if(await confirm.count()) await confirm.click()
+  await confirm.waitFor({state:'visible'})
+  await confirm.click()
 }
 async function fullLifecycle() {
   assert.equal((await financeContext.request.post(base+'/api/studio/login',{data:{username:finance.username,password}})).status(),200)

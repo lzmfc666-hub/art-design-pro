@@ -43,6 +43,7 @@ import { resetRouterState } from '@/router/guards/beforeEach'
 import { useMenuStore } from './menu'
 import { StorageConfig } from '@/utils/storage/storage-config'
 import { useStudio } from '@/hooks/business/useStudio'
+import { studioClient } from '@/utils/auth/admin-entry'
 
 /**
  * 用户状态管理
@@ -145,7 +146,7 @@ export const useUserStore = defineStore(
       // 保存当前用户 ID，用于下次登录时判断是否为同一用户
       const currentUserId = info.value.userId
       if (currentUserId) {
-        localStorage.setItem(StorageConfig.LAST_USER_ID_KEY, String(currentUserId))
+        localStorage.setItem(studioClient === 'merchant' ? 'merchant-last-user-id' : StorageConfig.LAST_USER_ID_KEY, String(currentUserId))
       }
 
       // 清空用户信息
@@ -176,7 +177,7 @@ export const useUserStore = defineStore(
       const currentRoute = router.currentRoute.value
       const redirect = currentRoute.name !== 'Login' ? currentRoute.fullPath : undefined
       await router.push({
-        name: 'Login',
+        name: studioClient === 'merchant' ? 'MerchantLogin' : 'Login',
         query: redirect ? { redirect } : undefined
       })
     }
@@ -187,7 +188,7 @@ export const useUserStore = defineStore(
      * 应在登录成功后调用
      */
     const checkAndClearWorktabs = () => {
-      const lastUserId = localStorage.getItem(StorageConfig.LAST_USER_ID_KEY)
+      const lastUserId = localStorage.getItem(studioClient === 'merchant' ? 'merchant-last-user-id' : StorageConfig.LAST_USER_ID_KEY)
       const currentUserId = info.value.userId
 
       // 无法获取当前用户 ID，跳过检查
@@ -206,7 +207,7 @@ export const useUserStore = defineStore(
       }
 
       // 清除临时存储
-      localStorage.removeItem(StorageConfig.LAST_USER_ID_KEY)
+      localStorage.removeItem(studioClient === 'merchant' ? 'merchant-last-user-id' : StorageConfig.LAST_USER_ID_KEY)
     }
 
     return {
@@ -235,7 +236,7 @@ export const useUserStore = defineStore(
   },
   {
     persist: {
-      key: 'user',
+      key: studioClient === 'merchant' ? 'merchant-user' : 'user',
       storage: localStorage
     }
   }

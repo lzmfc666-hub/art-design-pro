@@ -15,7 +15,7 @@ import { toFrameworkUser } from './utils/auth/studio-user'
 import { resetRouterState } from './router/guards/beforeEach'
 import { useAppearanceStore } from './store/modules/appearance'
 import { setPageTitle } from './utils/router'
-import { studioRequest } from './api/studio'
+import { studioRequest, studioClient } from './api/studio'
 import type { Staff } from './types/studio'
 import { adminSessionUser } from './utils/auth/admin-entry'
 
@@ -35,7 +35,9 @@ async function bootstrap() {
   userStore.setToken('', '')
   try {
     const session = await studioRequest<{ user: Staff | null }>('session')
-    studio.user.value = adminSessionUser(session.user)
+    studio.user.value = studioClient === 'merchant'
+      ? session.user?.role === 'merchant' ? session.user : null
+      : adminSessionUser(session.user)
     if (studio.user.value) await studio.refresh()
     if (studio.user.value) {
       userStore.setUserInfo(toFrameworkUser(studio.user.value))
@@ -83,7 +85,7 @@ async function bootstrap() {
       if (userStore.isLogin) {
         userStore.clearSession()
         void router.replace({
-          name: 'Login',
+          name: studioClient === 'merchant' ? 'MerchantLogin' : 'Login',
           query: { redirect: router.currentRoute.value.fullPath }
         })
       }
@@ -137,7 +139,7 @@ async function bootstrap() {
     () => setPageTitle(router.currentRoute.value)
   )
   watch(
-    () => studio.data.value?.permissions.join('|'),
+    () => studio.data.value ? `${studio.user.value?.merchantId || ''}|${studio.data.value.permissions.join('|')}` : undefined,
     (permissions, previous) => {
       if (
         userStore.isLogin &&

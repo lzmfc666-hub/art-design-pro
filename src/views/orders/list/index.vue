@@ -1,6 +1,7 @@
 <template>
   <div>
     <BusinessPageHeader
+      v-if="!merchantId"
       title="订单管理"
       description="查看履约进度、收款情况与历史处理记录，按状态快速定位需要处理的订单。"
       icon="ri:file-list-3-line"
@@ -74,10 +75,10 @@
         <template #left
           ><ElSpace wrap
             ><ElButton
-              v-if="can('orders.create')"
+              v-if="can('orders.create') && !merchantId"
               type="primary"
               v-ripple
-              @click="$router.push('/orders/create')"
+              @click="$router.push(isMerchant ? '/merchant/create' : '/orders/create')"
               >新增订单</ElButton
             ><ElTag type="warning">待验收 {{ reviewCount }}</ElTag
             ><ElTag type="info">共 {{ pagination.total }} 笔</ElTag></ElSpace
@@ -108,7 +109,10 @@
         >
         <template #amount="{ row }"
           ><span>{{ money(row.amount) }}</span
-          ><p class="text-xs text-g-500">打手 {{ money(row.reward) }}</p></template
+          ><p v-if="!isMerchant" class="text-xs text-g-500">打手 {{ money(row.reward) }}</p
+          ><p v-else class="text-xs text-g-500"
+            >客户价 {{ money(row.merchantCustomerAmount) }}</p
+          ></template
         >
         <template #status="{ row }"
           ><ElTag :type="tagType(row.status)">{{
@@ -165,7 +169,11 @@
       :close-on-press-escape="!detailBusy"
       :show-close="!detailBusy"
       :before-close="closeDrawer"
-      ><OrderDetail v-if="selectedId" :order-id="selectedId" @busy="detailBusy = $event"
+      ><OrderDetail
+        v-if="selectedId"
+        :order-id="selectedId"
+        :merchant-id="merchantId"
+        @busy="detailBusy = $event"
     /></BusinessDetailPanel>
   </div>
 </template>
@@ -181,8 +189,13 @@
   import { ElMessage } from 'element-plus'
   import { studioRequest } from '@/api/studio'
   defineOptions({ name: 'OrderList' })
+  const props = defineProps<{ merchantId?: string }>()
   const { data, user, can, clearSession } = useStudio()
+  const isMerchant = computed(() => user.value?.role === 'merchant')
   const route = useRoute()
+  const ordersPath = computed(() =>
+    props.merchantId ? route.path : isMerchant.value ? '/merchant/orders' : '/orders/list'
+  )
   const router = useRouter()
   const initial = () => ({
     orderNo: '',
@@ -225,7 +238,7 @@
       return
     }
     const version = ++ordersVersion
-    const accountId = user.value?.id
+    const accountId = `${user.value?.id}:${user.value?.merchantId}`
     ordersController?.abort()
     ordersController = new AbortController()
     ordersLoading.value = true
@@ -240,6 +253,7 @@
       query.set('start', applied.value.dates[0])
       query.set('end', applied.value.dates[1])
     }
+    if (props.merchantId) query.set('merchantId', props.merchantId)
     try {
       const result = await studioRequest<OrderPage>(
         `orders?${query}`,
@@ -247,7 +261,8 @@
         'GET',
         ordersController.signal
       )
-      if (version !== ordersVersion || accountId !== user.value?.id) return
+      if (version !== ordersVersion || accountId !== `${user.value?.id}:${user.value?.merchantId}`)
+        return
       tableData.value = result.records
       counts.value = result.counts || {}
       Object.assign(pagination, { current: result.current, size: result.size, total: result.total })
@@ -286,13 +301,13 @@
   let noticesLoading = false
   let noticesDisposed = false
   async function loadNotices() {
-    if (!can('orders.edit')) {
+    if (!can('orders.edit') || props.merchantId) {
       timeoutNotices.value = []
       timeoutTotal.value = 0
       return
     }
     if (noticesLoading || noticesDisposed) return
-    const accountId = data.value?.user.id
+    const accountId = `${data.value?.user.id}:${data.value?.user.merchantId}`
     noticesLoading = true
     try {
       const result = await studioRequest<{
@@ -303,21 +318,25 @@
       }>(
         `notifications/timeouts?current=${timeoutPagination.current}&size=${timeoutPagination.size}`
       )
-      if (!noticesDisposed && accountId === data.value?.user.id && can('orders.edit')) {
+      if (
+        !noticesDisposed &&
+        accountId === `${data.value?.user.id}:${data.value?.user.merchantId}` &&
+        can('orders.edit')
+      ) {
         timeoutNotices.value = result.records
         timeoutTotal.value = result.total
         Object.assign(timeoutPagination, { current: result.current, size: result.size })
         noticesError.value = ''
       }
     } catch (cause) {
-      if (!noticesDisposed && accountId === data.value?.user.id)
+      if (!noticesDisposed && accountId === `${data.value?.user.id}:${data.value?.user.merchantId}`)
         noticesError.value = cause instanceof Error ? cause.message : '提醒读取失败，请重试'
     } finally {
       noticesLoading = false
     }
   }
   watch(
-    () => data.value?.user.id,
+    () => `${data.value?.user.id}:${data.value?.user.merchantId}`,
     () => {
       timeoutNotices.value = []
       timeoutTotal.value = 0
@@ -381,115 +400,124 @@
       }) as const
     )[s]
   const reviewCount = computed(() => counts.value.review || 0)
-  const searchItems = computed(() => [
-    {
-      key: 'dateKey',
-      label: '日期口径',
-      type: 'select',
-      props: {
-        options: [
-          { value: 'createdAt', label: '创建日期' },
-          { value: 'paidAt', label: '客户付款日期' },
-          { value: 'completedAt', label: '完成日期' }
-        ]
-      }
-    },
-    {
-      key: 'dates',
-      label: '日期范围',
-      type: 'daterange',
-      props: {
+  const searchItems = computed(() =>
+    [
+      {
+        key: 'dateKey',
+        label: '日期口径',
+        type: 'select',
+        props: {
+          options: [
+            { value: 'createdAt', label: '创建日期' },
+            { value: 'paidAt', label: '客户付款日期' },
+            { value: 'completedAt', label: '完成日期' }
+          ]
+        }
+      },
+      {
+        key: 'dates',
+        label: '日期范围',
         type: 'daterange',
-        valueFormat: 'YYYY-MM-DD',
-        startPlaceholder: '开始日期',
-        endPlaceholder: '结束日期'
+        props: {
+          type: 'daterange',
+          valueFormat: 'YYYY-MM-DD',
+          startPlaceholder: '开始日期',
+          endPlaceholder: '结束日期'
+        }
+      },
+      ...[
+        ['orderNo', '工作室订单号'],
+        ['externalOrderNo', '平台订单号'],
+        ['title', '订单项目'],
+        ['customerName', '客户名称'],
+        ['contact', '客户联系方式'],
+        ['gameId', '客户游戏 ID'],
+        ['roomCode', '房间码']
+      ].map(([key, label]) => ({
+        key,
+        label,
+        type: 'input',
+        props: { clearable: true, placeholder: `按${label}搜索` }
+      })),
+      {
+        key: 'status',
+        label: '订单状态',
+        type: 'select',
+        props: {
+          clearable: true,
+          options: [
+            ...Object.entries(statusLabels).map(([value, label]) => ({ value, label })),
+            { value: 'unassigned', label: '待分配' },
+            { value: 'return-pending', label: '退单待办' }
+          ]
+        }
+      },
+      {
+        key: 'platformId',
+        label: '订单来源',
+        type: 'select',
+        props: {
+          clearable: true,
+          options: (data.value?.platforms || []).map((p) => ({ label: p.name, value: p.id }))
+        }
+      },
+      {
+        key: 'shopId',
+        label: '来源店铺',
+        type: 'select',
+        props: {
+          clearable: true,
+          filterable: true,
+          options: (data.value?.shops || [])
+            .filter(
+              (item) => !search.value.platformId || item.platformId === search.value.platformId
+            )
+            .map((item) => ({ label: item.name, value: item.id }))
+        }
+      },
+      {
+        key: 'leaderId',
+        label: '负责人',
+        type: 'select',
+        props: {
+          clearable: true,
+          filterable: true,
+          options: (data.value?.users || [])
+            .filter((item) => item.role === 'player')
+            .map((item) => ({ label: item.name, value: item.id }))
+        }
+      },
+      {
+        key: 'creatorId',
+        label: '创建人',
+        type: 'select',
+        props: {
+          clearable: true,
+          filterable: true,
+          options: (data.value?.users || [])
+            .filter((u) => u.role !== 'player')
+            .map((u) => ({ label: u.name, value: u.id }))
+        }
+      },
+      {
+        key: 'payment',
+        label: '收款状态',
+        type: 'select',
+        props: {
+          clearable: true,
+          options: [
+            { label: '已收款', value: 'paid' },
+            { label: '待确认收款', value: 'unpaid' }
+          ]
+        }
       }
-    },
-    ...[
-      ['orderNo', '工作室订单号'],
-      ['externalOrderNo', '平台订单号'],
-      ['title', '订单项目'],
-      ['customerName', '客户名称'],
-      ['contact', '客户联系方式'],
-      ['gameId', '客户游戏 ID'],
-      ['roomCode', '房间码']
-    ].map(([key, label]) => ({
-      key,
-      label,
-      type: 'input',
-      props: { clearable: true, placeholder: `按${label}搜索` }
-    })),
-    {
-      key: 'status',
-      label: '订单状态',
-      type: 'select',
-      props: {
-        clearable: true,
-        options: [
-          ...Object.entries(statusLabels).map(([value, label]) => ({ value, label })),
-          { value: 'unassigned', label: '待分配' },
-          { value: 'return-pending', label: '退单待办' }
-        ]
-      }
-    },
-    {
-      key: 'platformId',
-      label: '订单来源',
-      type: 'select',
-      props: {
-        clearable: true,
-        options: (data.value?.platforms || []).map((p) => ({ label: p.name, value: p.id }))
-      }
-    },
-    {
-      key: 'shopId',
-      label: '来源店铺',
-      type: 'select',
-      props: {
-        clearable: true,
-        filterable: true,
-        options: (data.value?.shops || [])
-          .filter((item) => !search.value.platformId || item.platformId === search.value.platformId)
-          .map((item) => ({ label: item.name, value: item.id }))
-      }
-    },
-    {
-      key: 'leaderId',
-      label: '负责人',
-      type: 'select',
-      props: {
-        clearable: true,
-        filterable: true,
-        options: (data.value?.users || [])
-          .filter((item) => item.role === 'player')
-          .map((item) => ({ label: item.name, value: item.id }))
-      }
-    },
-    {
-      key: 'creatorId',
-      label: '创建人',
-      type: 'select',
-      props: {
-        clearable: true,
-        filterable: true,
-        options: (data.value?.users || [])
-          .filter((u) => u.role !== 'player')
-          .map((u) => ({ label: u.name, value: u.id }))
-      }
-    },
-    {
-      key: 'payment',
-      label: '收款状态',
-      type: 'select',
-      props: {
-        clearable: true,
-        options: [
-          { label: '已收款', value: 'paid' },
-          { label: '待确认收款', value: 'unpaid' }
-        ]
-      }
-    }
-  ])
+    ].filter(
+      (item) =>
+        (!isMerchant.value ||
+          !['customerName', 'contact', 'platformId', 'shopId'].includes(item.key)) &&
+        (!props.merchantId || !['platformId', 'shopId'].includes(item.key))
+    )
+  )
   watch(
     () => search.value.platformId,
     () => {
@@ -514,7 +542,12 @@
   const { columns, columnChecks } = useTableColumns<Order>(() => [
     { prop: 'title', label: '订单 / 项目', minWidth: 220, useSlot: true },
     { prop: 'customerId', label: '客户 / 来源', minWidth: 170, useSlot: true },
-    { prop: 'amount', label: '订单金额', minWidth: 130, useSlot: true },
+    {
+      prop: 'amount',
+      label: isMerchant.value ? '金小盾结算金额' : '订单金额',
+      minWidth: 130,
+      useSlot: true
+    },
     { prop: 'status', label: '订单状态', minWidth: 115, useSlot: true },
     { prop: 'receivedAmount', label: '收款状态', minWidth: 110, useSlot: true },
     { prop: 'leaderId', label: '负责人', minWidth: 160, useSlot: true },
@@ -569,7 +602,7 @@
   onBeforeRouteUpdate((to) => {
     const id = to.query.id
     if (
-      to.path !== '/orders/list' ||
+      to.path !== ordersPath.value ||
       typeof id !== 'string' ||
       !id ||
       id.length > 512 ||
@@ -587,7 +620,7 @@
     if (parentOrderId(route.query) === order.id && !route.query.id) {
       selectedId.value = order.id
       drawer.value = true
-    } else void router.push({ path: '/orders/list', query: orderPageQuery(order.id) })
+    } else void router.push({ path: ordersPath.value, query: orderPageQuery(order.id) })
   }
   function restoreOrder({ recordId, isCurrent }: { recordId?: string; isCurrent?: () => boolean }) {
     if (isCurrent && !isCurrent()) return
@@ -604,7 +637,7 @@
   watch(
     [() => route.query.id, () => route.query.secondary, () => route.query.secondaryRecord],
     ([legacyId]) => {
-      if (route.path !== '/orders/list') return
+      if (route.path !== ordersPath.value) return
       const canonicalId = parentOrderId(route.query)
       if (typeof legacyId === 'string' && legacyId) {
         if (canonicalId) {
@@ -635,20 +668,20 @@
     const targetId = parentOrderId(route.query)
     if (
       !drawer.value &&
-      route.path === '/orders/list' &&
+      route.path === ordersPath.value &&
       targetId &&
       targetId !== selectedId.value
     ) {
       openOrder({ id: targetId })
       return
     }
-    if (!drawer.value && route.path === '/orders/list' && !detailBusy.value) {
+    if (!drawer.value && route.path === ordersPath.value && !detailBusy.value) {
       void loadOrders()
       void loadNotices()
     }
     if (
       !drawer.value &&
-      route.path === '/orders/list' &&
+      route.path === ordersPath.value &&
       route.query.id === selectedId.value &&
       !detailBusy.value
     ) {

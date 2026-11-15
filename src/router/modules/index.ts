@@ -13,6 +13,7 @@ import { ordersRoutes } from './orders'
 import { financeRoutes } from './finance'
 import { personnelRoutes } from './personnel'
 import { reportsRoutes } from './reports'
+import { merchantsRoutes } from './merchants'
 
 /**
  * 导出所有模块化路由
@@ -20,6 +21,7 @@ import { reportsRoutes } from './reports'
 export const routeModules: AppRouteRecord[] = [
   dashboardRoutes,
   ordersRoutes,
+  merchantsRoutes,
   financeRoutes,
   personnelRoutes,
   systemRoutes,
