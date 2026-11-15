@@ -1,3 +1,6 @@
+import { effectiveOrderReward } from './order-reward-policy.mjs'
+import { fulfillmentAuthorized } from './order-contract.mjs'
+
 const MAX_ISSUES = 100
 const ORDER_STATUSES = new Set(['pending', 'active', 'review', 'completed', 'canceled'])
 const money = (value, { signed = false } = {}) =>
@@ -189,9 +192,7 @@ export function buildDiagnosticsReport({
       issue('orders', 'error', 'order', order.id, '已有实收金额但没有有效原付款时间。')
     if (
       order.status === 'completed' &&
-      (order.receivedAmount !== order.amount ||
-        !timestamp(order.paidAt) ||
-        !timestamp(order.completedAt))
+      (!fulfillmentAuthorized(order) || !timestamp(order.completedAt))
     )
       issue('orders', 'error', 'order', order.id, '已完成订单缺少足额收款或有效完成时间。')
     const latest = asRows(order.submissions).at(-1)
@@ -394,14 +395,15 @@ export function buildDiagnosticsReport({
     const reversal = state.statusCorrectionReversals?.[order.id]
     if (settled && reversal?.active)
       issue('rewards', 'error', 'order', order.id, '订单已结算但仍有生效中的状态冲正记录。')
-    if (settled && money(order.reward)) {
+    const effectiveReward = effectiveOrderReward(order)
+    if (settled && money(effectiveReward)) {
       const allocations = new Map()
-      if (order.reward > 0 && order.leaderId) {
+      if (effectiveReward > 0 && order.leaderId) {
         allocations.set(
           order.leaderId,
-          order.teammateId ? Math.ceil(order.reward / 2) : order.reward
+          order.teammateId ? Math.ceil(effectiveReward / 2) : effectiveReward
         )
-        if (order.teammateId) allocations.set(order.teammateId, Math.floor(order.reward / 2))
+        if (order.teammateId) allocations.set(order.teammateId, Math.floor(effectiveReward / 2))
       }
       const recipients = new Set([...allocations.keys(), ...positive.map((row) => row.userId)])
       const mismatch = [...recipients].some(

@@ -195,8 +195,8 @@ try {
   await page.locator('input[type=file]').setInputFiles(imagePayload)
   const uploadedAvatar = await (await avatarResponse).json()
   await page.getByText('图片已上传，保存时会沿用这张图片。', { exact: true }).waitFor()
-  const avatarRequest = (await avatarResponse).request().postDataJSON()
-  assert.equal(avatarRequest.mime, 'image/png'); assert.ok(Buffer.from(avatarRequest.data, 'base64').length < source.size)
+  const avatarRequest = (await avatarResponse).request()
+  assert.equal(avatarRequest.headers()['content-type'], 'image/png'); assert.ok(uploadedAvatar.size < source.size)
   const avatarBitmap = await page.evaluate(async (url) => { const blob = await (await fetch(url, { cache: 'no-store' })).blob(); const bitmap = await createImageBitmap(blob); const size = [bitmap.width, bitmap.height]; bitmap.close(); return size }, uploadedAvatar.url)
   assert.deepEqual(avatarBitmap, [1024, 1024])
   const stages = await page.evaluate(() => { window.__imageObserver.disconnect(); return window.__imageStages })
@@ -204,7 +204,7 @@ try {
   await page.getByLabel('昵称', { exact: true }).fill('头像迟到隔离A')
   await visit('/player/me'); await visit('/player/profile')
   assert.equal(await page.getByLabel('昵称', { exact: true }).inputValue(), '头像迟到隔离A')
-  assert.equal(await page.locator('.p-avatar-editor img').getAttribute('src'), uploadedAvatar.url)
+  await page.waitForFunction(() => { const image = document.querySelector('.p-avatar-editor img'); return image?.naturalWidth > 0 && image.src.startsWith('blob:') })
   const countBeforeProfile = uploads.length
   let profileDropped = false
   await page.route('**/api/studio/profile', async (route) => {
@@ -228,7 +228,8 @@ try {
   const qrBitmap = await page.evaluate(async (url) => { const blob = await (await fetch(url, { cache: 'no-store' })).blob(); const bitmap = await createImageBitmap(blob); const size = [bitmap.width, bitmap.height]; bitmap.close(); return size }, uploadedQr.url)
   assert.deepEqual(qrBitmap, [4096, 4096])
   await visit('/player/me'); await visit('/player/payment')
-  assert.equal(await page.locator('.p-qr-preview').first().getAttribute('src'), uploadedQr.url)
+  await page.waitForFunction(() => { const image = document.querySelector('.p-qr-preview'); return image?.naturalWidth > 0 && image.src.startsWith('blob:') })
+  assert.equal(await page.locator('a[aria-label="查看收款码原图"]').first().getAttribute('href'), uploadedQr.url)
   const countBeforePayment = uploads.length
   let paymentDropped = false
   await page.route('**/api/studio/player/payment-methods', async (route) => {

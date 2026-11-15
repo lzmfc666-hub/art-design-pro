@@ -52,6 +52,37 @@ function fixture(t) {
 const inlineSize = (f, image) => f.s.db.prepare('SELECT length(data) AS size FROM uploads WHERE id=?').get(image.id).size
 const expectGone = (f, image, actor = f.player.id) => assert.throws(() => f.s.download(actor, image.id), error => error.status === 410)
 
+test('未解决问题和异常存单阻止到期删除，关闭后原规则生效，重开问题及恢复不复活已删图', async t => {
+  const f = fixture(t), { image, record } = f.complete()
+  const completedAt = f.state().orders.find(row => row.id === record.id).completedAt
+  f.setTime('2026-02-02T00:00:00Z')
+  f.mutate(`/orders/${record.id}/action`, { action: 'problem-open', reason: '完成后客户要求核对' })
+  assert.equal((await f.remove()).deleted, 0)
+  assert.ok(inlineSize(f, image) > 0)
+  const problem = f.state().orders.find(row => row.id === record.id).problem
+  f.mutate(`/orders/${record.id}/action`, { action: 'problem-close', problemId: problem.id, reason: '后台确认问题解决' })
+  f.edit(state => { state.orders.find(row => row.id === record.id).storage = { active: true } })
+  assert.equal((await f.remove()).deleted, 0)
+  f.edit(state => { state.orders.find(row => row.id === record.id).storage.active = false })
+  assert.equal((await f.remove()).deleted, 1)
+  expectGone(f, image)
+  assert.equal(f.state().orders.find(row => row.id === record.id).completedAt, completedAt)
+  f.mutate(`/orders/${record.id}/action`, { action: 'problem-open', reason: '已删除后新提出的问题' })
+  expectGone(f, image)
+  const before = f.state().orders.find(row => row.id === record.id)
+  const backup = join(f.root, 'issue-marker-backup.sqlite'), restored = join(f.root, 'issue-marker-restored.sqlite')
+  await backupStudioDatabase(f.path, backup)
+  await restoreStudioDatabase(backup, restored)
+  const recovered = createStudioServer({ dbPath: restored, seed: false, maintenanceFromEnv: false,
+    clock: () => new Date('2026-02-02T00:00:00Z') })
+  try {
+    const current = JSON.parse(recovered.service.db.prepare('SELECT json FROM studio_state WHERE id=1').get().json)
+    assert.deepEqual(current.orders.find(row => row.id === record.id).problem, before.problem)
+    assert.equal(recovered.service.db.prepare('SELECT count(*) AS count FROM image_deletions WHERE upload_id=?').get(image.id).count, 1)
+    assert.throws(() => recovered.service.download(f.player.id, image.id), error => error.status === 410)
+  } finally { recovered.service.close() }
+})
+
 test('打手材料按订单完成时间满30天永久删除，29天及差1毫秒均保留，后续复核不延后保留期', async t => {
   const f = fixture(t), { image, record } = f.complete()
   f.edit(state => { state.orders.find(row => row.id === record.id).submissions.at(-1).reviewedAt = '2026-01-20T00:00:00Z' })

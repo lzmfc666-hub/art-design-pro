@@ -370,8 +370,8 @@ test('真实HTTP双人奇数分：提交验收、后台免图更正、冲正恢�
     { action: 'cancel', reason: '财务取消核对' },
     'finance'
   )
-  await f.correct(record, 'active', { teammateId: f.users.player2.id })
-  await f.correct(record, 'completed', { teammateId: f.users.player2.id })
+  await f.api(`/orders/${record.id}/action`, { action: 'correct-status', status: 'active', teammateId: f.users.player2.id, reason: '已取消不能恢复' }, 'finance', 409)
+  await f.api(`/orders/${record.id}/action`, { action: 'correct-status', status: 'completed', teammateId: f.users.player2.id, reason: '已取消不能重新结算' }, 'finance', 409)
   assert.equal((await f.api('/player/wallet', undefined, 'player1')).earned, 501)
   assert.equal((await f.api('/player/wallet', undefined, 'player2')).earned, 500)
   assert.equal((await f.diagnostics()).summary.errorCount, 0)

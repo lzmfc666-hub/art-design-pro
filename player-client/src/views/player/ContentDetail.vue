@@ -22,10 +22,11 @@
       }}</span>
       <h2>{{ publication.title }}</h2>
       <time :datetime="publication.publishedAt">发布于 {{ publishedTime }}</time>
-      <img
+      <PrivateImage
         v-if="imageUrl && failedImage !== imageUrl"
         :src="imageUrl"
         :alt="publication.title"
+        variant="display"
         class="p-content-image"
         @error="failedImage = imageUrl"
       />
@@ -50,6 +51,7 @@
   import { contentApi, contentImageUrl } from '@/api/content'
   import { usePlayerContent } from './usePlayerContent'
   import PlayerIcon from './PlayerIcon.vue'
+  import PrivateImage from './PrivateImage.vue'
   import './content.css'
   const route = useRoute(),
     failedImage = ref('')

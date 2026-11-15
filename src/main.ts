@@ -15,9 +15,10 @@ import { toFrameworkUser } from './utils/auth/studio-user'
 import { resetRouterState } from './router/guards/beforeEach'
 import { useAppearanceStore } from './store/modules/appearance'
 import { setPageTitle } from './utils/router'
-import { studioRequest } from './api/studio'
+import { studioRequest, studioClient } from './api/studio'
 import type { Staff } from './types/studio'
 import { adminSessionUser } from './utils/auth/admin-entry'
+import { studioAccessScopeSignature } from './utils/auth/studio-access'
 
 document.addEventListener('touchstart', function () {}, { passive: false })
 // 默认不显示开发工具，不从浏览器缓存推断超管身份。
@@ -35,7 +36,9 @@ async function bootstrap() {
   userStore.setToken('', '')
   try {
     const session = await studioRequest<{ user: Staff | null }>('session')
-    studio.user.value = adminSessionUser(session.user)
+    studio.user.value = studioClient === 'merchant'
+      ? session.user?.role === 'merchant' ? session.user : null
+      : adminSessionUser(session.user)
     if (studio.user.value) await studio.refresh()
     if (studio.user.value) {
       userStore.setUserInfo(toFrameworkUser(studio.user.value))
@@ -83,7 +86,7 @@ async function bootstrap() {
       if (userStore.isLogin) {
         userStore.clearSession()
         void router.replace({
-          name: 'Login',
+          name: studioClient === 'merchant' ? 'MerchantLogin' : 'Login',
           query: { redirect: router.currentRoute.value.fullPath }
         })
       }
@@ -137,7 +140,7 @@ async function bootstrap() {
     () => setPageTitle(router.currentRoute.value)
   )
   watch(
-    () => studio.data.value?.permissions.join('|'),
+    () => studioAccessScopeSignature(studio.user.value, studio.data.value?.permissions),
     (permissions, previous) => {
       if (
         userStore.isLogin &&

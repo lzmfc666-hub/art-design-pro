@@ -57,7 +57,8 @@ export default ({ mode }: { mode: string }) => {
                 'x-forwarded-for',
                 sanitizedProxyHeaders(request, { resolveAddress })['x-forwarded-for']
               )
-              proxyRequest.removeHeader('x-studio-client')
+              if (request.headers['x-studio-client'] !== 'merchant')
+                proxyRequest.removeHeader('x-studio-client')
             })
           }
         }

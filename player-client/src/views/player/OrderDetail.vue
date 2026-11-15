@@ -6,26 +6,28 @@
       :online="resource.online.value"
       @retry="resource.refresh()"
     />
-    <OperationState v-for="item in operationStates" :key="item.family" :operation="item.operation" :online="resource.online.value" :allow-retry="!order?.historyOnly && !resource.stale.value" @check="checkOperation(item.family)" @retry="retryOperation(item.family)" />
+    <OperationState v-for="item in operationStates" :key="item.family" :operation="item.operation" :online="resource.online.value" :allow-retry="!!order && !order.historyOnly && !resource.stale.value && !readOnlyReason && item.family !== 'problem-feedback'" @check="checkOperation(item.family)" @retry="retryOperation(item.family)" />
     <div v-if="resource.error.value" class="p-actions">
       <RouterLink class="p-btn p-secondary" to="/player/tasks">返回我的任务</RouterLink>
       <RouterLink class="p-btn p-secondary" to="/player/lobby">返回订单大厅</RouterLink>
     </div>
     <template v-if="order">
-      <div v-if="targetChanged && !order.historyOnly" class="p-notice p-warning" role="status"><p>订单已变化，请重新确认。已填写内容暂时保留，确认前不会提交到新一轮任务。</p><button type="button" class="p-btn p-secondary" :disabled="busy || uploading || hasPendingOperation" @click="reconfirm">重新确认当前订单</button></div>
+      <div v-if="targetChanged && !order.historyOnly && !readOnlyReason" class="p-notice p-warning" role="status"><p>订单已变化，请重新确认。已填写内容暂时保留，确认前不会提交到新一轮任务。</p><button type="button" class="p-btn p-secondary" :disabled="busy || uploading || hasPendingOperation" @click="reconfirm">重新确认当前订单</button></div>
       <p v-if="resource.stale.value && resource.online.value" class="p-notice p-info">正在核对最新订单，请等待刷新完成后再操作。</p>
       <p v-if="profile.data.value && profile.data.value.activeOrders >= profile.data.value.maxActiveOrders" class="p-notice p-info">当前执行 {{ profile.data.value.activeOrders }} / {{ profile.data.value.maxActiveOrders }} 单，暂停新增接单。已有任务仍可查看，退单待处理继续占名额。</p>
+      <ArrivalPaymentNotice :order="order" />
       <div class="p-card p-detail-hero"
         ><div class="p-row"
           ><span class="p-order-no">{{ order.orderNo }}</span
-          ><span class="p-badge" :class="order.status">{{
-            order.dispatchState === 'unassigned' && order.status === 'pending'
+          ><span class="p-badge" :class="order.displayStatus || order.status">{{
+            order.dispatchState === 'unassigned' && (order.displayStatus || order.status) === 'pending'
               ? '客服待分配'
-              : orderStatus[order.status]
+              : orderStatus[order.displayStatus || order.status]
           }}</span></div
         ><h2>{{ order.title }}</h2
         ><div class="p-reward"
-          ><small>订单总报酬</small><strong>¥ {{ money(order.reward) }}</strong></div
+          ><small>订单总报酬</small><strong>¥ {{ money(effectiveOrderReward(order)) }}</strong></div
+        ><p v-if="order.effectiveReward !== undefined && effectiveOrderReward(order) !== order.reward" class="p-hint">原订单报酬（历史）¥ {{ money(order.reward) }}。当前报酬按后台结算记录显示，特殊报酬请联系财务核对。</p
         ></div
       >
       <div v-if="order.historyOnly" class="p-card p-info" role="status">
@@ -34,6 +36,26 @@
         <RouterLink class="p-btn p-secondary" to="/player/tasks?status=all">返回参与历史</RouterLink>
       </div>
       <template v-if="!order.historyOnly">
+      <p v-if="readOnlyReason" class="p-notice p-warning" role="status">{{ readOnlyReason.message }}</p>
+      <div v-if="order.storage" class="p-card">
+        <h3>{{ order.storage.active ? '订单已存单' : '存单恢复记录' }}</h3>
+        <p class="p-preline">{{ order.storage.reason }}</p>
+        <p class="p-hint">存单时间 {{ dateTime(order.storage.storedAt) }}<template v-if="order.storage.resumedAt"> · 恢复时间 {{ dateTime(order.storage.resumedAt) }}</template></p>
+        <p v-if="order.storage.active" class="p-hint">本单暂时停止履约，不占接单名额，已做进度与原接单历史保留。请等待后台恢复安排。</p>
+        <p v-if="order.capacityExempt" class="p-notice p-info">本单由存单恢复给原负责人继续完成，本轮不占接单名额。是否可以操作以当前限制为准。</p>
+      </div>
+      <div v-if="problemRecords.length" class="p-card">
+        <h3>问题单与处理记录</h3>
+        <div v-for="problem in problemRecords" :key="problem.id" class="p-history">
+          <div class="p-row"><strong>{{ problem.status === 'open' ? '问题处理中' : '问题已关闭' }}</strong><span class="p-muted">{{ dateTime(problem.openedAt) }}</span></div>
+          <p class="p-preline">{{ problem.reason }}</p>
+          <div v-for="feedback in problem.feedback" :key="feedback.id" class="p-problem-feedback">
+            <p><strong>{{ feedback.userName }}</strong> · {{ dateTime(feedback.createdAt) }}</p><p class="p-preline">{{ feedback.message }}</p>
+          </div>
+          <p v-if="problem.status === 'closed'" class="p-hint">后台确认：{{ problem.resolution || '已确认解决' }} · {{ dateTime(problem.closedAt) }}</p>
+        </div>
+        <p v-if="order.problem?.status === 'open'" class="p-notice p-info">问题单当前仅可查看，请联系后台客服记录处理结果并关闭问题。关闭后是否可以继续操作，以订单当前状态为准。</p>
+      </div>
       <div class="p-card"
         ><h3>服务要求</h3><p class="p-preline">{{ order.requirements || '请按订单要求完成服务' }}</p
         ><div class="p-player-remark"><h3>打手备注</h3><p class="p-preline">{{ order.playerRemark?.trim() || '暂无补充说明' }}</p></div><dl class="p-detail-list"
@@ -89,16 +111,17 @@
         class="p-notice p-info"
         >本单已交回客服待分配。原拒单或退单记录保留，请以客服重新安排为准。</p
       >
-      <div v-if="isLeader && order.status === 'active'" class="p-card"
+      <div v-if="isLeader && order.status === 'active' && !readOnlyReason" class="p-card"
         ><h3>提交完成材料</h3
-        ><p v-if="order.paymentConfirmed === false" class="p-notice p-warning">付款尚未确认，请联系后台确认付款。足额收款后才可正常上报。</p
+        ><p v-if="order.paymentConfirmed === false && order.fulfillmentAuthorized !== true" class="p-notice p-warning">付款尚未确认，请联系后台确认付款。足额收款后才可正常上报。</p
+        ><p v-if="order.paymentConfirmed === false && order.fulfillmentAuthorized === true" class="p-notice p-info">本单由平台垫付，可正常上报；财务验收后按原规则结算报酬。</p
         ><p v-if="order.canSubmit !== true" class="p-notice p-warning">{{ order.submitBlockedReason?.message || '当前暂不能上报，请刷新订单或联系后台。' }}</p
         ><p class="p-hint"
           >上传 1～10 张截图，单张不超过 8 MB。支持 JPG、PNG、WebP。财务验收通过后才结算报酬。</p
         ><div class="p-upload-grid"
           ><div v-for="(image, index) in screenshots" :key="image.id" class="p-upload-thumb"
             ><a :href="image.url" target="_blank" rel="noopener"
-              ><img :src="image.url" :alt="`完成截图 ${index + 1}`" /></a
+              ><PrivateImage :src="image.url" :context="`${order.id}:${order.revision}`" :alt="`完成截图 ${index + 1}`" /></a
             ><button
               class="p-remove-image"
               aria-label="删除截图"
@@ -121,18 +144,18 @@
             }}</option></select
           ></label
         ><p v-if="teammateId" class="p-notice p-info"
-          >双人平分：负责人 ¥{{ money(Math.ceil(order.reward / 2)) }}，队友 ¥{{
-            money(Math.floor(order.reward / 2))
+          >双人平分：负责人 ¥{{ money(Math.ceil(effectiveOrderReward(order) / 2)) }}，队友 ¥{{
+            money(Math.floor(effectiveOrderReward(order) / 2))
           }}。由财务核对。</p
         ><button
           class="p-btn p-primary p-full"
-          :disabled="blocked || uploading || !screenshots.length || !resource.online.value || order.canSubmit !== true || order.paymentConfirmed !== true || !hasAssignmentTarget"
+          :disabled="blocked || uploading || !screenshots.length || !resource.online.value || order.canSubmit !== true || !hasAssignmentTarget"
           @click="submit"
           >{{ busy ? '正在提交…' : '提交完成，等待验收' }}</button
         ></div
       >
-      <div v-if="isLeader && order.status === 'active'" class="p-card"
-        ><h3>申请退单</h3><p class="p-hint">客服批准前仍需负责本单，继续占用接单名额。</p
+      <div v-if="isLeader && order.status === 'active' && !readOnlyReason" class="p-card"
+        ><h3>申请退单</h3><p class="p-hint">客服批准前仍需负责本单。{{ order.capacityExempt ? '本单沿用存单续做免名额规则。' : '退单待处理继续占用接单名额。' }}</p
         ><p v-if="pendingReturn" class="p-notice p-warning">退单申请正在处理中，请等待客服结果。</p
         ><form v-else @submit.prevent="requestReturn"
           ><label class="p-field"
@@ -198,7 +221,7 @@
                 >订单完成满30天，图片已删除</div
               >
               <a v-else :href="image.url" target="_blank" rel="noopener"
-                ><img :src="image.url" :alt="image.name || '完成截图'" loading="lazy" /></a>
+                ><PrivateImage :src="image.url" :context="`${order.id}:${order.revision}`" :alt="image.name || '完成截图'" /></a>
             </template></div
           ><p v-if="submission.review" class="p-hint"
             >验收：{{
@@ -212,7 +235,7 @@
           ><p v-if="submission.reason" class="p-notice p-warning">{{ submission.reason }}</p></div
         ></div
       >
-      <p v-if="order.status === 'review'" class="p-notice p-info"
+      <p v-if="order.status === 'review' && !readOnlyReason" class="p-notice p-info"
         >正在等待财务验收，本单已释放接单名额。验收通过后报酬计入钱包。</p
       >
       </template>
@@ -228,6 +251,8 @@ import type { Attachment } from '@/types/studio'
 import type { PlayerOrder, PlayerProfile } from '@/types/player'
 import { captureOperation, usePlayerOperation, operationMessage } from '@/api/operations'
 import { assignmentTarget, dispatchTarget, orderSnapshot, orderTargetKey } from '@/api/orderTarget'
+import { playerOrderBlockedReason } from '@/api/orderAccess'
+import { effectiveOrderReward } from '@/api/orderPresentation'
 import { invalidatePlayerReads } from '@/api/readScheduler'
 import { readOrderDraft, saveOrderDraft, clearOrderDraft } from '@/stores/orderDrafts'
 import { safeApiMessage, isAbortError } from '@/api/studio'
@@ -235,6 +260,8 @@ import { usePlayerResource, money, dateTime, orderStatus } from './usePlayer'
 import PlayerState from './PlayerState.vue'
 import PlayerIcon from './PlayerIcon.vue'
 import OperationState from './OperationState.vue'
+import PrivateImage from './PrivateImage.vue'
+import ArrivalPaymentNotice from './ArrivalPaymentNotice.vue'
 
 const route = useRoute(), studio = useSessionStore()
 const viewEpoch = studio.epoch
@@ -242,17 +269,19 @@ const resource = usePlayerResource<PlayerOrder | null>(signal => playerApi.order
 const profile = usePlayerResource<PlayerProfile | null>(playerApi.profile, null, true, { topics: ['orders', 'profile'] })
 const teammateResource = usePlayerResource(playerApi.teammates, [], true, { topics: ['profile'] })
 const order = computed(() => resource.data.value?.id === String(route.params.id) ? resource.data.value : null)
+const readOnlyReason = computed(() => playerOrderBlockedReason(order.value))
 const isLeader = computed(() => !order.value?.historyOnly && order.value?.leaderId === studio.user?.id)
 const pendingReturn = computed(() => order.value?.returnRequests?.some(item => item.status === 'pending'))
-const canAccept = computed(() => !order.value?.historyOnly && order.value?.status === 'pending' && order.value.dispatchState !== 'unassigned' && (order.value.dispatchMode === 'pool' || order.value.assignedTo === studio.user?.id))
+const canAccept = computed(() => !order.value?.historyOnly && !readOnlyReason.value && order.value?.status === 'pending' && order.value.dispatchState !== 'unassigned' && (order.value.dispatchMode === 'pool' || order.value.assignedTo === studio.user?.id))
+const problemRecords = computed(() => [...(order.value?.problem ? [order.value.problem] : []), ...(order.value?.problemHistory || [])].filter((item, index, records) => records.findIndex(other => other.id === item.id) === index))
 const mode = ref(route.query.action === 'reject' ? 'reject' : ''), reason = ref(''), returnReason = ref(''), busy = ref(false), uploading = ref(false), actionError = ref(''), screenshots = ref<Attachment[]>([]), teammateId = ref(''), target = ref<PlayerOrder | null>(null)
 const teammates = computed(() => teammateResource.data.value)
-const actions = { claim: usePlayerOperation('claim'), reject: usePlayerOperation('reject'), return: usePlayerOperation('return'), submit: usePlayerOperation('submit') }
+const actions = { claim: usePlayerOperation('claim'), reject: usePlayerOperation('reject'), return: usePlayerOperation('return'), submit: usePlayerOperation('submit'), 'problem-feedback': usePlayerOperation('problem-feedback') }
 type Family = keyof typeof actions
 const operationStates = computed(() => Object.entries(actions).map(([family, controller]) => ({ family: family as Family, operation: controller.operation.value })))
 const hasPendingOperation = computed(() => Object.values(actions).some(item => item.pending.value))
 const targetChanged = computed(() => !!order.value && !!target.value && orderTargetKey(order.value) !== orderTargetKey(target.value))
-const blocked = computed(() => order.value?.historyOnly || busy.value || hasPendingOperation.value || targetChanged.value || resource.stale.value)
+const blocked = computed(() => order.value?.historyOnly || !!readOnlyReason.value || busy.value || hasPendingOperation.value || targetChanged.value || resource.stale.value)
 const hasDispatchTarget = computed(() => Number.isSafeInteger(order.value?.revision) && Number.isSafeInteger(order.value?.dispatchRound))
 const hasAssignmentTarget = computed(() => Number.isSafeInteger(order.value?.revision) && !!order.value?.assignmentId && order.value?.leaderId === studio.user?.id)
 interface UploadItem { file: File; phase: 'preparing' | 'uploading' | 'done' | 'error'; percent: number; error: string }
@@ -282,7 +311,7 @@ watch(order, value => {
     if (saved) { target.value = saved.target; reason.value = saved.reason; returnReason.value = saved.returnReason; teammateId.value = saved.teammateId; screenshots.value = saved.screenshots }
     else target.value = orderSnapshot(value)
   }
-  if (targetChanged.value) uploadController?.abort()
+  if (targetChanged.value || readOnlyReason.value) uploadController?.abort()
 }, { flush: 'sync' })
 watch([reason, returnReason, teammateId, screenshots], rememberDraft, { deep: true })
 onBeforeUnmount(() => { rememberDraft(); uploadController?.abort() })
@@ -308,7 +337,7 @@ async function finishOperation(family: Family, result: Awaited<ReturnType<typeof
     if (order.value && !order.value.historyOnly) target.value = orderSnapshot(order.value)
   } else if (result.state === 'rejected') { actionError.value = result.message; await resource.refresh() }
 }
-async function run(family: Family, body: Record<string, unknown>) {
+async function run(family: Exclude<Family, 'problem-feedback'>, body: Record<string, unknown>) {
   if (blocked.value || !target.value || !resource.online.value) return
   const viewed = orderSnapshot(target.value), epoch = studio.epoch
   busy.value = true; actionError.value = ''
@@ -326,7 +355,7 @@ function claim() { if (order.value?.canClaim === true) return run('claim', {}) }
 function reject() { return run('reject', { reason: reason.value }) }
 function requestReturn() { return run('return', { reason: returnReason.value }) }
 function submit() {
-  if (order.value?.canSubmit !== true || order.value.paymentConfirmed !== true) return
+  if (order.value?.canSubmit !== true) return
   return run('submit', { screenshots: screenshots.value, teammateId: teammateId.value || null })
 }
 async function checkOperation(family: Family) {
@@ -340,7 +369,7 @@ async function checkOperation(family: Family) {
   } finally { if (epoch === studio.epoch && id === String(route.params.id)) busy.value = false }
 }
 async function retryOperation(family: Family) {
-  if (busy.value || order.value?.historyOnly || resource.stale.value) return
+  if (busy.value || !order.value || order.value.historyOnly || resource.stale.value || readOnlyReason.value || family === 'problem-feedback') return
   const id = String(route.params.id), epoch = studio.epoch
   busy.value = true
   try { await finishOperation(family, await actions[family].retryOriginal(), id, epoch) }

@@ -144,7 +144,8 @@
               detail.paymentSnapshot ? formatTime(detail.paymentSnapshot.updatedAt) : '—'
             }}</ElDescriptionsItem>
             <ElDescriptionsItem v-if="detail.paymentSnapshot?.qrCode" label="收款码"
-              ><ElImage
+              ><BusinessImage
+                variant="display"
                 :src="detail.paymentSnapshot.qrCode.url"
                 :preview-src-list="[detail.paymentSnapshot.qrCode.url]"
                 preview-teleported
@@ -172,7 +173,7 @@
             }}</ElDescriptionsItem>
             <ElDescriptionsItem label="处理原因">{{ detail.reason || '—' }}</ElDescriptionsItem>
             <ElDescriptionsItem label="转账凭证"
-              ><ElImage
+              ><BusinessImage
                 v-if="detail.receipt"
                 :src="detail.receipt.url"
                 :preview-src-list="[detail.receipt.url]"
@@ -223,7 +224,8 @@
                 : '历史记录未登记'
           }}</ElDescriptionsItem>
           <ElDescriptionsItem v-if="payment.snapshot" label="申请时收款码">
-            <ElImage
+            <BusinessImage
+              variant="display"
               :src="payment.snapshot.qrCode.url"
               :preview-src-list="[payment.snapshot.qrCode.url]"
               fit="contain"
@@ -291,6 +293,7 @@
 </template>
 
 <script setup lang="ts">
+  import BusinessImage from '@/components/business/BusinessImage.vue'
   import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, reactive, ref, watch } from 'vue'
   import { ElMessage, ElMessageBox } from 'element-plus'

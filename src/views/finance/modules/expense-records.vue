@@ -91,7 +91,7 @@
               detail.deletedAt ? formatTime(detail.deletedAt) : '—'
             }}</ElDescriptionsItem
             ><ElDescriptionsItem label="费用凭证"
-              ><ElImage
+              ><BusinessImage
                 v-if="detail.receipt"
                 :src="detail.receipt.url"
                 :preview-src-list="[detail.receipt.url]"
@@ -176,6 +176,7 @@
 </template>
 
 <script setup lang="ts">
+  import BusinessImage from '@/components/business/BusinessImage.vue'
   import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, reactive, ref, watch } from 'vue'
   import { ElMessage, ElMessageBox } from 'element-plus'

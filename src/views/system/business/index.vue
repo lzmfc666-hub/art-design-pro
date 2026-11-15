@@ -1,12 +1,13 @@
 <template>
   <div class="business-page">
     <BusinessPageHeader
+      v-if="!merchantTemplates"
       title="业务配置"
       description="维护订单项目、平台店铺和打手等级，新增业务沿用最新配置。"
       icon="ri:gamepad-line"
       badge="历史订单保留快照"
     />
-    <ElCard class="mb-4" shadow="never">
+    <ElCard v-if="!merchantTemplates" class="mb-4" shadow="never">
       <ElTabs v-model="tab" :before-leave="preservePanelHeight"
         ><ElTabPane name="templates" label="订单项目 / 模板" /><ElTabPane
           name="sources"
@@ -40,9 +41,17 @@
                 @click="editTemplate()"
                 v-ripple
                 >新增订单项目</ElButton
-              ><span class="ml-3 text-sm text-g-500"
-                >空白价格表示待配置，下单时必须填写有效金额。</span
-              ></template
+              ><ElButton
+                v-if="canManageLottery"
+                :disabled="saving"
+                @click="editTemplate(undefined, 'lottery')"
+                v-ripple
+                >新增转盘单</ElButton
+              ><span class="ml-3 text-sm text-g-500">{{
+                merchantTemplates
+                  ? '集中维护商家约定客户价、金小盾结算价及打手报酬。'
+                  : '空白价格表示待配置，下单时必须填写有效金额。'
+              }}</span></template
             >
           </ArtTableHeader>
           <ArtTable
@@ -54,7 +63,12 @@
             @pagination:size-change="templateTable.handleSizeChange"
             @pagination:current-change="templateTable.handleCurrentChange"
           >
-            <template #amount="{ row }">{{ money(row.amount) }}</template
+            <template #playType="{ row }">{{ templatePlayLabel(row) }}</template>
+            <template #amount="{ row }"
+              >{{ money(row.amount)
+              }}<p v-if="row.merchantId" class="text-xs text-g-500"
+                >结算价 · 客户价 {{ money(row.merchantCustomerAmount) }}</p
+              ></template
             ><template #reward="{ row }">{{ money(row.reward) }}</template>
             <template #active="{ row }"
               ><ElTag :type="row.active ? 'success' : 'info'">{{
@@ -68,7 +82,7 @@
                 @click="detailTarget = { kind: 'template', id: row.id }"
                 >查看详情</ElButton
               ><ElButton
-                v-if="can('templates.manage')"
+                v-if="can('templates.manage') && (row.playType !== 'lottery' || canManageLottery)"
                 link
                 type="primary"
                 :disabled="saving"
@@ -183,7 +197,7 @@
           </ArtTable>
         </ElCard>
       </template>
-      <ElCard v-else>
+      <ElCard v-else-if="tab === 'levels'">
         <ArtTableHeader
           v-model:columns="levelColumns.columnChecks.value"
           :loading="loading"
@@ -259,6 +273,9 @@
           description="模板价格与整单报酬是建单默认值，已有订单按自身快照和实际记录核对。"
         >
           <ElDescriptions :column="1" border
+            ><ElDescriptionsItem label="项目玩法">{{
+              templatePlayLabel(detailTemplate)
+            }}</ElDescriptionsItem
             ><ElDescriptionsItem label="游戏">{{ detailTemplate.game }}</ElDescriptionsItem
             ><ElDescriptionsItem label="规格 / 目标">{{
               detailTemplate.description || '—'
@@ -360,9 +377,46 @@
       >
         <ElForm :disabled="saving" label-position="top" @submit.prevent="save">
           <template v-if="open === 'template'">
+            <ElFormItem label="模板归属商家">
+              <ElSelect
+                v-model="template.merchantId"
+                :clearable="!merchantTemplates"
+                :disabled="merchantTemplates && Boolean(merchantId)"
+                :placeholder="merchantTemplates ? '请选择归属商家' : '留空为内部普通模板'"
+              >
+                <ElOption
+                  v-for="item in data?.merchants || []"
+                  :key="item.id"
+                  :value="item.id"
+                  :label="item.name"
+                />
+              </ElSelect>
+            </ElFormItem>
             <ElFormItem label="项目名称" required
               ><ElInput v-model="template.name" maxlength="100" placeholder="例如 70 788w / 娱乐单"
             /></ElFormItem>
+            <ElFormItem label="项目玩法" required
+              ><ElSelect v-model="template.playType" class="w-full" @change="changeTemplatePlayType"
+                ><ElOption value="normal" label="普通订单" /><ElOption
+                  value="lottery"
+                  label="转盘单"
+                  :disabled="!canManageLottery" /></ElSelect
+            ></ElFormItem>
+            <ElFormItem v-if="template.playType === 'lottery'" label="转盘选项" required
+              ><ElSelect v-model="template.lotteryTier" class="w-full" placeholder="请选择转盘"
+                ><ElOption
+                  v-for="item in lotteryTierOptions"
+                  :key="item.value"
+                  :value="item.value"
+                  :label="item.label" /></ElSelect
+            ></ElFormItem>
+            <ElAlert
+              v-if="template.playType === 'lottery'"
+              title="当前仅保存转盘标识并导入页面，发码、开奖及结算流程尚未接入。"
+              type="info"
+              :closable="false"
+              class="mb-4"
+            />
             <ElFormItem label="游戏" required
               ><ElInput v-model="template.game" maxlength="100"
             /></ElFormItem>
@@ -371,12 +425,23 @@
             /></ElFormItem>
             <ElRow :gutter="16"
               ><ElCol :xs="24" :sm="12"
-                ><ElFormItem label="客户价格（元）"
+                ><ElFormItem
+                  :label="template.merchantId ? '金小盾结算金额（元）' : '客户价格（元）'"
                   ><BusinessAmount v-model="template.amount" /></ElFormItem></ElCol
               ><ElCol :xs="24" :sm="12"
                 ><ElFormItem label="整单打手报酬（元）"
                   ><BusinessAmount v-model="template.reward" /></ElFormItem></ElCol
             ></ElRow>
+            <ElFormItem v-if="template.merchantId" label="客户付款金额（元，模板约定价）" required
+              ><BusinessAmount v-model="template.merchantCustomerAmount"
+            /></ElFormItem>
+            <ElAlert
+              v-if="template.merchantId"
+              title="商家只可选择模板，无法维护价格；打手到手金额仅总后台可见。结算金额不是已确认到账。"
+              type="info"
+              :closable="false"
+              class="mb-4"
+            />
             <ElFormItem label="默认地图"
               ><ElInput v-model="template.map" maxlength="100"
             /></ElFormItem>
@@ -466,7 +531,13 @@
   } from '@/utils/business/platform-rules'
 
   defineOptions({ name: 'BusinessConfig' })
-  const { data, loading, can, mutate, refresh } = useStudio()
+  const props = defineProps<{ merchantTemplates?: boolean; merchantId?: string }>()
+  const { data, user, loading, can, mutate, refresh } = useStudio()
+  const canManageLottery = computed(
+    () =>
+      ['admin', 'manager', 'owner', 'super_admin'].includes(user.value?.role || '') &&
+      can('templates.manage')
+  )
   const tab = ref('templates')
   const panelsRef = ref<HTMLElement>()
   const panelMinHeight = ref(0)
@@ -512,6 +583,7 @@
   const templates = computed(() =>
     (data.value?.templates || []).filter(
       (row) =>
+        templateInScope(row) &&
         row.name.toLowerCase().includes((search.value.name || '').trim().toLowerCase()) &&
         row.game.toLowerCase().includes((search.value.game || '').trim().toLowerCase()) &&
         row.description
@@ -520,21 +592,45 @@
         (!search.value.active || row.active === (search.value.active === 'active'))
     )
   )
+  function templateInScope(row: OrderTemplate) {
+    return (
+      (!props.merchantTemplates || Boolean(row.merchantId)) &&
+      (!props.merchantId || row.merchantId === props.merchantId)
+    )
+  }
   const platforms = computed(() => data.value?.platforms || [])
   const shops = computed(() => data.value?.shops || [])
   const levels = computed(() =>
     [...(data.value?.levels || [])].sort((a, b) => a.delaySeconds - b.delaySeconds)
   )
   const shopPlatforms = platforms
+  const lotteryTierOptions = [
+    { value: 'special-small', label: '特惠小转盘' },
+    { value: 'special-medium', label: '特惠中转盘' },
+    { value: 'value-large', label: '超值大转盘' },
+    { value: 'ultimate-large', label: '终极大转盘' }
+  ] as const
+  function templatePlayLabel(row: Pick<OrderTemplate, 'playType' | 'lotteryTier'>) {
+    if (row.playType !== 'lottery') return '普通订单'
+    return (
+      lotteryTierOptions.find((item) => item.value === row.lotteryTier)?.label || '转盘（待选择）'
+    )
+  }
   const templateTable = useBusinessTable(templates),
     platformTable = useBusinessTable(platforms),
     shopTable = useBusinessTable(shops),
     levelTable = useBusinessTable(levels)
   const templateColumns = useTableColumns<OrderTemplate>(() => [
     { prop: 'name', label: '订单项目', minWidth: 150 },
+    { prop: 'playType', label: '项目玩法', minWidth: 150, useSlot: true },
     { prop: 'game', label: '游戏', minWidth: 140 },
     { prop: 'description', label: '规格 / 目标', minWidth: 200, showOverflowTooltip: true },
-    { prop: 'amount', label: '客户价格', width: 130, useSlot: true },
+    {
+      prop: 'amount',
+      label: props.merchantTemplates ? '金小盾结算金额' : '客户价格',
+      width: 150,
+      useSlot: true
+    },
     { prop: 'reward', label: '整单打手报酬', width: 150, useSlot: true },
     { prop: 'map', label: '默认地图', width: 130 },
     { prop: 'active', label: '状态', width: 90, useSlot: true },
@@ -578,7 +674,9 @@
   }
   const detailTemplate = computed(() =>
     detailTarget.value?.kind === 'template'
-      ? data.value?.templates.find((row) => row.id === detailTarget.value?.id)
+      ? data.value?.templates.find(
+          (row) => row.id === detailTarget.value?.id && templateInScope(row)
+        )
       : undefined
   )
   const detailPlatform = computed(() =>
@@ -602,7 +700,19 @@
   const detailSummary = computed(() =>
     detailTemplate.value
       ? [
-          { label: '客户价格', value: money(detailTemplate.value.amount), tone: 'primary' },
+          {
+            label: detailTemplate.value.merchantId ? '金小盾结算金额' : '客户价格',
+            value: money(detailTemplate.value.amount),
+            tone: 'primary'
+          },
+          ...(detailTemplate.value.merchantId
+            ? [
+                {
+                  label: '客户付款金额（约定）',
+                  value: money(detailTemplate.value.merchantCustomerAmount)
+                }
+              ]
+            : []),
           { label: '整单打手报酬', value: money(detailTemplate.value.reward) },
           { label: '项目状态', value: detailTemplate.value.active ? '启用' : '停用' }
         ]
@@ -636,8 +746,17 @@
               { label: '适用流程', value: '公共抢单池' }
             ]
   )
-  const template = reactive<Omit<OrderTemplate, 'id'> & { id?: string }>({
+  const template = reactive<
+    Omit<OrderTemplate, 'id' | 'merchantCustomerAmount'> & {
+      id?: string
+      merchantCustomerAmount: number | null
+    }
+  >({
+    merchantId: null,
+    merchantCustomerAmount: null,
     name: '',
+    playType: 'normal',
+    lotteryTier: null,
     game: '三角洲行动',
     description: '',
     amount: null,
@@ -661,7 +780,14 @@
   const editingSummary = computed(() =>
     open.value === 'template'
       ? [
-          { label: '客户价格', value: money(template.amount), tone: 'primary' },
+          {
+            label: template.merchantId ? '金小盾结算金额' : '客户价格',
+            value: money(template.amount),
+            tone: 'primary'
+          },
+          ...(template.merchantId
+            ? [{ label: '客户付款金额（约定）', value: money(template.merchantCustomerAmount) }]
+            : []),
           { label: '整单报酬', value: money(template.reward) },
           { label: '保存后状态', value: template.active ? '启用' : '停用' }
         ]
@@ -713,6 +839,10 @@
     const request = pendingRestore.value
     pendingRestore.value = null
     const [kind, id] = (request.recordId || '').split(':')
+    if (props.merchantTemplates && kind !== 'template') {
+      restoreError.value = '请返回当前商家的专属模板列表重新选择。'
+      return
+    }
     if (!['template', 'platform', 'shop', 'level'].includes(kind || '') || !id) {
       restoreError.value = '配置标识无效，请返回业务配置重新选择。'
       return
@@ -726,7 +856,7 @@
     }
     tab.value = kind === 'template' ? 'templates' : kind === 'level' ? 'levels' : 'sources'
     if (kind === 'template') {
-      const row = data.value.templates.find((item) => item.id === id)
+      const row = data.value.templates.find((item) => item.id === id && templateInScope(item))
       if (request.kind === 'edit' && id === 'new') editTemplate()
       else if (!row) restoreError.value = '当前账号没有可读取的订单项目，请返回配置列表。'
       else if (request.kind === 'detail') detailTarget.value = { kind: 'template', id: row.id }
@@ -761,13 +891,17 @@
         level: '打手等级配置'
       })[open.value || 'template']
   )
-  function editTemplate(row?: OrderTemplate) {
+  function editTemplate(row?: OrderTemplate, playType: 'normal' | 'lottery' = 'normal') {
     if (!can('templates.manage') || saving.value) return
+    if ((row?.playType === 'lottery' || playType === 'lottery') && !canManageLottery.value) return
+    if (row && !templateInScope(row)) return
     Object.assign(
       template,
       {
         id: undefined,
-        name: '',
+        merchantId: props.merchantTemplates ? props.merchantId || null : null,
+        merchantCustomerAmount: null,
+        name: playType === 'lottery' ? '转盘单' : '',
         game: '三角洲行动',
         description: '',
         amount: null,
@@ -776,9 +910,22 @@
         remark: '',
         active: true
       },
-      row || {}
+      row || {},
+      {
+        playType: row ? row.playType || 'normal' : playType,
+        lotteryTier: row
+          ? row.playType === 'lottery'
+            ? row.lotteryTier || null
+            : null
+          : playType === 'lottery'
+            ? 'special-small'
+            : null
+      }
     )
     open.value = 'template'
+  }
+  function changeTemplatePlayType(value: 'normal' | 'lottery') {
+    template.lotteryTier = value === 'lottery' ? template.lotteryTier || 'special-small' : null
   }
   function editPlatform(row?: Platform) {
     if (!can('settings.manage') || saving.value) return
@@ -800,6 +947,14 @@
     open.value = 'level'
   }
   async function save() {
+    if (props.merchantTemplates && props.merchantId && template.merchantId !== props.merchantId) {
+      ElMessage.warning('模板归属与当前选择的商家不一致，请返回列表重试')
+      return
+    }
+    if (props.merchantTemplates && open.value === 'template' && !template.merchantId) {
+      ElMessage.warning('请选择模板归属商家')
+      return
+    }
     if (
       !open.value ||
       saving.value ||
@@ -808,9 +963,22 @@
       return
     const models = { template, platform, shop, level },
       body = models[open.value]
+    if (
+      open.value === 'template' &&
+      !canManageLottery.value &&
+      (template.playType === 'lottery' ||
+        data.value?.templates.find((row) => row.id === template.id)?.playType === 'lottery')
+    )
+      return void ElMessage.warning('当前角色无权修改转盘项目')
     if (!body.name.trim()) return void ElMessage.warning('请填写名称')
     if (open.value === 'template' && !template.game.trim())
       return void ElMessage.warning('请填写游戏名称')
+    if (
+      open.value === 'template' &&
+      template.playType === 'lottery' &&
+      !lotteryTierOptions.some((item) => item.value === template.lotteryTier)
+    )
+      return void ElMessage.warning('请选择转盘选项')
     if (open.value === 'shop' && !shop.platformId) return void ElMessage.warning('请选择来源平台')
     saving.value = true
     try {
@@ -818,7 +986,13 @@
         { template: '/templates', platform: '/platforms', shop: '/shops', level: '/levels' }[
           open.value
         ],
-        { ...body }
+        {
+          ...body,
+          ...(open.value === 'template' && {
+            playType: template.playType || 'normal',
+            lotteryTier: template.playType === 'lottery' ? template.lotteryTier : null
+          })
+        }
       )
       open.value = ''
       ElMessage.success('业务配置已保存')

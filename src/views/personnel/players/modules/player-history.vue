@@ -42,12 +42,9 @@
       @pagination:current-change="changePage"
     >
       <template #status="{ row }"
-        ><ElTag
-          :type="
-            row.status === 'completed' ? 'success' : row.status === 'canceled' ? 'info' : 'warning'
-          "
-          >{{ statusLabels[row.status as OrderStatus] }}</ElTag
-        ></template
+        ><ElTag :type="orderStatusType(row.displayStatus || row.status)">{{
+          orderStatusLabel(row)
+        }}</ElTag></template
       >
       <template #participation="{ row }">{{ participation(row) }}</template>
       <template #acceptedAt="{ row }">{{
@@ -84,7 +81,7 @@
       />
       <BusinessDetailSummary
         :items="[
-          { label: '当前订单状态', value: selected ? statusLabels[selected.status] : '—' },
+          { label: '当前订单状态', value: selected ? orderStatusLabel(selected) : '—' },
           { label: '参与身份', value: selected ? participation(selected) : '—' },
           {
             label: '负责人接单记录',
@@ -145,12 +142,17 @@
   import { computed, onUnmounted, reactive, ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
   import { studioRequest } from '@/api/studio'
-  import { formatTime, statusLabels, useStudio } from '@/hooks/business/useStudio'
+  import {
+    formatTime,
+    orderStatusLabel,
+    orderStatusType,
+    useStudio
+  } from '@/hooks/business/useStudio'
   import { useTableColumns } from '@/hooks/core/useTableColumns'
   import BusinessDetailHeader from '@/components/business/BusinessDetailHeader.vue'
   import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
   import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
-  import type { Order, OrderStatus } from '@/types/studio'
+  import type { Order } from '@/types/studio'
 
   const props = defineProps<{ userId: string }>()
   const { can, clearSession, refresh } = useStudio()

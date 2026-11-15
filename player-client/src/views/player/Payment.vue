@@ -8,9 +8,9 @@
       <div class="p-section-title"><h3>{{ method.label }}收款码</h3>
         <span class="p-badge" :class="existing(method.value) ? 'active' : 'pending'">{{ existing(method.value) ? '已保存' : '未设置' }}</span>
       </div>
-      <img v-if="!imageFailed[method.value] && (uploads[method.value].attachment.value || existing(method.value)?.qrCode)"
+      <a v-if="!imageFailed[method.value] && (uploads[method.value].attachment.value || existing(method.value)?.qrCode)" :href="(uploads[method.value].attachment.value || existing(method.value)?.qrCode)?.url" target="_blank" rel="noopener" aria-label="查看收款码原图"><PrivateImage
         :src="(uploads[method.value].attachment.value || existing(method.value)?.qrCode)?.url"
-        :key="`${method.value}:${imageVersion[method.value] || 0}`" class="p-qr-preview" :alt="`${method.label}收款码`" loading="lazy" decoding="async" @error="imageFailed[method.value] = true" />
+        :key="`${method.value}:${imageVersion[method.value] || 0}`" :context="String(imageVersion[method.value] || 0)" variant="display" class="p-qr-preview" :alt="`${method.label}收款码`" @error="imageFailed[method.value] = true" /></a>
       <div v-else-if="imageFailed[method.value]" class="p-qr-empty"><PlayerIcon name="qr" /><p>收款码图片暂未加载，请重新核对网络与权限。</p>
         <button type="button" class="p-text-btn" :disabled="!resource.online.value" @click="retryImage(method.value)">重新加载图片</button></div>
       <div v-else class="p-qr-empty"><PlayerIcon name="qr" /><p>上传本人{{ method.label }}收款码</p></div>
@@ -42,6 +42,7 @@
   import PlayerState from './PlayerState.vue'
   import PlayerIcon from './PlayerIcon.vue'
   import ImageUploadState from './ImageUploadState.vue'
+  import PrivateImage from './PrivateImage.vue'
   type Method = 'wechat' | 'alipay'
   const methods: { value: Method; label: string }[] = [{ value: 'wechat', label: '微信' }, { value: 'alipay', label: '支付宝' }]
   const resource = usePlayerResource<PaymentMethod[]>((signal) => playerApi.paymentMethods(signal), [], false)

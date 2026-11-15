@@ -217,6 +217,23 @@ test('归档磁盘余量不足时不写原图副本，原BLOB继续可读', asyn
   assert.deepEqual(f.s.download(f.player.id, image.id).data, Buffer.from(png, 'base64'))
 })
 
+test('新问题单及异常存单保护完成材料，关闭问题后仍按原完成时间归档', async t => {
+  const f = fixture(t), { image, record } = f.complete()
+  const completedAt = f.state().orders.find(row => row.id === record.id).completedAt
+  f.setTime('2026-02-02T00:00:00Z')
+  f.mutate(`/orders/${record.id}/action`, { action: 'problem-open', reason: '客户提出截图核对问题' })
+  assert.equal((await f.archive()).archived, 0)
+  assert.ok(inlineSize(f, image) > 0)
+  const problem = f.state().orders.find(row => row.id === record.id).problem
+  f.mutate(`/orders/${record.id}/action`, { action: 'problem-close', problemId: problem.id, reason: '已与客户确认处理完成' })
+  f.edit(state => { state.orders.find(row => row.id === record.id).storage = { active: true } })
+  assert.equal((await f.archive()).archived, 0)
+  f.edit(state => { state.orders.find(row => row.id === record.id).storage.active = false })
+  assert.equal((await f.archive()).archived, 1)
+  assert.equal(f.state().orders.find(row => row.id === record.id).completedAt, completedAt)
+  assert.deepEqual(f.s.download(f.player.id, image.id).data, Buffer.from(png, 'base64'))
+})
+
 test('完整备份恢复不依赖归档目录，缺图/损坏不产生成功备份或覆盖旧副本', async t => {
   const f = fixture(t), { image, record } = f.complete()
   f.setTime('2026-02-02T00:00:00Z')

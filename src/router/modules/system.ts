@@ -28,6 +28,17 @@ export const systemRoutes: AppRouteRecord = {
       }
     },
     {
+      path: 'lottery',
+      name: 'LotteryManagement',
+      component: '/system/lottery',
+      meta: {
+        title: '转盘管理',
+        icon: 'ri:gift-line',
+        studioRoles: ['admin', 'manager', 'owner', 'super_admin'],
+        keepAlive: false
+      }
+    },
+    {
       path: 'appearance',
       name: 'AppearanceSettings',
       component: '/system/appearance',

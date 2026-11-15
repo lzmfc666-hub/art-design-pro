@@ -5,6 +5,7 @@ const operationPaths = {
   reject: /^\/player\/orders\/[^/]+\/reject$/,
   return: /^\/player\/orders\/[^/]+\/return-request$/,
   submit: /^\/player\/orders\/[^/]+\/submit$/,
+  'problem-feedback': /^\/player\/orders\/[^/]+\/problem-feedback$/,
   withdraw: /^\/player\/withdrawals$/,
   'cancel-withdrawal': /^\/player\/withdrawals\/[^/]+\/cancel$/
 }
@@ -40,6 +41,7 @@ export function readPlayerOperationResult(db, user, requestId, family, now) {
     lateCommitPossible: true,
     canCreateNew: false,
     canRetryWithOriginal:
+      family !== 'problem-feedback' &&
       (family !== 'claim' || user.playerAccess?.claim !== false) &&
       (family !== 'withdraw' || user.playerAccess?.withdraw !== false)
   }

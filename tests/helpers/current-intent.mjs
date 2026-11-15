@@ -3,7 +3,7 @@ import { resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const critical = (path) =>
-  /^\/(?:orders(?:\/[^/]+\/action)?|refunds(?:\/[^/]+\/action)?|withdrawals\/[^/]+\/action|expenses(?:\/[^/]+\/action)?|payrolls|player-adjustments(?:\/[^/]+\/action)?|reward-reviews\/[^/]+\/action|customer-transactions|player-deposit-transactions|player\/orders\/[^/]+\/(?:claim|reject|submit|return-request)|player\/withdrawals(?:\/[^/]+\/cancel)?)$/.test(
+  /^\/(?:orders(?:\/[^/]+\/action)?|refunds(?:\/[^/]+\/action)?|withdrawals\/[^/]+\/action|expenses(?:\/[^/]+\/action)?|payrolls|player-adjustments(?:\/[^/]+\/action)?|reward-reviews\/[^/]+\/action|customer-transactions|player-deposit-transactions|player\/orders\/[^/]+\/(?:claim|reject|submit|return-request|problem-feedback)|player\/withdrawals(?:\/[^/]+\/cancel)?)$/.test(
     path
   )
 const serviceIntents = new WeakMap()
@@ -27,7 +27,7 @@ function identityFields(path, body, order) {
   const action = body.action || path.split('/').at(-1)
   const fields = { expectedRevision: order.revision }
   if (['claim', 'reject'].includes(action)) fields.dispatchRound = order.dispatchRound
-  if (['release', 'submit', 'return-request', 'return-approve', 'return-reject'].includes(action)) {
+  if (['release', 'submit', 'return-request', 'return-approve', 'return-reject', 'problem-feedback'].includes(action)) {
     fields.assignmentId = order.assignmentId
     fields.leaderId = order.leaderId
   }
@@ -53,10 +53,12 @@ export function testMutate(service, actor, path, body = {}) {
   const key = JSON.stringify([actor, path, requestId])
   let fields = intents.get(key)
   if (!fields) {
-    const orderId = path.match(/^\/(?:player\/)?orders\/([^/]+)\//)?.[1]
-    const state = orderId
+    const directOrderId = path.match(/^\/(?:player\/)?orders\/([^/]+)\//)?.[1] || (path === '/refunds' ? body.orderId : null)
+    const refundId = path.match(/^\/refunds\/([^/]+)\/action$/)?.[1]
+    const state = directOrderId || refundId
       ? JSON.parse(service.db.prepare('SELECT json FROM studio_state WHERE id=1').get().json)
       : null
+    const orderId = directOrderId || state?.refunds.find(row => row.id === refundId)?.orderId
     fields = identityFields(
       path,
       body,
@@ -94,7 +96,15 @@ export function installTestClientFetch() {
     let intent = fetchIntents.get(key)
     if (!intent) {
       intent = (async () => {
-        const orderId = path.match(/^\/(?:player\/)?orders\/([^/]+)\//)?.[1]
+        let orderId = path.match(/^\/(?:player\/)?orders\/([^/]+)\//)?.[1] || (path === '/refunds' ? body.orderId : null)
+        const refundId = path.match(/^\/refunds\/([^/]+)\/action$/)?.[1]
+        if (refundId) {
+          const snapshotResponse = await originalFetch(`${url.origin}/api/studio/bootstrap`, { headers })
+          if (snapshotResponse.ok) {
+            const snapshot = await snapshotResponse.json()
+            orderId = snapshot.refunds?.find(row => row.id === refundId)?.orderId
+          }
+        }
         if (orderId) {
           const detailPath = path.startsWith('/player/')
             ? `/player/orders/${orderId}`

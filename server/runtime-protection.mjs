@@ -251,6 +251,26 @@ export function createRuntimeProtection({
       rateCheck('claim-user', actor, claimRate)
       rateCheck('claim-address', address, claimRate * 5)
     },
+    lottery(address) {
+      try {
+        rateCheck('lottery-address', address, 30)
+        rateCheck('lottery-global', 'all', 600)
+      } catch (error) {
+        if (error.status === 429 && !error.details?.retryAfter)
+          error.details = { retryAfter: 60 }
+        throw error
+      }
+    },
+    lotteryAsset(address) {
+      try {
+        rateCheck('lottery-asset-address', address, 240)
+        rateCheck('lottery-asset-global', 'all', 3600)
+      } catch (error) {
+        if (error.status === 429 && !error.details?.retryAfter)
+          error.details = { retryAfter: 60 }
+        throw error
+      }
+    },
     acquireUpload(actor, address) {
       rateCheck('upload-user', actor, uploadRate)
       rateCheck('upload-address', address, uploadRate * 5)

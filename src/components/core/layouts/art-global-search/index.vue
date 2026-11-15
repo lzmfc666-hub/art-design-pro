@@ -126,7 +126,7 @@
   import { handleMenuJump } from '@/utils/navigation'
   import { type ScrollbarInstance } from 'element-plus'
   import { useStudio, statusLabels, roleLabels } from '@/hooks/business/useStudio'
-  import { canAccessStudioPage } from '@/utils/auth/studio-access'
+  import { canAccessStudioPage, studioAccessScopeSignature } from '@/utils/auth/studio-access'
 
   defineOptions({ name: 'ArtGlobalSearch' })
 
@@ -140,7 +140,7 @@
     description?: string
   }
   const searchResult = ref<SearchRoute[]>([])
-  const { data, can } = useStudio()
+  const { data, user, can } = useStudio()
   type SearchCategory = 'menu' | 'orders' | 'customers' | 'people'
   const category = ref<SearchCategory>('menu')
   const searchField = ref('title')
@@ -151,9 +151,16 @@
       {
         key: 'customers',
         label: '老板客户',
-        allowed: ['orders.create', 'users.manage', 'finance.refunds'].some(can)
+        allowed:
+          user.value?.role !== 'merchant' &&
+          ['orders.create', 'users.manage', 'finance.refunds'].some(can)
       },
-      { key: 'people', label: '人员', allowed: can('users.manage') || can('finance.withdrawals') }
+      {
+        key: 'people',
+        label: '人员',
+        allowed:
+          user.value?.role !== 'merchant' && (can('users.manage') || can('finance.withdrawals'))
+      }
     ].filter((item) => item.allowed)
   )
   const fields: Record<SearchCategory, { key: string; label: string }[]> = {
@@ -274,14 +281,18 @@
         }
         if (values[searchField.value]?.toLowerCase().includes(q))
           result.push({
-            path: `/orders/list?id=${encodeURIComponent(order.id)}`,
+            path: `${user.value?.role === 'merchant' ? '/merchant/orders' : '/orders/list'}?id=${encodeURIComponent(order.id)}`,
             meta: { title: `${order.orderNo} · ${order.title}` },
             businessRecord: true,
             description: `订单 · ${customer?.name || '客户'} · ${statusLabels[order.status]}`
           })
         if (result.length >= 30) break
       }
-    if (category.value === 'people' && (can('users.manage') || can('finance.withdrawals')))
+    if (
+      user.value?.role !== 'merchant' &&
+      category.value === 'people' &&
+      (can('users.manage') || can('finance.withdrawals'))
+    )
       for (const person of data.value?.users || []) {
         if (person.role !== 'player' && !can('users.manage')) continue
         if (
@@ -298,6 +309,7 @@
         if (result.length >= 30) break
       }
     if (
+      user.value?.role !== 'merchant' &&
       category.value === 'customers' &&
       ['users.manage', 'orders.create', 'finance.refunds'].some(can)
     )
@@ -319,7 +331,7 @@
       }
     return result
   }
-  watch([() => data.value?.permissions.join('|'), menuList], () => {
+  watch([() => studioAccessScopeSignature(user.value, data.value?.permissions), menuList], () => {
     pruneHistory()
     if (!categories.value.some((item) => item.key === category.value)) category.value = 'menu'
     if (searchVal.value) search(searchVal.value)
@@ -336,7 +348,15 @@
 
     const flattenAndMatch = (item: AppRouteRecord) => {
       if (item.meta?.isHide) return
-      if (!canAccessStudioPage(item.meta.studioPermissions, item.meta.studioPermissionMode)) return
+      if (
+        !canAccessStudioPage(
+          item.meta.studioPermissions,
+          item.meta.studioPermissionMode,
+          item.meta.merchantOwnerOnly,
+          item.meta.studioRoles
+        )
+      )
+        return
 
       const lowerItemTitle = (
         searchField.value === 'path' ? item.path : formatMenuTitle(item.meta.title)
@@ -489,7 +509,15 @@
     const visit = (items: AppRouteRecord[]) =>
       items.forEach((item) => {
         if (item.meta.isHide) return
-        if (item.meta.studioPermissions?.length && !item.meta.studioPermissions.some(can)) return
+        if (
+          !canAccessStudioPage(
+            item.meta.studioPermissions,
+            item.meta.studioPermissionMode,
+            item.meta.merchantOwnerOnly,
+            item.meta.studioRoles
+          )
+        )
+          return
         if (item.children?.length) visit(item.children)
         else allowed.add(item.path || String(item.meta.link || ''))
       })

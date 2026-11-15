@@ -176,7 +176,7 @@
 <script setup lang="ts">
   import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, reactive, ref, watch } from 'vue'
-  import { useRoute } from 'vue-router'
+  import { useRoute, useRouter } from 'vue-router'
   import { ElMessage } from 'element-plus'
   import { useStudio, roleLabels, formatTime } from '@/hooks/business/useStudio'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
@@ -197,6 +197,7 @@
   const search = ref<SearchParams>(emptySearch())
   const applied = reactive<SearchParams>(emptySearch())
   const route = useRoute()
+  const router = useRouter()
   watch(
     [() => route.query.name, () => route.query.username, () => route.query.keyword],
     ([name, username, keyword]) => {
@@ -213,6 +214,10 @@
     () => route.query.role,
     (value) => {
       if (route.path !== '/personnel/employees') return
+      if (value === 'merchant') {
+        void router.replace({ path: '/merchants/manage', query: { section: 'accounts' } })
+        return
+      }
       const role =
         typeof value === 'string' && value !== 'player' && value in roleLabels ? value : ''
       search.value.role = role
@@ -220,7 +225,9 @@
     },
     { immediate: true }
   )
-  const staffRows = computed(() => (data.value?.users || []).filter((row) => row.role !== 'player'))
+  const staffRows = computed(() =>
+    (data.value?.users || []).filter((row) => !['player', 'merchant'].includes(row.role))
+  )
   const detailVisible = ref(false)
   const detailId = ref('')
   const staffDetail = computed(() => staffRows.value.find((row) => row.id === detailId.value))

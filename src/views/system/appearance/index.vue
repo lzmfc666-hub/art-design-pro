@@ -434,14 +434,14 @@
             :style="loginPreviewStyle"
           >
             <div class="mini-login-brand" :style="loginTextStyle"
-              ><img v-if="form.logo" :src="form.logo.url" alt="Logo 草稿" /><strong>{{
+              ><img v-if="form.logo" :src="studioImageUrl(form.logo.url)" alt="Logo 草稿" /><strong>{{
                 form.studioName
               }}</strong></div
             >
             <div class="mini-login-illustration">
               <img
                 v-if="form.login.illustration.mode === 'image' && form.login.illustration.image"
-                :src="form.login.illustration.image.url"
+                :src="studioImageUrl(form.login.illustration.image.url)"
                 alt="登录左侧大图草稿"
               />
               <ThemeSvg v-else :src="loginIcon" size="100%" />
@@ -459,7 +459,7 @@
               <div class="order-card-preview-thumbnail">
                 <img
                   v-if="form.playerOrderCardImage"
-                  :src="form.playerOrderCardImage.url"
+                  :src="studioImageUrl(form.playerOrderCardImage.url)"
                   alt="打手订单卡片图片草稿"
                 />
                 <ArtSvgIcon v-else icon="ri:gamepad-line" />
@@ -483,7 +483,7 @@
               class="mini-page-veil"
               :style="{ opacity: form.page.overlay / 100 }" /><div class="mini-sidebar"
               ><div class="mini-brand"
-                ><img v-if="form.logo" :src="form.logo.url" alt="Logo 草稿" /><ArtSvgIcon
+                ><img v-if="form.logo" :src="studioImageUrl(form.logo.url)" alt="Logo 草稿" /><ArtSvgIcon
                   v-else
                   icon="ri:gamepad-line"
                 /><strong>{{ form.studioName || '工作室名称' }}</strong></div
@@ -541,6 +541,7 @@
 </template>
 
 <script setup lang="ts">
+  import { studioImageUrl } from '@/utils/studio-image'
   import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
   import { businessConfirmMessage } from '@/utils/business/confirm-message'
   import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -642,7 +643,7 @@
       ? { backgroundColor: form.value.page.color }
       : form.value.page.mode === 'image' && form.value.page.image
         ? {
-            backgroundImage: `url(${JSON.stringify(form.value.page.image.url)})`,
+            backgroundImage: `url(${JSON.stringify(studioImageUrl(form.value.page.image.url, 'display'))})`,
             backgroundSize: 'cover',
             backgroundPosition: 'center'
           }
@@ -653,7 +654,7 @@
       ? { background: form.value.hero.color }
       : form.value.hero.mode === 'image' && form.value.hero.image
         ? {
-            backgroundImage: `url(${JSON.stringify(form.value.hero.image.url)})`,
+            backgroundImage: `url(${JSON.stringify(studioImageUrl(form.value.hero.image.url, 'display'))})`,
             backgroundSize: 'cover',
             backgroundPosition: 'center'
           }

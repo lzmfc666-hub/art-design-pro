@@ -1,6 +1,8 @@
 import type { Attachment } from '@/types/studio'
 import { useStudioStore } from '@/store/modules/studio'
 import { setStudioMutationActorResolver } from './studio-mutation'
+import { studioClient } from '@/utils/auth/admin-entry'
+export { studioClient } from '@/utils/auth/admin-entry'
 
 setStudioMutationActorResolver(() => useStudioStore().user?.id)
 
@@ -23,6 +25,7 @@ export async function studioRequest<T>(
     signal,
     credentials: 'same-origin',
     headers: {
+      ...(studioClient === 'merchant' ? { 'X-Studio-Client': 'merchant' } : {}),
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       ...(actorId && method !== 'GET' && method !== 'HEAD' ? { 'X-Studio-Actor': actorId } : {})
     },
@@ -40,18 +43,40 @@ export async function studioRequest<T>(
 }
 
 export async function uploadStudioImage(file: File): Promise<Attachment> {
+  const actor = useStudioStore().user
+  const expectedActorId = actor?.id
+  const expectedActorRole = actor?.role
+  const expectedMerchantId = actor?.merchantId
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type))
     throw new Error('请上传 JPG、PNG 或 WebP 图片')
   if (file.size > 8 * 1024 * 1024) throw new Error('图片不能超过 8 MB')
-  const encoded = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result).split(',')[1])
-    reader.onerror = () => reject(new Error('图片读取失败'))
-    reader.readAsDataURL(file)
+  if (!file.size) throw new Error('图片不能为空')
+  if (!expectedActorId) throw new Error('请先登录后上传图片')
+  const response = await fetch('/api/studio/uploads', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      ...(studioClient === 'merchant' ? { 'X-Studio-Client': 'merchant' } : {}),
+      'Content-Type': file.type,
+      'X-Upload-Name': encodeURIComponent(file.name),
+      'X-Studio-Actor': expectedActorId
+    },
+    body: file
   })
-  return studioRequest<Attachment>(
-    'uploads',
-    { name: file.name, mime: file.type, data: encoded },
-    'POST'
+  const result = await response.json().catch(() => ({ message: '图片上传失败，请重试' }))
+  const currentActor = useStudioStore().user
+  if (
+    currentActor?.id !== expectedActorId ||
+    currentActor?.role !== expectedActorRole ||
+    currentActor?.merchantId !== expectedMerchantId
   )
+    throw new Error('上传期间账号已变化，请重新选择图片')
+  if (!response.ok)
+    throw Object.assign(new Error(result.message || '图片上传失败，请重试'), {
+      status: response.status,
+      code: result.code,
+      details: result.details,
+      retryAfter: response.headers.get('Retry-After')
+    })
+  return result as Attachment
 }

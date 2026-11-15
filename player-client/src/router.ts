@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
+import { createNavigationLoadRecovery } from '@/api/navigationRecovery'
 
 const page = (
   path: string,
@@ -55,6 +56,29 @@ const routes: RouteRecordRaw[] = [
   { path: '/:pathMatch(.*)*', redirect: '/player/lobby' }
 ]
 export const router = createRouter({ history: createWebHashHistory(), routes })
+const builtInRouteNames = new Set<string | symbol>()
+const registerNames = (records: RouteRecordRaw[]) => {
+  for (const record of records) {
+    if (record.name) builtInRouteNames.add(record.name)
+    if (record.children) registerNames(record.children)
+  }
+}
+registerNames(routes)
+export const navigationLoadRecovery = createNavigationLoadRecovery({
+  resolveTarget(target) {
+    const matched = router.resolve(target)
+    return matched.name && builtInRouteNames.has(matched.name) ? matched.fullPath : null
+  },
+  href: () => window.location.href,
+  replaceHref: href => window.history.replaceState(window.history.state, '', href),
+  reload: () => window.location.reload()
+})
+router.onError((error, to) => {
+  if (!navigationLoadRecovery.report(error, to.fullPath)) {
+    navigationLoadRecovery.clear()
+    console.error(error)
+  }
+})
 router.beforeEach(async (to) => {
   const session = useSessionStore()
   if (to.path === '/player/login') return true
@@ -66,6 +90,7 @@ router.beforeEach(async (to) => {
   }
   return { path: '/player/login', query: { redirect: to.fullPath } }
 })
-router.afterEach((to) => {
+router.afterEach((to, _from, failure) => {
+  if (!failure) navigationLoadRecovery.clear()
   document.title = `${String(to.meta.title || '打手端')} · 工作室打手端`
 })

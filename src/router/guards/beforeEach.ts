@@ -56,6 +56,8 @@ import { canAccessStudioPage } from '@/utils/auth/studio-access'
 import { useStudioStore } from '@/store/modules/studio'
 import { playerClientUrl } from '@/utils/auth/player-client'
 import { isPlayerEntryPath } from '@/utils/auth/admin-entry'
+import { studioClientForPath } from '@/utils/auth/admin-entry'
+import { studioClient } from '@/api/studio'
 
 // 路由注册器实例
 let routeRegistry: RouteRegistry | null = null
@@ -163,6 +165,12 @@ async function handleRouteGuard(
     return
   }
   const studioStore = useStudioStore()
+  if (studioClientForPath(to.path) !== studioClient && !['/403', '/500'].includes(to.path)) {
+    window.location.hash = to.fullPath
+    window.location.reload()
+    next(false)
+    return
+  }
   if (studioStore.user?.role === 'player') {
     // 兼容旧共享会话：只清理后台状态，后台入口始终允许重新登录。
     userStore.clearSession()
@@ -173,8 +181,11 @@ async function handleRouteGuard(
   if (!handleLoginStatus(to, userStore, next)) {
     return
   }
-  if (userStore.isLogin && to.name === 'Login') {
-    next({ path: '/dashboard/console', replace: true })
+  if (userStore.isLogin && ['Login', 'MerchantLogin'].includes(String(to.name))) {
+    next({
+      path: studioClient === 'merchant' ? '/merchant/overview' : '/dashboard/console',
+      replace: true
+    })
     return
   }
 
@@ -209,7 +220,14 @@ async function handleRouteGuard(
 
   // 5. 处理已匹配的路由
   if (to.matched.length > 0) {
-    if (!canAccessStudioPage(to.meta.studioPermissions, to.meta.studioPermissionMode)) {
+    if (
+      !canAccessStudioPage(
+        to.meta.studioPermissions,
+        to.meta.studioPermissionMode,
+        to.meta.merchantOwnerOnly,
+        to.meta.studioRoles
+      )
+    ) {
       next({ name: 'Exception403', replace: true })
       return
     }
@@ -239,7 +257,7 @@ function handleLoginStatus(
 
   // 未登录且访问需要权限的页面，跳转到登录页并携带 redirect 参数
   next({
-    name: 'Login',
+    name: studioClient === 'merchant' ? 'MerchantLogin' : 'Login',
     query: { redirect: to.fullPath }
   })
   return false
@@ -372,7 +390,11 @@ async function handleDynamicRoutes(
       // 重置状态，允许重新登录后再次初始化
       routeInitInProgress = false
       useUserStore().clearSession()
-      next({ name: 'Login', query: { redirect: to.fullPath }, replace: true })
+      next({
+        name: studioClient === 'merchant' ? 'MerchantLogin' : 'Login',
+        query: { redirect: to.fullPath },
+        replace: true
+      })
       return
     }
 

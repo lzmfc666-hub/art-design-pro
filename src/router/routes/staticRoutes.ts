@@ -19,6 +19,12 @@ const legacyUserRedirect = (to: RouteLocation) => ({
  */
 export const staticRoutes: AppRouteRecordRaw[] = [
   {
+    path: '/merchant/login',
+    name: 'MerchantLogin',
+    component: () => import('@views/auth/login/index.vue'),
+    meta: { title: '商家登录', isHideTab: true }
+  },
+  {
     path: '/dashboard/ecommerce',
     redirect: '/template/ecommerce',
     meta: { title: '电商仪表盘示例' }

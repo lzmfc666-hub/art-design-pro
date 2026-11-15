@@ -1,0 +1,31 @@
+# 放入宝塔 lottery.jinxiaodun.top 站点的 server 块，保留宝塔管理的 TLS 配置。
+# 先确认本机原 studio-api 仍监听 127.0.0.1:3007。
+# 每个 location 内明确覆盖来源头，不能转发客户端伪造的来源链。
+location = / {
+    return 302 /lottery/index.html;
+}
+location = /lottery {
+    return 302 /lottery/index.html;
+}
+location = /lottery/ {
+    return 302 /lottery/index.html;
+}
+location ^~ /lottery/ {
+    proxy_pass http://127.0.0.1:3007;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Forwarded "";
+}
+location ^~ /api/studio/lottery/ {
+    proxy_pass http://127.0.0.1:3007;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Forwarded "";
+}
+location / {
+    return 404;
+}

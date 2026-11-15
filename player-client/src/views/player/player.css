@@ -28,6 +28,10 @@
 .player-app .p-upload-state { display: grid; gap: 6px; padding: 10px; margin: 8px 0; background: #f7f3ff; border-radius: 10px; font-size: 12px; }
 .player-app .p-upload-filename { overflow-wrap: anywhere; }
 .player-app .p-upload-state progress { width: 100%; accent-color: var(--p-purple); }
+.player-app .p-badge.stored { color: #6e4d99; background: #f0e9fa; }
+.player-app .p-badge.refunded { color: #59616e; background: #eef0f4; }
+.player-app .p-badge.refund-pending { color: #9d621c; background: #fff1db; }
+.player-app .p-problem-feedback { padding: 8px 12px; margin: 10px 0; border-left: 3px solid var(--p-purple); background: #f8f5fc; border-radius: 6px; }
 .player-app .p-operation-confirm { padding-top: 12px; margin-top: 10px; border-top: 1px solid var(--p-border); }
 .player-app *,
 .player-app *::before,

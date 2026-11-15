@@ -10,7 +10,7 @@
     />
     <div class="p-me-hero">
       <RouterLink to="/player/profile" class="p-me-identity">
-        <img
+        <PrivateImage
           v-if="account?.avatar"
           :src="account.avatar.url"
           class="p-avatar p-avatar-large"
@@ -99,6 +99,7 @@
   import { usePlayerResource, money } from './usePlayer'
   import PlayerIcon from './PlayerIcon.vue'
   import PlayerState from './PlayerState.vue'
+  import PrivateImage from './PrivateImage.vue'
   defineOptions({ name: 'PlayerMe' })
   const studio = useSessionStore(),
     router = useRouter()

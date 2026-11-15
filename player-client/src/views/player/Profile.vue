@@ -4,7 +4,7 @@
       :online="resource.online.value" @retry="resource.refresh()" />
     <form v-if="resource.data.value" class="p-card" @submit.prevent="save">
       <div class="p-avatar-editor">
-        <img v-if="!avatarFailed && (image.attachment.value || resource.data.value.user.avatar)"
+        <PrivateImage v-if="!avatarFailed && (image.attachment.value || resource.data.value.user.avatar)"
           :src="(image.attachment.value || resource.data.value.user.avatar)?.url" :key="avatarVersion" class="p-avatar p-avatar-large" alt="头像" decoding="async" @error="avatarFailed = true" />
         <span v-else class="p-avatar p-avatar-large">{{ name.slice(0, 1) || '我' }}</span>
         <label class="p-text-btn p-file-label">{{ image.busy.value ? '图片上传中…' : '更换头像' }}
@@ -35,6 +35,7 @@
   import { usePlayerResource } from './usePlayer'
   import PlayerState from './PlayerState.vue'
   import ImageUploadState from './ImageUploadState.vue'
+  import PrivateImage from './PrivateImage.vue'
   const resource = usePlayerResource<PlayerProfile | null>((signal) => playerApi.profile(signal), null, false)
   const draft = accountDraft('profile-operation', () => ({ name: '', uncertain: false, pending: null as { name: string; avatarId?: string } | null }))
   const session = useSessionStore(), image = useImageUpload('avatar', 'profile-avatar'), name = toRef(draft, 'name'), busy = ref(false), error = ref(''), success = ref(false), uncertain = toRef(draft, 'uncertain')

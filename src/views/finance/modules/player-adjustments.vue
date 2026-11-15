@@ -409,6 +409,7 @@
 <script setup lang="ts">
   import BusinessDetailPanel from '@/components/business/BusinessDetailPanel.vue'
   import { computed, reactive, ref, watch } from 'vue'
+  import { useRoute } from 'vue-router'
   import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
   import { useStudio, money, formatTime } from '@/hooks/business/useStudio'
   import { useBusinessTable } from '@/hooks/business/useBusinessTable'
@@ -419,6 +420,7 @@
   import BusinessDetailSummary from '@/components/business/BusinessDetailSummary.vue'
   import BusinessDetailSection from '@/components/business/BusinessDetailSection.vue'
   const emit = defineEmits<{ busy: [value: boolean] }>()
+  const route = useRoute()
   const { data, loading, mutate, refresh, can } = useStudio()
   const saving = ref(false),
     open = ref(false)
@@ -528,6 +530,40 @@
     resetForm()
     open.value = true
   }
+  let consumedOrderLink = ''
+  watch(
+    [() => route.query.adjustOrderId, () => route.query.adjustPlayerId, data, loading],
+    () => {
+      const id = route.query.adjustOrderId
+      if (
+        typeof id !== 'string' ||
+        !data.value ||
+        loading.value ||
+        saving.value ||
+        open.value ||
+        !can('finance.withdrawals')
+      )
+        return
+      const key = `${data.value.user.id}:${id}:${String(route.query.adjustPlayerId || '')}`
+      if (consumedOrderLink === key) return
+      const order = data.value.orders.find((row) => row.id === id)
+      if (!order) return
+      consumedOrderLink = key
+      const target =
+        typeof route.query.adjustPlayerId === 'string' ? route.query.adjustPlayerId : ''
+      const participant =
+        target &&
+        (order.leaderId === target ||
+          order.teammateId === target ||
+          order.assignments.some((row) => row.leaderId === target) ||
+          order.submissions.some((row) => [row.leaderId, row.teammateId].includes(target)))
+      resetForm()
+      form.orderId = id
+      form.userId = participant && players.value.some((row) => row.id === target) ? target : ''
+      open.value = true
+    },
+    { immediate: true }
+  )
   const restoreError = ref('')
   const pendingRestore = ref<{
     kind: 'detail' | 'new' | 'resolve' | 'legacy-detail' | 'legacy-resolve'

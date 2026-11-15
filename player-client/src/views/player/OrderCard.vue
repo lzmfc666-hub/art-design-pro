@@ -1,18 +1,19 @@
 <template>
-  <article class="p-card p-order-card">
+  <article v-if="order.status !== 'canceled'" class="p-card p-order-card">
     <div class="p-order-card-header">
       <OrderNumber :order-no="order.orderNo" />
-      <span class="p-badge" :class="order.status">{{
-        order.dispatchState === 'unassigned' && order.status === 'pending'
+      <span class="p-badge" :class="order.displayStatus || order.status">{{
+        order.dispatchState === 'unassigned' && (order.displayStatus || order.status) === 'pending'
           ? '客服待分配'
-          : orderStatus[order.status]
+          : orderStatus[order.displayStatus || order.status]
       }}</span>
     </div>
+    <ArrivalPaymentNotice :order="order" />
     <div class="p-order-card-main">
       <div class="p-order-thumb" aria-hidden="true">
-        <img v-if="appearance.orderCardImage && failedImageKey !== appearance.playerImageKey"
-          :key="appearance.playerImageKey" ref="thumbnail" :src="appearance.orderCardImage.url"
-          :data-image-key="appearance.playerImageKey" alt="" decoding="async" @error="imageFailed" />
+        <PrivateImage v-if="appearance.orderCardImage && failedImageKey !== appearance.playerImageKey"
+          :key="appearance.playerImageKey" :src="appearance.orderCardImage.url" :context="appearance.playerImageKey"
+          alt="" @error="failedImageKey = appearance.playerImageKey" />
         <PlayerIcon v-else name="game" />
       </div>
       <div class="p-order-details">
@@ -59,16 +60,19 @@
         <div class="p-order-meta">
           <span class="p-muted">{{ dateTime(order.publishedAt || order.createdAt) }}</span>
         </div>
-        <div v-if="order.map || isAssignedDirect || hasPendingReturn || order.participation === 'historical'" class="p-tags">
+        <div v-if="order.map || isAssignedDirect || hasPendingReturn || order.participation === 'historical' || order.problem?.status === 'open' || order.capacityExempt" class="p-tags">
           <span v-if="order.map">{{ order.map }}</span>
           <span v-if="isAssignedDirect" class="p-tag-blue">指定给我</span>
           <span v-if="hasPendingReturn" class="p-tag-orange">退单处理中</span>
           <span v-if="order.participation === 'historical'" class="p-tag-blue">历史参与</span>
+          <span v-if="order.problem?.status === 'open'" class="p-tag-orange">问题单</span>
+          <span v-if="order.capacityExempt" class="p-tag-blue">存单续做 · 不占名额</span>
         </div>
         <p v-if="order.historyOnly" class="p-hint">仅保留参与摘要，当前无私人详情及操作权限。{{ order.lastParticipationAt ? `最后参与 ${dateTime(order.lastParticipationAt)}` : '' }}</p>
       </div>
     </div>
-    <p v-if="order.status === 'pending' && !claimable" class="p-hint">{{
+    <p v-if="readOnlyReason" class="p-hint">{{ readOnlyReason.message }}</p>
+    <p v-else-if="order.status === 'pending' && !claimable" class="p-hint">{{
       order.claimBlockedReason?.message || order.claimReason ||
       (!hasDispatchVersion ? '订单信息尚未更新，请刷新后重新确认' : '') ||
       (order.availableAt && new Date(order.availableAt).getTime() > Date.now()
@@ -77,7 +81,7 @@
     }}</p>
     <div class="p-row p-order-footer p-order-footer-actions">
       <div class="p-reward"
-        ><small>订单报酬</small><strong>¥ {{ money(order.reward) }}</strong></div
+        ><small>订单报酬</small><strong>¥ {{ money(effectiveOrderReward(order)) }}</strong></div
       >
       <span v-if="order.historyOnly" class="p-muted">历史摘要</span>
       <div v-else-if="claim" class="p-order-action-group"
@@ -108,6 +112,10 @@
   import PlayerIcon from './PlayerIcon.vue'
   import OrderNumber from './OrderNumber.vue'
   import { useAppearanceStore } from '@/stores/appearance'
+  import PrivateImage from './PrivateImage.vue'
+  import { playerOrderBlockedReason } from '@/api/orderAccess'
+  import { effectiveOrderReward } from '@/api/orderPresentation'
+  import ArrivalPaymentNotice from './ArrivalPaymentNotice.vue'
   const props = defineProps<{
     order: PlayerOrder
     claim?: boolean
@@ -116,13 +124,8 @@
   }>()
   const emit = defineEmits<{ claim: [order: Readonly<PlayerOrder>] }>()
   const appearance = useAppearanceStore()
-  const thumbnail = ref<HTMLImageElement>()
+  const readOnlyReason = computed(() => playerOrderBlockedReason(props.order))
   const failedImageKey = ref('')
-  function imageFailed(event: Event) {
-    const image = event.currentTarget as HTMLImageElement
-    if (image === thumbnail.value && image.dataset.imageKey === appearance.playerImageKey)
-      failedImageKey.value = image.dataset.imageKey
-  }
   const claimQueued = ref(false)
   const requirementsExpanded = ref(false), remarkExpanded = ref(false)
   const requirementsText = ref<HTMLElement>(), remarkText = ref<HTMLElement>()
@@ -174,6 +177,7 @@
     () =>
       props.allowed !== false &&
       !props.order.historyOnly &&
+      !readOnlyReason.value &&
       props.order.canClaim === true &&
       hasDispatchVersion.value
   )
@@ -190,6 +194,7 @@
   const isAssignedDirect = computed(
     () =>
       !props.order.historyOnly &&
+      !readOnlyReason.value &&
       props.order.dispatchMode === 'direct' &&
       props.order.status === 'pending' &&
       props.order.dispatchState !== 'unassigned' &&

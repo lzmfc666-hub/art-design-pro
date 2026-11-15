@@ -30,7 +30,7 @@
             ><PlayerIcon v-if="item.rank === 1" class="p-crown" name="rank" /><span>{{
               item.rank
             }}</span></div
-          ><img v-if="item.avatar" :src="item.avatar.url" class="p-avatar" alt="" /><span
+          ><PrivateImage v-if="item.avatar" :src="item.avatar.url" class="p-avatar" alt="" /><span
             v-else
             class="p-avatar"
             >{{ item.name.slice(0, 1) }}</span
@@ -61,7 +61,7 @@
           class="p-rank-row"
           :class="{ mine: item.userId === studio.user?.id }"
           ><span class="p-rank-number" :class="`rank-${item.rank}`">{{ item.rank }}</span
-          ><img v-if="item.avatar" :src="item.avatar.url" class="p-avatar" alt="" /><span
+          ><PrivateImage v-if="item.avatar" :src="item.avatar.url" class="p-avatar" alt="" /><span
             v-else
             class="p-avatar"
             >{{ item.name.slice(0, 1) }}</span
@@ -90,6 +90,7 @@
   import PlayerState from './PlayerState.vue'
   import PlayerIcon from './PlayerIcon.vue'
   import PlayerPagination from './PlayerPagination.vue'
+  import PrivateImage from './PrivateImage.vue'
   defineOptions({ name: 'PlayerLeaderboard' })
   const studio = useSessionStore(),
     month = ref(currentMonth()),

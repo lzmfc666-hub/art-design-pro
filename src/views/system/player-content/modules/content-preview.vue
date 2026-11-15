@@ -9,7 +9,8 @@
       <div v-else class="preview-banner">
         <img
           v-if="content.image?.url"
-          :src="content.image.url"
+          :src="studioImageUrl(content.image.url)"
+          loading="lazy"
           :alt="content.title || '轮播图片'"
         />
         <div v-else class="preview-placeholder">上传轮播图片后显示</div>
@@ -20,7 +21,8 @@
         <h3>{{ content.title || '填写标题' }}</h3>
         <img
           v-if="content.type === 'banner' && content.image?.url"
-          :src="content.image.url"
+          :src="studioImageUrl(content.image.url, 'display')"
+          loading="lazy"
           :alt="content.title"
         />
         <p>{{ content.body || '这里展示详情正文，支持换行和分段。' }}</p>
@@ -31,6 +33,7 @@
 
 <script setup lang="ts">
   import type { PlayerContentFields } from '@/types/player-content'
+  import { studioImageUrl } from '@/utils/studio-image'
   defineProps<{ content: PlayerContentFields }>()
 </script>
 

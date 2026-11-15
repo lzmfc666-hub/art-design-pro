@@ -1,0 +1,910 @@
+import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { createServer as createPortProbe } from 'node:net'
+import { resolve, join } from 'node:path'
+import { createServer as createViteServer } from 'vite'
+import { createStudioServer } from '../server/index.mjs'
+import { createPlayerClientServer } from './player-client-server.mjs'
+import { testMutate } from '../tests/helpers/current-intent.mjs'
+
+// Each run owns one disposable memory database and random loopback listeners.
+// It never reads production config, invokes external push, or uses live ports.
+const output = resolve('.qa/production-fixes-20261018/admin-ui', `run-${randomUUID()}`)
+mkdirSync(output, { recursive: true })
+process.env.STUDIO_QA_DECLARATIONS_DIR = join(output, 'generated-types')
+const password = `isolated-admin-fixes-${randomUUID()}`
+const report = {
+  passed: false,
+  output,
+  database: ':memory:',
+  cases: [],
+  pageErrors: [],
+  serverErrors: [],
+  writes: [],
+  imageReads: [],
+  layouts: [],
+  limitations: [
+    'Local isolated browser acceptance; no physical-phone push or company/Rainyun network measurement.'
+  ]
+}
+const require = createRequire(import.meta.url)
+const {
+  chromium
+} = require('C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright')
+const sharp = require('sharp')
+let backend, vite, playerServer, browser, page
+const pass = (name) => {
+  report.cases.push(name)
+  console.log(`PASS ${name}`)
+}
+async function freePort() {
+  const probe = createPortProbe()
+  await new Promise((done) => probe.listen(0, '127.0.0.1', done))
+  const port = probe.address().port
+  await new Promise((done) => probe.close(done))
+  assert.ok(![3006, 3007, 3008, 3011].includes(port))
+  return port
+}
+try {
+  backend = createStudioServer({
+    dbPath: ':memory:',
+    seed: false,
+    password,
+    maintenanceFromEnv: false,
+    notificationIntervalMs: 86400000,
+    uploadCleanup: { enabled: false },
+    backups: { intervalMinutes: 0, directory: join(output, 'backups'), failureWebhook: '' },
+    notifications: {
+      publicKey: '',
+      privateKey: '',
+      subject: '',
+      allowedPushHosts: [],
+      pushSender: async () => {
+        throw new Error('External push prohibited in isolated acceptance')
+      }
+    }
+  })
+  await new Promise((done) => backend.listen(0, '127.0.0.1', done))
+  const service = backend.service
+  const api = `http://127.0.0.1:${backend.address().port}`
+  const mutate = (path, body, actor = 'admin') => testMutate(service, actor, path, body)
+  const current = (id) => service.orderDetail('admin', id).order
+  const level = mutate('/levels', { name: '后台修改验收等级', delaySeconds: 0 })
+  const player = mutate('/users', {
+    username: `qa-player-${randomUUID()}`,
+    name: '内部验收打手A',
+    role: 'player',
+    status: 'active',
+    levelId: level.id,
+    maxActiveOrders: 1,
+    permissionOverrides: {},
+    password
+  })
+  const employee = mutate('/users', {
+    username: `qa-employee-${randomUUID()}`,
+    name: '内部排班员工A',
+    role: 'support',
+    status: 'active',
+    maxActiveOrders: 1,
+    permissionOverrides: {},
+    password
+  })
+  const platform = mutate('/platforms', {
+    name: '后台修改隔离来源',
+    rules: {
+      requiresShop: false,
+      requiresExternalOrderNo: false,
+      requiresReceipt: false,
+      allowPayOnArrival: true
+    }
+  })
+  const customer = mutate('/customers', { name: '后台验收虚构客户', gameId: 'qa-only' })
+  function order(name, extra = {}) {
+    const template = mutate('/templates', {
+      name,
+      game: '三角洲行动',
+      description: '后台修改隔离验收',
+      map: 'QA',
+      amount: 10000,
+      reward: 1000,
+      active: true
+    })
+    return mutate('/orders', {
+      templateId: template.id,
+      customerId: customer.id,
+      platformId: platform.id,
+      roomCode: 'QA',
+      amount: 10000,
+      reward: 1000,
+      receivedAmount: 10000,
+      paidAt: new Date().toISOString(),
+      dispatchMode: 'pool',
+      ...extra
+    })
+  }
+  const idle = order('无人存单验收'),
+    continuing = order('原打手续做验收'),
+    refunded = order('全额退款大厅拦截验收')
+  mutate(`/player/orders/${continuing.id}/claim`, {}, player.id)
+  vite = await createViteServer({
+    cacheDir: join(output, 'vite-cache'),
+    server: {
+      host: '127.0.0.1',
+      port: await freePort(),
+      strictPort: true,
+      watch: { ignored: ['**/player-client/**', '**/.qa/**', '**/.data/**'] },
+      proxy: { '/api': { target: api, changeOrigin: true } }
+    }
+  })
+  await vite.listen()
+  const base = `http://127.0.0.1:${vite.httpServer.address().port}`
+  playerServer = createPlayerClientServer({
+    apiTarget: api,
+    staticRoot: resolve('player-client/dist')
+  })
+  await new Promise((done) => playerServer.listen(0, '127.0.0.1', done))
+  const playerBase = `http://127.0.0.1:${playerServer.address().port}`
+  report.ports = {
+    api: backend.address().port,
+    admin: vite.httpServer.address().port,
+    player: playerServer.address().port
+  }
+  browser = await chromium.launch({ headless: true, channel: 'msedge' })
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } })
+  assert.equal(
+    (
+      await context.request.post(api + '/api/studio/login', {
+        data: { username: 'admin', password }
+      })
+    ).status(),
+    200
+  )
+  const operationContext = await browser.newContext()
+  assert.equal(
+    (
+      await operationContext.request.post(playerBase + '/api/studio/login', {
+        data: { username: player.username, password }
+      })
+    ).status(),
+    200
+  )
+  async function assertPlayerReadOnly(id, operations) {
+    const row = service.playerOrderDetail(player.id, id)
+    assert.ok(
+      row.playerOperationBlockedReason,
+      'Server must expose the current player-only restriction'
+    )
+    assert.equal(row.canSubmit, false)
+    for (const operation of operations) {
+      const response = await operationContext.request.post(
+        `${playerBase}/api/studio/player/orders/${id}/${operation}`,
+        {
+          headers: { 'X-Studio-Actor': player.id },
+          data: {
+            requestId: randomUUID(),
+            expectedRevision: row.revision,
+            dispatchRound: row.dispatchRound,
+            assignmentId: row.assignmentId,
+            submissionId: row.submissionId,
+            leaderId: row.leaderId,
+            problemId: row.problem?.id,
+            message: '只读订单不允许提交新反馈',
+            reason: '只读订单不允许退单',
+            screenshots: []
+          }
+        }
+      )
+      const value = await response.json()
+      assert.ok([403, 409].includes(response.status()), `${operation}: ${JSON.stringify(value)}`)
+      assert.match(value.message, /存单|问题|客服|只读|暂停|禁止|不能/)
+      assert.equal(current(id).revision, row.revision, `${operation} must not alter the order`)
+    }
+  }
+  await context.route('**/*', (route) => {
+    const url = new URL(route.request().url())
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname !== '127.0.0.1'
+      ? route.abort('blockedbyclient')
+      : route.continue()
+  })
+  async function newQaPage(browserContext) {
+    const nextPage = await browserContext.newPage()
+    nextPage.setDefaultTimeout(20000)
+    nextPage.setDefaultNavigationTimeout(60000)
+    nextPage.on('pageerror', (error) => report.pageErrors.push(error.message))
+    nextPage.on('response', (response) => {
+      if (response.url().includes('/api/studio/') && response.status() >= 500)
+        report.serverErrors.push({
+          path: new URL(response.url()).pathname,
+          status: response.status()
+        })
+    })
+    nextPage.on('request', (request) => {
+      if (request.url().includes('/api/studio/uploads/') && request.method() === 'GET')
+        report.imageReads.push({ url: request.url() })
+      if (request.url().includes('/api/studio/') && request.method() === 'POST')
+        report.writes.push({ path: new URL(request.url()).pathname, body: request.postDataJSON() })
+    })
+    return nextPage
+  }
+  page = await newQaPage(context)
+  const detail = () =>
+    page
+      .locator(
+        '.business-detail-page-panel[data-page-key="order-detail"]:visible, .el-drawer:visible'
+      )
+      .last()
+  const panel = () =>
+    page
+      .locator(
+        '.business-detail-page-panel[data-page-key="order-action"]:visible, .el-dialog:visible'
+      )
+      .last()
+  const field = (scope, label) =>
+    scope
+      .locator('.el-form-item')
+      .filter({ has: page.locator('.el-form-item__label').filter({ hasText: label }) })
+      .first()
+  async function visit(id) {
+    if (await detail().count())
+      await detail()
+        .getByRole('button', { name: '刷新订单并重新确认操作', exact: true })
+        .click({ trial: true })
+    await page.goto(`${base}/#/orders/list?id=${id}`)
+    await page.reload()
+    await detail().getByText(current(id).orderNo, { exact: true }).first().waitFor()
+    await detail().getByRole('button', { name: '刷新订单并重新确认操作', exact: true }).waitFor()
+  }
+  async function action(id, label, reason, path = `/orders/${id}/action`, amount) {
+    await detail().getByRole('button', { name: label, exact: true }).click()
+    await field(panel(), '原因 / 处理说明').locator('textarea').fill(reason)
+    if (label === '退款处理') {
+      if (amount !== undefined) {
+        await field(panel(), '本次退款金额（元）').locator('input').fill(String(amount))
+        await field(panel(), '本次退款金额（元）').locator('input').press('Tab')
+      }
+      await field(panel(), '线下退款渠道').locator('.el-select').click()
+      await page.getByRole('option', { name: '微信', exact: true }).click()
+      await panel().locator('label.el-checkbox').filter({ hasText: '我已完成实际线下退款' }).click()
+    }
+    const response = page.waitForResponse(
+      (reply) => new URL(reply.url()).pathname.endsWith(path) && reply.request().method() === 'POST'
+    )
+    await panel()
+      .getByRole('button', {
+        name: label === '退款处理' ? '确认退款处理' : '确认保存',
+        exact: true
+      })
+      .click()
+    const value = await response
+    assert.equal(value.status(), 200, JSON.stringify(await value.json()))
+    await panel().waitFor({ state: 'hidden' })
+    await detail()
+      .getByRole('button', { name: '刷新订单并重新确认操作', exact: true })
+      .click({ trial: true })
+  }
+  async function assertSingleOrderEntry(label) {
+    await detail().getByRole('button', { name: label, exact: true }).waitFor()
+    assert.equal(await detail().getByRole('button', { name: label, exact: true }).count(), 1)
+    assert.equal(
+      await detail()
+        .getByRole('button', { name: /^(登记退款|申请退款|取消订单)$/ })
+        .count(),
+      0
+    )
+    const alternate = label === '退款处理' ? '取消订单／退款' : '退款处理'
+    assert.equal(await detail().getByRole('button', { name: alternate, exact: true }).count(), 0)
+  }
+  async function financeRefund(row, amount, reason) {
+    await page.goto(`${base}/#/finance/settlement?tab=refunds`)
+    await page.reload()
+    await page.getByRole('heading', { name: '财务结算', exact: true }).waitFor()
+    await page.getByRole('button', { name: '登记实际退款', exact: true }).click()
+    const register = page
+      .locator('.business-detail-page-panel[data-page-key="finance-refund-register"]:visible')
+      .last()
+    await field(register, '关联订单（不含大厅来源）').locator('.el-select').click()
+    await page.getByRole('option', { name: `${row.orderNo} · ${row.title}`, exact: true }).click()
+    await field(register, '实际退款金额（元）').locator('input').fill(String(amount))
+    await field(register, '退款原因').locator('textarea').fill(reason)
+    await field(register, '线下退款渠道').locator('.el-select').click()
+    await page.getByRole('option', { name: '微信', exact: true }).click()
+    await register.locator('label.el-checkbox').filter({ hasText: '我已完成实际线下退款' }).click()
+    const response = page.waitForResponse(
+      (reply) =>
+        new URL(reply.url()).pathname.endsWith('/refunds') && reply.request().method() === 'POST'
+    )
+    await register.getByRole('button', { name: '确认实际退款并登记', exact: true }).click()
+    const result = await response
+    assert.equal(result.status(), 200, JSON.stringify(await result.json()))
+    await register.waitFor({ state: 'hidden' })
+  }
+  await visit(idle.id)
+  await assertSingleOrderEntry('取消订单／退款')
+  await page.screenshot({ path: join(output, 'order-entry-merged-desktop.png'), fullPage: true })
+  pass('可取消订单详情仅显示一个取消订单／退款入口，不再并排登记退款或申请退款')
+  await action(idle.id, '客户存单', '客户暂时不打，保留原订单')
+  assert.equal(current(idle.id).stored, true)
+  await detail().getByRole('button', { name: '恢复存单', exact: true }).waitFor()
+  await page.screenshot({ path: join(output, 'stored-desktop.png'), fullPage: true })
+  await action(idle.id, '恢复存单', '客户恢复，放回大厅')
+  assert.equal(current(idle.id).stored, false)
+  assert.equal(current(idle.id).dispatchMode, 'pool')
+  pass('无人接单存单/恢复由真实按钮提交，重新开放公共大厅')
+  await visit(continuing.id)
+  await action(continuing.id, '标记问题单', '普通接单问题由客服处理，打手仅查看')
+  assert.equal(service.playerProfile(player.id).activeOrders, 1)
+  await assertPlayerReadOnly(continuing.id, ['submit', 'return-request', 'problem-feedback'])
+  await action(continuing.id, '确认问题已解决', '客服直接处理完成，无须打手反馈')
+  assert.equal(current(continuing.id).problem.feedback.length, 0)
+  assert.equal(service.playerProfile(player.id).activeOrders, 1)
+  assert.equal(
+    service.playerOrderDetail(player.id, continuing.id).playerOperationBlockedReason,
+    null
+  )
+  pass('普通问题单保留接单名额且打手只读，客服无需打手反馈即可直接关闭')
+  await action(continuing.id, '客户存单', '已完成一半，客户暂停；进度继续保留')
+  await assertPlayerReadOnly(continuing.id, ['return-request', 'submit', 'problem-feedback'])
+  pass('存单期间打手仅可查看，真实HTTP拒绝退单、上报和新增反馈且订单不变')
+  const additional = order('原打手名额占用验收')
+  mutate(`/player/orders/${additional.id}/claim`, {}, player.id)
+  assert.equal(service.playerProfile(player.id).activeOrders, 1)
+  await action(continuing.id, '恢复存单', '原负责人按已做进度继续')
+  assert.equal(current(continuing.id).capacityExempt, true)
+  assert.equal(service.playerProfile(player.id).activeOrders, 1)
+  pass('原负责人满额时仍可恢复续做，名额保持原普通订单一单')
+  await action(continuing.id, '标记问题单', '请由后台客服核对客户进度并处理')
+  await assertPlayerReadOnly(continuing.id, ['return-request', 'submit', 'problem-feedback'])
+  assert.equal(service.playerProfile(player.id).activeOrders, 1)
+  // Simulate a feedback record created before the staff-only rule. This is a
+  // compatibility fixture in the disposable memory database, not a live write.
+  const legacyFeedback = '历史打手反馈只读保留，不再开放新增反馈'
+  const fixtureState = JSON.parse(
+    service.db.prepare('SELECT json FROM studio_state WHERE id=1').get().json
+  )
+  fixtureState.orders
+    .find((row) => row.id === continuing.id)
+    .problem.feedback.push({
+      id: randomUUID(),
+      userId: player.id,
+      userName: player.name,
+      message: legacyFeedback,
+      createdAt: new Date().toISOString()
+    })
+  service.db.prepare('UPDATE studio_state SET json=? WHERE id=1').run(JSON.stringify(fixtureState))
+  await visit(continuing.id)
+  await detail().getByRole('button', { name: '确认问题已解决', exact: true }).click()
+  await panel().getByText(legacyFeedback, { exact: true }).waitFor()
+  await field(panel(), '原因 / 处理说明').locator('textarea').fill('旧页面尝试关闭问题')
+  mutate(`/orders/${continuing.id}/action`, {
+    action: 'remark',
+    remark: '其他客服在关闭确认前补充了最新处理说明'
+  })
+  const conflict = page.waitForResponse(
+    (reply) =>
+      reply.url().endsWith(`/orders/${continuing.id}/action`) && reply.request().method() === 'POST'
+  )
+  await panel().getByRole('button', { name: '确认保存', exact: true }).click()
+  const rejected = await conflict
+  assert.equal(rejected.status(), 409)
+  assert.equal((await rejected.json()).code, 'ORDER_REVISION_CONFLICT')
+  assert.equal(current(continuing.id).problem.status, 'open')
+  assert.equal(
+    await field(panel(), '原因 / 处理说明').locator('textarea').inputValue(),
+    '旧页面尝试关闭问题'
+  )
+  await panel().getByRole('button', { name: '返回', exact: true }).click()
+  pass('后台并发补充说明使旧关闭意图409失效，问题保持未关闭并保留输入')
+  await visit(continuing.id)
+  await action(continuing.id, '确认问题已解决', '客服已直接核对处理，确认问题关闭')
+  assert.equal(current(continuing.id).problem.status, 'closed')
+  assert.equal(current(continuing.id).problem.feedback.length, 1)
+  assert.equal(current(continuing.id).capacityExempt, true)
+  assert.equal(current(continuing.id).problem.feedback[0].message, legacyFeedback)
+  assert.equal(
+    service.playerOrderDetail(player.id, continuing.id).playerOperationBlockedReason,
+    null
+  )
+  pass('问题单期间打手仅查看，客服直接关闭；保留历史反馈和原名额规则，关闭后重新核对资格')
+  const image = await sharp({
+    create: { width: 900, height: 650, channels: 3, background: '#1e7b9a' }
+  })
+    .png()
+    .toBuffer()
+  const screenshot = service.upload(player.id, {
+    name: '后台验收材料.png',
+    mime: 'image/png',
+    data: image.toString('base64')
+  })
+  mutate(
+    `/player/orders/${continuing.id}/submit`,
+    { screenshots: [screenshot], teammateId: null },
+    player.id
+  )
+  await visit(continuing.id)
+  await detail()
+    .getByRole('tab', { name: /完成材料/ })
+    .click()
+  const imageView = detail().locator('.business-image img').first()
+  await imageView.scrollIntoViewIfNeeded()
+  await imageView.waitFor()
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('.business-image img')].some((image) => image.naturalWidth > 0)
+  )
+  assert.ok(
+    report.imageReads.some((row) => {
+      const url = new URL(row.url)
+      return url.pathname.endsWith(screenshot.id) && url.searchParams.get('variant') === 'thumb'
+    })
+  )
+  assert.equal(
+    report.imageReads.filter((row) => {
+      const url = new URL(row.url)
+      return url.pathname.endsWith(screenshot.id) && !url.searchParams.has('variant')
+    }).length,
+    0
+  )
+  const originalRead = page.waitForResponse((reply) => {
+    const url = new URL(reply.url())
+    return url.pathname.endsWith(`/uploads/${screenshot.id}`) && !url.searchParams.has('variant')
+  })
+  await imageView.click()
+  assert.equal((await originalRead).status(), 200)
+  await page.keyboard.press('Escape')
+  await page.screenshot({ path: join(output, 'materials-desktop.png'), fullPage: true })
+  pass('后台材料先取缩略图并真实解码，点击预览后才读取原图')
+  await financeRefund(refunded, 100, '客户整单全额退款，禁止继续接单')
+  assert.equal(current(refunded.id).status, 'pending')
+  await visit(refunded.id)
+  assert.equal(current(refunded.id).displayStatus, 'refunded')
+  assert.equal(await detail().getByRole('button', { name: '调整派单', exact: true }).count(), 0)
+  await detail().getByText('已退款', { exact: true }).first().waitFor()
+  assert.equal(
+    service.playerOrders(player.id).some((row) => row.id === refunded.id),
+    false
+  )
+  const playerContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true
+  })
+  const playerPage = await playerContext.newPage()
+  playerPage.setDefaultTimeout(20000)
+  await playerPage.goto(`${playerBase}/#/player/login`)
+  await playerPage.getByLabel('账号', { exact: true }).fill(player.username)
+  await playerPage.locator('input[name=password]').fill(password)
+  await playerPage.getByRole('button', { name: '登录', exact: true }).click()
+  await playerPage.waitForURL('**/#/player/lobby')
+  await playerPage.getByText(idle.orderNo, { exact: true }).first().waitFor()
+  assert.equal(await playerPage.getByText(refunded.orderNo, { exact: true }).count(), 0)
+  await playerPage.screenshot({ path: join(output, 'refund-player-lobby-390.png'), fullPage: true })
+  pass('财务模块仅退款不取消：履约原状态保留、展示已退款，真实打手大厅不再展示该单')
+  await visit(refunded.id)
+  await page.screenshot({ path: join(output, 'refunded-desktop.png'), fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.screenshot({ path: join(output, 'refunded-admin-390.png'), fullPage: true })
+  report.layouts.push(
+    await page.evaluate(() => ({
+      width: innerWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      surface: 'admin-refund'
+    }))
+  )
+  await page.setViewportSize({ width: 1440, height: 1050 })
+  const approvalOrder = order('财务退款审批版本验收')
+  const rejectOrder = order('财务退款驳回验收')
+  const approvalRefund = mutate(
+    '/refunds',
+    { orderId: approvalOrder.id, amount: 10000, reason: '隔离全额退款申请' },
+    employee.id
+  )
+  const rejectRefund = mutate(
+    '/refunds',
+    { orderId: rejectOrder.id, amount: 10000, reason: '隔离待驳回申请' },
+    employee.id
+  )
+  await page.goto(`${base}/#/finance/settlement?tab=refunds`)
+  await page.getByRole('heading', { name: '财务结算', exact: true }).waitFor()
+  const approvalRow = page
+    .locator('.el-table__body tr')
+    .filter({ hasText: approvalOrder.orderNo })
+    .first()
+  await approvalRow.getByRole('button', { name: '确认退款', exact: true }).click()
+  const confirm = () => page.locator('.el-message-box:visible').last()
+  await confirm().getByRole('button', { name: '确认已退款', exact: true }).waitFor()
+  const capturedRevision = current(approvalOrder.id).revision
+  mutate(`/orders/${approvalOrder.id}/action`, {
+    action: 'remark',
+    playerRemark: '确认弹窗期间订单已更新'
+  })
+  let approvalResponse = page.waitForResponse(
+    (reply) =>
+      reply.url().endsWith(`/refunds/${approvalRefund.id}/action`) &&
+      reply.request().method() === 'POST'
+  )
+  await confirm().getByRole('button', { name: '确认已退款', exact: true }).click()
+  assert.equal((await approvalResponse).status(), 409)
+  assert.equal(report.writes.at(-1).body.expectedRevision, capturedRevision)
+  assert.equal(
+    service.bootstrap('admin').refunds.find((row) => row.id === approvalRefund.id).status,
+    'pending'
+  )
+  await approvalRow.getByRole('button', { name: '确认退款', exact: true }).click()
+  await confirm().getByRole('button', { name: '确认已退款', exact: true }).waitFor()
+  approvalResponse = page.waitForResponse(
+    (reply) =>
+      reply.url().endsWith(`/refunds/${approvalRefund.id}/action`) &&
+      reply.request().method() === 'POST'
+  )
+  await confirm().getByRole('button', { name: '确认已退款', exact: true }).click()
+  assert.equal((await approvalResponse).status(), 200)
+  assert.equal(current(approvalOrder.id).displayStatus, 'refunded')
+  pass('财务审批按弹窗前捕获版本提交，竞态409后重新核对才成功，不重复退款')
+  const rejectRow = page
+    .locator('.el-table__body tr')
+    .filter({ hasText: rejectOrder.orderNo })
+    .first()
+  await rejectRow.getByRole('button', { name: '驳回', exact: true }).click()
+  const rejectionPanel = page
+    .locator('.business-detail-page-panel[data-page-key="finance-refund-process"]:visible')
+    .last()
+  await rejectionPanel.locator('textarea').fill('财务核对后驳回本次申请')
+  const rejectionResponse = page.waitForResponse(
+    (reply) =>
+      reply.url().endsWith(`/refunds/${rejectRefund.id}/action`) &&
+      reply.request().method() === 'POST'
+  )
+  await rejectionPanel.getByRole('button', { name: '保存处理结果', exact: true }).click()
+  assert.equal((await rejectionResponse).status(), 200)
+  await rejectionPanel.waitFor({ state: 'hidden' })
+  assert.equal(current(rejectOrder.id).refundPending, false)
+  assert.equal(current(rejectOrder.id).displayStatus, 'pending')
+  pass('财务真实驳回带订单版本，解除全额退款审批暂停')
+  await financeRefund(idle, 10, '独立财务表单部分实际退款')
+  assert.equal(current(idle.id).refundSummary.paid, 1000)
+  assert.equal(current(idle.id).displayStatus, 'pending')
+  pass('独立财务登记表单读取订单版本再提交，部分退款保持原履约状态')
+  await page.goto(`${base}/#/personnel/attendance`)
+  await page.getByRole('heading', { name: '排班与考勤', exact: true }).waitFor()
+  await page.getByRole('combobox', { name: '固定班次人员', exact: true }).click()
+  await page.getByRole('option', { name: `${employee.name} · 客服`, exact: true }).waitFor()
+  assert.equal(await page.getByRole('option', { name: new RegExp(player.name) }).count(), 0)
+  await page.keyboard.press('Escape')
+  assert.equal(
+    await page.locator('.el-table__body').getByText(player.name, { exact: true }).count(),
+    0
+  )
+  await page.screenshot({ path: join(output, 'employee-attendance-desktop.png'), fullPage: true })
+  pass('人事固定排班选项及每日默认行均只含内部员工，不含打手')
+  const orderRefunds = (id) =>
+    service.bootstrap('admin').refunds.filter((row) => row.orderId === id)
+  const customerBalance = () =>
+    service.bootstrap('admin').customers.find((row) => row.id === customer.id).balance
+  async function cancelOrder(row, options = {}) {
+    await visit(row.id)
+    await assertSingleOrderEntry('取消订单／退款')
+    await detail().getByRole('button', { name: '取消订单／退款', exact: true }).click()
+    const amountInput = field(panel(), '本次退款金额（元，0表示仅取消）').locator('input')
+    assert.equal(Number(await amountInput.inputValue()), options.defaultAmount ?? 100)
+    if (options.amount !== undefined) {
+      await amountInput.fill(String(options.amount))
+      await amountInput.press('Tab')
+    }
+    const cashRadio = panel().getByRole('radio', {
+      name: '退给老板（线下退款，不加账户余额）',
+      exact: true
+    })
+    if ((options.amount ?? options.defaultAmount ?? 100) > 0)
+      assert.equal(await cashRadio.isChecked(), true)
+    else assert.equal(await cashRadio.count(), 0)
+    if (options.noFinance)
+      assert.equal(
+        await panel().getByRole('checkbox', { name: '我已完成实际线下退款', exact: true }).count(),
+        0
+      )
+    if (options.destination === 'balance')
+      await panel().locator('label.el-radio').filter({ hasText: '回客户余额' }).click()
+    else if ((options.amount ?? options.defaultAmount ?? 100) > 0) {
+      await field(panel(), '线下退款渠道').locator('.el-select').click()
+      await page.getByRole('option', { name: options.channel || '微信', exact: true }).click()
+      await page
+        .getByRole('option', { name: options.channel || '微信', exact: true })
+        .waitFor({ state: 'hidden' })
+      if (options.channel === '其他')
+        await field(panel(), '其他渠道说明').locator('input').fill('隔离线下退款渠道')
+      if (options.confirmed)
+        await panel()
+          .locator('label.el-checkbox')
+          .filter({ hasText: '我已完成实际线下退款' })
+          .click()
+    }
+    if (options.reason)
+      await panel().getByRole('button', { name: options.reason, exact: true }).click()
+    assert.equal(await panel().getByText('整单打手报酬', { exact: true }).count(), 0)
+    if (options.screenshot)
+      await page.screenshot({ path: join(output, options.screenshot), fullPage: true })
+    const beforeWrites = report.writes.length
+    const response = page.waitForResponse(
+      (reply) =>
+        reply.url().endsWith(`/orders/${row.id}/action`) && reply.request().method() === 'POST'
+    )
+    await panel()
+      .getByRole('button', { name: /^确认取消/ })
+      .click()
+    const result = await response
+    assert.equal(result.status(), 200, JSON.stringify(await result.json()))
+    await panel().waitFor({ state: 'hidden' })
+    await detail()
+      .getByRole('button', { name: '刷新订单并重新确认操作', exact: true })
+      .click({ trial: true })
+    const writes = report.writes.slice(beforeWrites)
+    assert.equal(writes.length, 1)
+    assert.equal(writes[0].body.action, 'cancel-refund')
+    assert.equal(current(row.id).status, 'canceled')
+    assert.equal(current(row.id).cancellationPolicyVersion, 1)
+    assert.equal(current(row.id).compensationPending, false)
+    assert.equal(
+      await detail().getByRole('button', { name: '更正订单状态', exact: true }).count(),
+      0
+    )
+    assert.equal(
+      await detail().getByRole('button', { name: '确认最终报酬', exact: true }).count(),
+      0
+    )
+    return current(row.id)
+  }
+  const cancelPending = order('取消默认线下待处理')
+  const balanceBeforeCancel = customerBalance()
+  await cancelOrder(cancelPending, { reason: '重复下单', screenshot: 'cancel-unified-desktop.png' })
+  assert.equal(orderRefunds(cancelPending.id)[0].status, 'pending')
+  assert.equal(orderRefunds(cancelPending.id)[0].destination, 'cash')
+  assert.equal(orderRefunds(cancelPending.id)[0].reason, '重复下单')
+  assert.equal(customerBalance(), balanceBeforeCancel)
+  assert.equal(current(cancelPending.id).effectiveReward, 0)
+  assert.equal(current(cancelPending.id).reward, 1000)
+  pass('取消默认剩余可退且默认线下，未勾实际完成即待处理；一HTTP完成且不加余额、不新增补偿')
+  const cancelActual = order('取消线下部分已退款')
+  await cancelOrder(cancelActual, { amount: 80, confirmed: true, channel: '其他' })
+  assert.equal(orderRefunds(cancelActual.id)[0].amount, 8000)
+  assert.equal(orderRefunds(cancelActual.id)[0].status, 'paid')
+  assert.equal(orderRefunds(cancelActual.id)[0].channel, 'other')
+  assert.equal(orderRefunds(cancelActual.id)[0].channelNote, '隔离线下退款渠道')
+  assert.equal(customerBalance(), balanceBeforeCancel)
+  pass('取消可改小退款金额，其他渠道保留说明，勾实际完成才登记已退款且不加余额')
+  const zeroCancel = order('只取消不退款')
+  await cancelOrder(zeroCancel, { amount: 0, reason: '无人接单' })
+  assert.equal(orderRefunds(zeroCancel.id).length, 0)
+  assert.equal(current(zeroCancel.id).effectiveReward, 0)
+  pass('金额0仅取消，原因标签无需重复输入，不生成退款记录')
+  await assertSingleOrderEntry('退款处理')
+  await page.screenshot({ path: join(output, 'canceled-refund-only-desktop.png'), fullPage: true })
+  await action(zeroCancel.id, '退款处理', '取消历史补充实际部分退款', '/refunds', 10)
+  assert.equal(current(zeroCancel.id).status, 'canceled')
+  assert.equal(current(zeroCancel.id).effectiveReward, 0)
+  assert.equal(orderRefunds(zeroCancel.id)[0].amount, 1000)
+  pass('已取消且仍有额度的订单仅显示退款处理，可补登记退款而不恢复订单')
+  const balanceCancel = order('现金订单回余额取消')
+  await cancelOrder(balanceCancel, { destination: 'balance' })
+  assert.equal(orderRefunds(balanceCancel.id)[0].destination, 'balance')
+  assert.equal(orderRefunds(balanceCancel.id)[0].status, 'paid')
+  assert.equal(customerBalance(), balanceBeforeCancel + 10000)
+  pass('现金原订单显式选择回客户余额才自动增加余额，不受原付款方式替代')
+  const storedFundsOrder = order('余额原订单线下退款', { paymentMethod: 'balance' })
+  const storedBalanceBefore = customerBalance()
+  await cancelOrder(storedFundsOrder, { confirmed: true })
+  assert.equal(orderRefunds(storedFundsOrder.id)[0].destination, 'cash')
+  assert.equal(orderRefunds(storedFundsOrder.id)[0].status, 'paid')
+  assert.equal(customerBalance(), storedBalanceBefore)
+  pass('余额支付原订单取消仍默认线下，确认线下退款不会误返账户余额')
+  const remainingCancel = order('取消扣除已退与待审批')
+  mutate('/refunds', {
+    orderId: remainingCancel.id,
+    amount: 2000,
+    destination: 'cash',
+    channel: 'wechat',
+    actualRefundConfirmed: true,
+    reason: '隔离已退20元'
+  })
+  mutate('/refunds', {
+    orderId: remainingCancel.id,
+    amount: 3000,
+    destination: 'cash',
+    channel: 'alipay',
+    actualRefundConfirmed: false,
+    reason: '隔离待审批30元'
+  })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await cancelOrder(remainingCancel, {
+    defaultAmount: 50,
+    screenshot: 'cancel-unified-390.png'
+  })
+  await page.setViewportSize({ width: 1440, height: 1050 })
+  assert.equal(
+    orderRefunds(remainingCancel.id).reduce((total, row) => total + row.amount, 0),
+    10000
+  )
+  pass('取消默认额度按实收减已退与待审批计算，100实收-20已退-30待批只可退50；窄屏可操作')
+  const hallCancel = order('大厅仅取消', {
+    platformId: 'hall',
+    shopId: null,
+    receipt: service.upload('admin', {
+      name: '隔离大厅收款凭证.png',
+      mime: 'image/png',
+      data: image.toString('base64')
+    })
+  })
+  await cancelOrder(hallCancel, { defaultAmount: 0 })
+  assert.equal(orderRefunds(hallCancel.id).length, 0)
+  const unpaidCancel = order('未收款仅取消', {
+    receivedAmount: 0,
+    paidAt: null,
+    payOnArrival: true
+  })
+  await cancelOrder(unpaidCancel, { defaultAmount: 0 })
+  assert.equal(orderRefunds(unpaidCancel.id).length, 0)
+  pass('大厅来源与未收款订单固定0仅取消，隐藏退款去向，不产生退款')
+  const closeoutPlayer = mutate('/users', {
+    username: `qa-closeout-${randomUUID()}`,
+    name: '取消验收打手',
+    role: 'player',
+    status: 'active',
+    levelId: level.id,
+    maxActiveOrders: 3,
+    permissionOverrides: {},
+    password
+  })
+  const completed = order('已结算取消保留实际报酬')
+  mutate(`/player/orders/${completed.id}/claim`, {}, closeoutPlayer.id)
+  const completionImage = service.upload(closeoutPlayer.id, {
+    name: '取消前完成材料.png',
+    mime: 'image/png',
+    data: image.toString('base64')
+  })
+  mutate(
+    `/player/orders/${completed.id}/submit`,
+    { screenshots: [completionImage], teammateId: null },
+    closeoutPlayer.id
+  )
+  mutate(`/orders/${completed.id}/action`, { action: 'review-pass' })
+  await cancelOrder(completed, { amount: 0 })
+  assert.equal(current(completed.id).effectiveReward, 1000)
+  assert.equal(current(completed.id).reward, 1000)
+  await detail().getByRole('button', { name: '打手补款 / 扣款', exact: true }).click()
+  const adjustmentPanel = page
+    .locator('.business-detail-page-panel[data-page-key="finance-adjustment-register"]:visible')
+    .last()
+  await adjustmentPanel.getByRole('heading', { name: '打手扣款 / 补款', exact: true }).waitFor()
+  await field(adjustmentPanel, '关联订单（可选）')
+    .getByText(completed.orderNo + ' · ' + completed.title, { exact: true })
+    .waitFor()
+  assert.equal(await field(adjustmentPanel, '金额（元）').locator('input').inputValue(), '')
+  await page.screenshot({
+    path: join(output, 'cancel-history-adjustment-linked.png'),
+    fullPage: true
+  })
+  await adjustmentPanel.getByRole('button', { name: '取消', exact: true }).click()
+  pass('已结算取消保留实际报酬；取消历史进入原有补扣窗口自动关联订单且不代填金额')
+  const defaultList = await context.request.get(
+    `${base}/api/studio/orders?current=1&size=100&status=all`
+  )
+  const defaultPage = await defaultList.json()
+  const defaultRows = defaultPage.records
+  assert.equal(
+    defaultRows.some((row) =>
+      [
+        cancelPending.id,
+        cancelActual.id,
+        zeroCancel.id,
+        balanceCancel.id,
+        storedFundsOrder.id,
+        completed.id
+      ].includes(row.id)
+    ),
+    false
+  )
+  const historyReply = await context.request.get(
+    `${base}/api/studio/orders?current=1&size=100&status=canceled`
+  )
+  const historyPage = await historyReply.json()
+  assert.ok(historyPage.total >= 9)
+  assert.equal(defaultPage.counts.canceled, historyPage.total)
+  assert.equal(historyPage.counts.canceled, historyPage.total)
+  assert.equal(defaultPage.counts.all, historyPage.counts.all)
+  assert.equal(defaultPage.total, defaultPage.counts.all)
+  await page.goto(`${base}/#/orders/list`)
+  await page.reload()
+  const historyTab = page.getByRole('tab').filter({ hasText: '已取消历史' })
+  await historyTab
+    .locator('.el-tag')
+    .filter({ hasText: new RegExp(`^${historyPage.total}$`) })
+    .waitFor()
+  assert.equal(Number(await historyTab.locator('.el-tag').innerText()), historyPage.total)
+  await page.getByRole('tab').filter({ hasText: '日常订单' }).waitFor()
+  await historyTab.click()
+  await page.getByText(balanceCancel.orderNo, { exact: true }).first().waitFor()
+  await page.getByText(storedFundsOrder.orderNo, { exact: true }).first().waitFor()
+  pass('日常列表排除取消且计数稳定，点击取消历史可找回全退单，历史计数与总数一致')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await visit(cancelPending.id)
+  await page.screenshot({ path: join(output, 'cancel-history-admin-390.png'), fullPage: true })
+  await page.setViewportSize({ width: 1440, height: 1050 })
+  const supportOrder = order('客服只申请线下退款')
+  const supportContext = await browser.newContext({ viewport: { width: 1440, height: 1050 } })
+  await supportContext.route('**/*', (route) => {
+    const url = new URL(route.request().url())
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname !== '127.0.0.1'
+      ? route.abort('blockedbyclient')
+      : route.continue()
+  })
+  assert.equal(
+    (
+      await supportContext.request.post(api + '/api/studio/login', {
+        data: { username: employee.username, password }
+      })
+    ).status(),
+    200
+  )
+  const adminPage = page
+  page = await newQaPage(supportContext)
+  const balanceBeforeSupportCancel = customerBalance()
+  await cancelOrder(supportOrder, { noFinance: true })
+  assert.equal(orderRefunds(supportOrder.id)[0].status, 'pending')
+  assert.equal(customerBalance(), balanceBeforeSupportCancel)
+  await supportContext.close()
+  page = adminPage
+  pass('只有订单编辑权限的客服看不到实际退款确认，取消只生成待处理申请，不加余额')
+  const financeOnly = mutate('/users', {
+    username: `qa-finance-only-${randomUUID()}`,
+    name: '仅退款权限财务',
+    role: 'finance',
+    status: 'active',
+    maxActiveOrders: 1,
+    permissionOverrides: { 'orders.edit': false, 'finance.review': false },
+    password
+  })
+  const financeOnlyOrder = order('财务无编辑权限仅退款')
+  const financeContext = await browser.newContext({ viewport: { width: 1440, height: 1050 } })
+  await financeContext.route('**/*', (route) => {
+    const url = new URL(route.request().url())
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname !== '127.0.0.1'
+      ? route.abort('blockedbyclient')
+      : route.continue()
+  })
+  assert.equal(
+    (
+      await financeContext.request.post(api + '/api/studio/login', {
+        data: { username: financeOnly.username, password }
+      })
+    ).status(),
+    200
+  )
+  page = await newQaPage(financeContext)
+  await visit(financeOnlyOrder.id)
+  await assertSingleOrderEntry('退款处理')
+  await page.screenshot({
+    path: join(output, 'finance-only-refund-entry-desktop.png'),
+    fullPage: true
+  })
+  await action(financeOnlyOrder.id, '退款处理', '仅退款权限财务登记部分实际退款', '/refunds', 10)
+  assert.equal(current(financeOnlyOrder.id).status, 'pending')
+  assert.equal(current(financeOnlyOrder.id).refundSummary.paid, 1000)
+  await financeContext.close()
+  page = adminPage
+  pass('没有订单编辑及验收权限的财务仅见退款处理，实际退款成功且不能取消订单')
+  assert.deepEqual(report.pageErrors, [])
+  assert.deepEqual(report.serverErrors, [])
+  report.passed = true
+} catch (error) {
+  report.error = { message: error.message, stack: error.stack }
+  if (page)
+    await page.screenshot({ path: join(output, 'failure.png'), fullPage: true }).catch(() => {})
+  console.error(error.stack)
+  process.exitCode = 1
+} finally {
+  writeFileSync(join(output, 'result.json'), JSON.stringify(report, null, 2))
+  await browser?.close().catch(() => {})
+  await vite?.close().catch(() => {})
+  await new Promise((done) => playerServer?.close(() => done()) || done())
+  await new Promise((done) => backend?.close(() => done()) || done())
+  console.log(JSON.stringify({ passed: report.passed, cases: report.cases.length, output }))
+}

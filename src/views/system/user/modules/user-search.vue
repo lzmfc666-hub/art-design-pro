@@ -59,7 +59,10 @@
             props: {
               clearable: true,
               options: Object.entries(roleLabels)
-                .filter(([value]) => props.accountKind !== 'staff' || value !== 'player')
+                .filter(
+                  ([value]) =>
+                    props.accountKind !== 'staff' || !['player', 'merchant'].includes(value)
+                )
                 .filter(([value]) => props.accountKind !== 'player' || value === 'player')
                 .map(([value, label]) => ({ value, label }))
             }

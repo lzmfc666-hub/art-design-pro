@@ -40,13 +40,13 @@
           :href="item.paymentSnapshot.qrCode.url"
           target="_blank"
           rel="noopener"
-          ><img
+          ><PrivateImage
             :src="item.paymentSnapshot.qrCode.url"
             class="p-qr-preview"
             alt="本次提现收款码快照" /></a
         ><p v-if="item.receipt" class="p-hint">财务上传的付款凭证</p
         ><a v-if="item.receipt" :href="item.receipt.url" target="_blank" rel="noopener"
-          ><img :src="item.receipt.url" class="p-qr-preview" alt="财务付款凭证" /></a></details
+          ><PrivateImage :src="item.receipt.url" class="p-qr-preview" alt="财务付款凭证" /></a></details
       ><button
         v-if="item.status === 'pending'"
         class="p-btn p-secondary p-full"
@@ -80,6 +80,7 @@
   import OperationState from './OperationState.vue'
   import PlayerState from './PlayerState.vue'
   import PlayerPagination from './PlayerPagination.vue'
+  import PrivateImage from './PrivateImage.vue'
   const studio = useSessionStore()
   const page = ref(1), status = ref('all'), start = ref(''), end = ref('')
   const resource = usePlayerResource<PlayerRecordPage<PlayerWithdrawal> | null>(

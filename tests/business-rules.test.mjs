@@ -382,13 +382,16 @@ test('店长更正状态不扩展验收和金额权限，普通管理员授予�
     () => f.mutate(`/orders/${completed.id}/action`, { action: 'review-pass' }, managerId),
     403
   )
-  const canceled = f.mutate(
+  rejected(() => f.mutate(
     `/orders/${completed.id}/action`,
     { action: 'correct-status', status: 'canceled', reason: '店长更正终态' },
     managerId
-  )
+  ), 403)
+  const clean = f.order()
+  const canceled = f.mutate(`/orders/${clean.id}/action`, { action: 'correct-status', status: 'canceled', reason: '店长取消未结算任务' }, managerId)
   assert.equal(canceled.status, 'canceled')
-  assert.equal(canceled.compensationPending, true)
+  assert.equal(canceled.compensationPending, false)
+  assert.equal(canceled.effectiveReward, 0)
   rejected(
     () =>
       f.mutate(

@@ -52,6 +52,7 @@ export type RequestOptions = {
   onUploadProgress?: (percent: number) => void
   actorId?: string | null
   expectedActorId?: string | null
+  uploadName?: string
 }
 function captureRequestActor(path: string, method: string, options: Pick<RequestOptions, 'actorId' | 'expectedActorId'>) {
   if (path === 'login' || method === 'GET' || method === 'HEAD') return undefined
@@ -81,15 +82,17 @@ function retryDelay(value: string | null) {
 }
 
 function fetchResponse(path: string, body: unknown, method: string, controller: AbortController,
-  progress?: (percent: number) => void, actorId?: string | null): Promise<Response> {
+  progress?: (percent: number) => void, actorId?: string | null, uploadName?: string): Promise<Response> {
+  const binary = body instanceof Blob
   const headers = {
     'X-Studio-Client': 'player',
     ...(actorId ? { 'X-Studio-Actor': actorId } : {}),
-    ...(body === undefined ? {} : { 'Content-Type': 'application/json' })
+    ...(body === undefined ? {} : { 'Content-Type': binary ? body.type : 'application/json' }),
+    ...(binary && uploadName ? { 'X-Upload-Name': encodeURIComponent(uploadName) } : {})
   }
   if (!progress || method === 'GET') return fetch(`/api/studio/${path}`, {
     method, signal: controller.signal, credentials: 'same-origin', cache: 'no-store', headers,
-    body: body === undefined ? undefined : JSON.stringify(body)
+    body: body === undefined ? undefined : binary ? body : JSON.stringify(body)
   })
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -115,11 +118,11 @@ function fetchResponse(path: string, body: unknown, method: string, controller: 
     xhr.onabort = () => { clean(); reject(abortError()) }
     controller.signal.addEventListener('abort', cancel, { once: true })
     if (controller.signal.aborted) { clean(); reject(abortError()); return }
-    xhr.send(body === undefined ? undefined : JSON.stringify(body))
+    xhr.send(body === undefined ? undefined : binary ? body : JSON.stringify(body))
   })
 }
 async function performRequest<T>(path: string, body: unknown, method: string,
-  controller: AbortController, timeoutMs: number, progress?: (percent: number) => void, actorId?: string | null): Promise<T> {
+  controller: AbortController, timeoutMs: number, progress?: (percent: number) => void, actorId?: string | null, uploadName?: string): Promise<T> {
   const revision = sessionRevision()
   const publicRead = path === 'appearance/public'
   const write = method !== 'GET' && method !== 'HEAD'
@@ -129,7 +132,7 @@ async function performRequest<T>(path: string, body: unknown, method: string,
   const timer = setTimeout(() => { timedOut = true; controller.abort('timeout') }, timeoutMs)
   if (!publicRead) sessionControllers.add(controller)
   try {
-    const response = await fetchResponse(path, body, method, controller, progress, actorId)
+    const response = await fetchResponse(path, body, method, controller, progress, actorId, uploadName)
     if (!publicRead && revision !== sessionRevision()) throw sessionError(write, originalRequestId)
     const principal = response.headers.get('X-Studio-User')
     const principalChanged = () => path !== 'login' && principal && principalVerifier && !principalVerifier(principal)
@@ -201,7 +204,7 @@ export function studioRequest<T>(path: string, body?: unknown, method = 'GET',
     const controller = new AbortController()
     const cancel = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', cancel, { once: true })
-    return performRequest<T>(path, body, method, controller, options.timeoutMs || 20000, options.onUploadProgress, actorId)
+    return performRequest<T>(path, body, method, controller, options.timeoutMs || 20000, options.onUploadProgress, actorId, options.uploadName)
       .finally(() => signal?.removeEventListener('abort', cancel))
   }
   const key = `${path === 'appearance/public' ? 'public' : sessionRevision()}:${path}`
@@ -243,6 +246,38 @@ export interface ImageUploadOptions {
   actorId?: string | null
   expectedActorId?: string | null
 }
+/** Private pixels share the same account/principal boundary as JSON reads. */
+export async function readStudioImage(url: string, signal: AbortSignal): Promise<Blob> {
+  if (!/^\/api\/studio\/(?:uploads|player\/content-assets)\/[^/?#]+(?:\?variant=(?:thumb|display))?$/.test(url))
+    throw new StudioApiError('图片地址不可用')
+  const revision = sessionRevision(), controller = new AbortController()
+  const cancel = () => controller.abort(signal.reason)
+  signal.addEventListener('abort', cancel, { once: true })
+  if (signal.aborted) cancel()
+  const timer = setTimeout(() => controller.abort('timeout'), 30000)
+  sessionControllers.add(controller)
+  try {
+    const response = await fetch(url, { signal: controller.signal, credentials: 'same-origin', cache: 'no-store', headers: { 'X-Studio-Client': 'player' } })
+    if (revision !== sessionRevision()) throw sessionError()
+    const principal = response.headers.get('X-Studio-User')
+    if (principal && principalVerifier && !principalVerifier(principal)) {
+      unauthorizedHandler?.()
+      throw new StudioApiError('账号会话已变化，请重新登录', { status: 401, code: 'PRINCIPAL_CHANGED' })
+    }
+    if (response.status === 401) unauthorizedHandler?.()
+    if (!response.ok) throw new StudioApiError('图片暂不可读取，请刷新当前记录', { status: response.status })
+    if (!/^image\/(?:png|jpeg|webp)(?:;|$)/i.test(response.headers.get('Content-Type') || ''))
+      throw new StudioApiError('图片响应不可用')
+    const blob = await response.blob()
+    if (revision !== sessionRevision()) throw sessionError()
+    if (!blob.size || blob.size > 8 * 1024 * 1024) throw new StudioApiError('图片大小异常')
+    return blob
+  } finally {
+    clearTimeout(timer)
+    signal.removeEventListener('abort', cancel)
+    sessionControllers.delete(controller)
+  }
+}
 export async function uploadStudioImage(file: File, options: ImageUploadOptions = {}): Promise<Attachment> {
   const actorId = captureRequestActor('uploads', 'POST', options)
   const controller = new AbortController()
@@ -254,20 +289,10 @@ export async function uploadStudioImage(file: File, options: ImageUploadOptions 
   try {
     const prepared = await prepareImage(file, { signal: controller.signal, kind: options.kind,
       onProgress: percent => options.onProgress?.({ phase: 'preparing', percent }) })
-    const encoded = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      const abort = () => { reader.abort(); cleanup(); reject(new DOMException('图片处理已取消', 'AbortError')) }
-      const cleanup = () => controller.signal.removeEventListener('abort', abort)
-      if (controller.signal.aborted) return abort()
-      controller.signal.addEventListener('abort', abort, { once: true })
-      reader.onload = () => { cleanup(); resolve(String(reader.result).split(',')[1] || '') }
-      reader.onerror = () => { cleanup(); reject(new Error('图片读取失败，请重新选择')) }
-      reader.readAsDataURL(prepared)
-    })
     if (revision !== sessionRevision()) throw new DOMException('账号已变化', 'AbortError')
     options.onProgress?.({ phase: 'uploading', percent: 0 })
-    const result = await studioRequest<Attachment>('uploads', { name: prepared.name, mime: prepared.type, data: encoded }, 'POST', controller.signal,
-      { timeoutMs: 60000, expectedActorId: actorId, onUploadProgress: percent => options.onProgress?.({ phase: 'uploading', percent }) })
+    const result = await studioRequest<Attachment>('uploads', prepared, 'POST', controller.signal,
+      { timeoutMs: 60000, expectedActorId: actorId, uploadName: prepared.name, onUploadProgress: percent => options.onProgress?.({ phase: 'uploading', percent }) })
     options.onProgress?.({ phase: 'uploading', percent: 100 })
     return result
   } finally {

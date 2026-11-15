@@ -11,13 +11,20 @@ export type Role =
   | 'admin'
   | 'super_admin'
   | 'player'
+  | 'merchant'
 export type OrderStatus = 'pending' | 'active' | 'review' | 'completed' | 'canceled'
+export type OrderDisplayStatus = OrderStatus | 'stored' | 'refunded' | 'refund-pending'
+export type RefundDestination = 'cash' | 'balance'
+export type RefundChannel = 'wechat' | 'alipay' | 'platform' | 'bank' | 'other'
 export interface Staff {
   id: string
   createdAt?: string
   username: string
   name: string
   role: Role
+  merchantId?: string | null
+  merchantRole?: 'owner' | 'support'
+  deletedAt?: string | null
   status: 'active' | 'disabled'
   levelId?: string
   maxActiveOrders: number
@@ -75,6 +82,8 @@ export interface Level {
 export interface OrderTemplate {
   id: string
   name: string
+  playType?: 'normal' | 'lottery'
+  lotteryTier?: 'special-small' | 'special-medium' | 'value-large' | 'ultimate-large' | null
   game: string
   description: string
   amount: number | null
@@ -82,6 +91,37 @@ export interface OrderTemplate {
   map: string
   remark: string
   active: boolean
+  merchantId?: string | null
+  merchantCustomerAmount?: number | null
+  revision?: number
+}
+export interface Merchant {
+  id: string
+  name: string
+  status: 'active' | 'disabled'
+  customerId?: string
+  platformId?: string
+  ownerUserId?: string | null
+}
+export interface MerchantOverview {
+  range: { start?: string; end?: string }
+  generatedAt: string
+  summary: {
+    orders: number
+    pending: number
+    active: number
+    review: number
+    completed: number
+    canceled: number
+    stored: number
+    refunded: number
+    refundPending: number
+    merchantCustomerAmount: number
+    receivableAmount: number
+    receivedAmount: number
+    outstandingAmount: number
+  }
+  recentOrders: Order[]
 }
 export interface Attachment {
   id: string
@@ -89,6 +129,7 @@ export interface Attachment {
   mime: string
   size: number
   url: string
+  thumbnailUrl?: string
   retentionStatus?: 'deleted'
   deletedAt?: string
 }
@@ -144,8 +185,41 @@ export interface PlayerPaymentSnapshot {
   qrCode: Attachment
   updatedAt: string
 }
+export interface OrderStorage {
+  id: string
+  active: boolean
+  reason: string
+  storedAt: string
+  storedBy: string
+  leaderId: string | null
+  teammateId?: string | null
+  assignmentId: string | null
+  resumedAt?: string
+  resumedBy?: string
+  resumeMode?: 'original' | 'pool'
+}
+export interface OrderProblem {
+  id: string
+  status: 'open' | 'closed'
+  reason: string
+  openedAt: string
+  openedBy: string
+  feedback: { id: string; userId: string; userName?: string; message: string; createdAt: string }[]
+  closedAt?: string
+  closedBy?: string
+  resolution?: string
+}
 export interface Order {
   id: string
+  merchantId?: string | null
+  merchantCustomerAmount?: number
+  settlementMode?: 'merchant-credit'
+  fulfillmentAuthorized?: boolean
+  merchantFinancials?: {
+    receivableAmount: number
+    receivedAmount: number
+    outstandingAmount: number
+  }
   revision: number
   dispatchRound: number
   assignmentId: string | null
@@ -163,6 +237,15 @@ export interface Order {
   map: string
   amount: number
   reward: number
+  effectiveReward?: number
+  rewardDisposition?: {
+    mode: string
+    trigger: string
+    policyVersion: number
+    decidedAt: string
+    decidedBy: string
+  }
+  cancellationPolicyVersion?: number
   receivedAmount: number
   paidAt: string | null
   receivedAt: string | null
@@ -171,6 +254,25 @@ export interface Order {
   balanceTransactionId?: string
   balanceCustomerId?: string
   status: OrderStatus
+  displayStatus?: OrderDisplayStatus
+  fullRefund?: boolean
+  refundPending?: boolean
+  stored?: boolean
+  capacityExempt?: boolean
+  countsTowardsCapacity?: boolean
+  executionBlockedReason?: { code: string; message: string } | null
+  playerOperationBlockedReason?: { code: string; message: string } | null
+  refundSummary?: {
+    paid: number
+    pending: number
+    remaining: number
+    fullRefund: boolean
+    refundPending: boolean
+  }
+  storage?: OrderStorage | null
+  storageHistory?: OrderStorage[]
+  problem?: OrderProblem | null
+  problemHistory?: OrderProblem[]
   dispatchMode: 'pool' | 'direct'
   dispatchState?: 'ready' | 'unassigned'
   assignedTo: string | null
@@ -255,6 +357,10 @@ export interface Refund {
   manualResolution?: string
   requestId?: string
   refundMethod?: 'cash' | 'balance'
+  destination?: RefundDestination
+  channel?: RefundChannel
+  channelNote?: string
+  destinationCustomerId?: string
   balanceTransactionId?: string
 }
 export interface Withdrawal {
@@ -482,6 +588,7 @@ export interface RewardReview {
   resolution?: string
 }
 export interface StudioData {
+  merchants?: Merchant[]
   appearance?: AppearanceConfig
   user: Staff
   permissions: string[]
@@ -502,6 +609,13 @@ export interface StudioData {
   payrolls: Payroll[]
   logs: AuditLog[]
   reports: {
+    merchantCredit?: {
+      orders: number
+      receivableAmount: number
+      receivedAmount: number
+      outstandingAmount: number
+      acceptedRewardAmount: number
+    }
     days: DayReport[]
     channels: ChannelReport[]
     performance: Performance[]

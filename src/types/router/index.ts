@@ -35,6 +35,8 @@ export interface RouteMeta extends Record<string | number | symbol, unknown> {
   templateExample?: boolean
   studioPermissions?: string[]
   studioPermissionMode?: 'any' | 'all'
+  studioRoles?: string[]
+  merchantOwnerOnly?: boolean
   /** 路由图标 */
   icon?: string
   /** 是否显示徽章 */

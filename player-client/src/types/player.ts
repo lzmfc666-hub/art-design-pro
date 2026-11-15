@@ -19,7 +19,24 @@ export interface PlayerOrder {
   orderNo: string
   title: string
   reward: number
+  effectiveReward?: number
+  rewardDisposition?: {
+    mode: 'zero-unsettled' | 'preserve-settled'
+    trigger: 'cancel' | 'full-refund'
+    policyVersion: number
+  } | null
   status: OrderStatus
+  displayStatus?: OrderStatus | 'stored' | 'refunded' | 'refund-pending'
+  fullRefund?: boolean
+  refundPending?: boolean
+  stored?: boolean
+  capacityExempt?: boolean
+  countsTowardsCapacity?: boolean
+  executionBlockedReason?: { code: string; message: string } | null
+  playerOperationBlockedReason?: { code: string; message: string } | null
+  storage?: { id: string; active: boolean; reason: string; storedAt: string; leaderId: string | null; teammateId: string | null; assignmentId: string | null; resumedAt?: string; resumeMode?: string } | null
+  problem?: PlayerOrderProblem | null
+  problemHistory?: PlayerOrderProblem[]
   dispatchMode: 'pool' | 'direct'
   assignedTo: string | null
   leaderId: string | null
@@ -33,7 +50,9 @@ export interface PlayerOrder {
   assignmentId?: string | null
   submissionId?: string | null
   canSubmit?: boolean
+  payOnArrival?: boolean
   paymentConfirmed?: boolean
+  fulfillmentAuthorized?: boolean
   claimBlockedReason?: { code: string; message: string } | null
   submitBlockedReason?: { code: string; message: string } | null
   roomCode?: string
@@ -53,6 +72,15 @@ export interface PlayerOrder {
   participation?: 'current' | 'historical' | 'available'
   lastParticipationAt?: string | null
   historyOnly?: boolean
+}
+export interface PlayerOrderProblem {
+  id: string
+  status: 'open' | 'closed'
+  reason: string
+  openedAt: string
+  feedback: { id: string; userId: string; userName: string; message: string; createdAt: string }[]
+  closedAt?: string
+  resolution?: string
 }
 export interface PaymentMethod {
   method: 'wechat' | 'alipay'
@@ -150,7 +178,7 @@ export interface PlayerAppearance {
   revision: number
   orderCardImage: Attachment | null
 }
-export type PlayerOperationFamily = 'claim' | 'reject' | 'return' | 'submit' | 'withdraw' | 'cancel-withdrawal'
+export type PlayerOperationFamily = 'claim' | 'reject' | 'return' | 'submit' | 'problem-feedback' | 'withdraw' | 'cancel-withdrawal'
 export interface PlayerOperationResult {
   requestId: string
   family: PlayerOperationFamily
@@ -194,7 +222,7 @@ export interface PlayerNotification {
   orderId?: string | null
   kind?: string
   type?: string
-  target?: { orderId: string; dispatchRound: number | null; assignmentId: string | null; submissionId: string | null } | null
+  target?: { orderId: string; dispatchRound: number | null; assignmentId: string | null; submissionId: string | null; problemId?: string | null } | null
 }
 export interface PlayerNotifications {
   records: PlayerNotification[]

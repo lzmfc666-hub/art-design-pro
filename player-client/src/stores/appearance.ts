@@ -113,7 +113,7 @@ export const useAppearanceStore = defineStore('player-appearance', () => {
     const requestVersion = ++version
     const result = await studioRequest<PublicAppearance>('appearance/public')
     const publicImage = (image: PublicAppearance['logo']) =>
-      image ? { ...image, url: `/api/studio/public-assets/${encodeURIComponent(image.id)}` } : null
+      image ? { ...image, url: `/api/studio/public-assets/${encodeURIComponent(image.id)}?variant=display` } : null
     const value: PublicAppearance = {
       studioName: result.studioName,
       logo: publicImage(result.logo),

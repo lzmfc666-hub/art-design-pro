@@ -43,6 +43,7 @@ import { router } from '@/router'
 import { LocationQueryRaw, Router } from 'vue-router'
 import { WorkTab } from '@/types'
 import { useCommon } from '@/hooks/core/useCommon'
+import { studioClient } from '@/utils/auth/admin-entry'
 
 interface WorktabState {
   current: Partial<WorkTab>
@@ -561,7 +562,7 @@ export const useWorktabStore = defineStore(
   },
   {
     persist: {
-      key: 'worktab',
+      key: studioClient === 'merchant' ? 'merchant-worktab' : 'worktab',
       storage: localStorage
     }
   }

@@ -98,6 +98,10 @@
     { value: 'active', label: '接单中' },
     { value: 'review', label: '待验收' },
     { value: 'completed', label: '已完成' },
+    { value: 'stored', label: '存单' },
+    { value: 'problem', label: '问题单' },
+    { value: 'refund-pending', label: '退款审批中' },
+    { value: 'refunded', label: '已退款' },
     { value: 'all', label: '全部' }
   ]
   watch([filter, scope], () => {

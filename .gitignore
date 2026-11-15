@@ -11,9 +11,17 @@ src/types/import/components.d.ts
 .auto-import.json
 
 # Local studio database, sessions, uploads and initial administrator password
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!.env.sample
+.planning/
 .data/
 .qa/
 .ops/
 ops-private/
 backups/
 playwright-report/
+/outputs/production-fixes-20261018/

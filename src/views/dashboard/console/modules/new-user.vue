@@ -24,20 +24,16 @@
       >
       <ElTableColumn label="状态" min-width="100"
         ><template #default="{ row }"
-          ><ElTag
-            :type="
-              row.status === 'completed' ? 'success' : row.status === 'review' ? 'warning' : 'info'
-            "
-            >{{ statusLabels[row.status as OrderStatus] }}</ElTag
-          ></template
+          ><ElTag :type="orderStatusType(row.displayStatus || row.status)">{{
+            orderStatusLabel(row)
+          }}</ElTag></template
         ></ElTableColumn
       >
     </ArtTable>
   </div>
 </template>
 <script setup lang="ts">
-  import { useStudio, money, statusLabels } from '@/hooks/business/useStudio'
-  import type { OrderStatus } from '@/types/studio'
+  import { useStudio, money, orderStatusLabel, orderStatusType } from '@/hooks/business/useStudio'
   const { data, can } = useStudio()
   const rows = computed(() =>
     [...(data.value?.orders || [])]
